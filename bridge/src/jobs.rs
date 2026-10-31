@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
-use crate::protocol::BackgroundJob;
+use crate::protocol::{BackgroundJob, WaitingOn};
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
@@ -26,35 +26,52 @@ const SHELL: &str = "shell:";
 /// A command running under the session's REPL kernel that Prime no longer lists (its list keeps recent activity only).
 const PROCESS: &str = "process:";
 
-/// `ps -axo pid=,ppid=,command=`, by parent.
+/// `ps -axo pid=,ppid=,etime=,time=,command=`, by parent.
 pub struct ProcessTree {
     children: HashMap<u32, Vec<(u32, String)>>,
+    /// Seconds each process has been running.
+    elapsed: HashMap<u32, u64>,
+    /// CPU seconds each process has used.
+    cpu: HashMap<u32, f64>,
 }
+
+/// How long a command sits idle on a protected folder before it counts as waiting for macOS's permission prompt.
+const PROMPT_AFTER_SECS: u64 = 30;
 
 impl ProcessTree {
     pub fn parse(ps: &str) -> Self {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+        let mut elapsed = HashMap::new();
+        let mut cpu = HashMap::new();
         for line in ps.lines() {
-            let line = line.trim_start();
-            let Some((pid, rest)) = line.split_once(char::is_whitespace) else {
-                continue;
-            };
-            let rest = rest.trim_start();
-            let (ppid, command) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+            let (pid, rest) = field(line);
+            let (ppid, rest) = field(rest);
+            let (etime, rest) = field(rest);
+            let (time, command) = field(rest);
             let (Ok(pid), Ok(ppid)) = (pid.parse(), ppid.parse()) else {
                 continue;
             };
+            if let Some(seconds) = parse_etime(etime) {
+                elapsed.insert(pid, seconds);
+            }
+            if let Some(seconds) = parse_cpu_time(time) {
+                cpu.insert(pid, seconds);
+            }
             children
                 .entry(ppid)
                 .or_default()
                 .push((pid, command.trim().to_string()));
         }
-        Self { children }
+        Self {
+            children,
+            elapsed,
+            cpu,
+        }
     }
 
     pub async fn snapshot() -> Option<Self> {
         let out = tokio::process::Command::new("/bin/ps")
-            .args(["-axo", "pid=,ppid=,command="])
+            .args(["-axo", "pid=,ppid=,etime=,time=,command="])
             .output()
             .await
             .ok()?;
@@ -77,6 +94,192 @@ impl ProcessTree {
             .map(|(pid, cmd)| (*pid, wrapped_command(cmd)))
             .collect()
     }
+
+    /// The command under a Prime worker's REPL kernel the session is waiting on: one stuck on a permission prompt,
+    /// or else the longest-running.
+    pub fn kernel_waiting_on(&self, worker: u32, now_ms: u64, home: &str) -> Option<WaitingOn> {
+        let (pid, command) = self
+            .kernel_jobs(worker)
+            .into_iter()
+            .max_by_key(|(pid, _)| {
+                (
+                    self.permission_prompt(*pid, home).is_some(),
+                    self.elapsed.get(pid).copied(),
+                )
+            })?;
+        let started_at = self
+            .elapsed
+            .get(&pid)
+            .map(|seconds| now_ms.saturating_sub(seconds * 1000));
+        Some(WaitingOn {
+            command,
+            started_at,
+            pid: Some(pid),
+        })
+    }
+
+    /// The protected folder a command is most likely waiting for macOS's permission to read: macOS holds the first
+    /// read of Documents, Desktop, Downloads or iCloud Drive until someone answers its prompt on that Mac. Seen from
+    /// outside as a process with nothing under it that names the folder, has been running a while and used no CPU.
+    pub fn permission_prompt(&self, root: u32, home: &str) -> Option<&'static str> {
+        let own = self
+            .children
+            .values()
+            .flatten()
+            .find(|(pid, _)| *pid == root)
+            .map(|(_, command)| command.as_str());
+        let mut stack = vec![(root, own)];
+        while let Some((pid, command)) = stack.pop() {
+            let kids = self.children.get(&pid).map_or(&[][..], Vec::as_slice);
+            if kids.is_empty() {
+                let idle = self
+                    .elapsed
+                    .get(&pid)
+                    .is_some_and(|s| *s >= PROMPT_AFTER_SECS)
+                    && self.cpu.get(&pid).is_some_and(|s| *s < 0.2);
+                if let (true, Some(folder)) =
+                    (idle, command.and_then(|c| protected_folder(c, home)))
+                {
+                    return Some(folder);
+                }
+            }
+            stack.extend(
+                kids.iter()
+                    .map(|(pid, command)| (*pid, Some(command.as_str()))),
+            );
+        }
+        None
+    }
+}
+
+/// What the reader is told about a command waiting on macOS's permission prompt.
+pub fn permission_reason(folder: &str) -> String {
+    format!("macOS is probably asking for permission to read {folder}, and holds the command until someone answers on this Mac")
+}
+
+impl ProcessTree {
+    /// A Prime worker's REPL kernel, which runs the agent's Python.
+    pub fn kernel_of(&self, worker: u32) -> Option<u32> {
+        self.children
+            .get(&worker)?
+            .iter()
+            .find(|(_, cmd)| cmd.contains("rlm.repl"))
+            .map(|(pid, _)| *pid)
+    }
+
+    /// A process and everything under it, with each one's command.
+    pub fn subtree(&self, root: u32) -> Vec<(u32, &str)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(pid) = stack.pop() {
+            for (child, command) in self.children.get(&pid).into_iter().flatten() {
+                out.push((*child, command.as_str()));
+                stack.push(*child);
+            }
+        }
+        out
+    }
+
+    /// CPU seconds a process and everything under it have used.
+    pub fn subtree_cpu(&self, root: u32) -> f64 {
+        let own = self.cpu.get(&root).copied().unwrap_or(0.0);
+        own + self
+            .subtree(root)
+            .iter()
+            .map(|(pid, _)| self.cpu.get(pid).copied().unwrap_or(0.0))
+            .sum::<f64>()
+    }
+
+    pub fn has_children(&self, pid: u32) -> bool {
+        self.children.get(&pid).is_some_and(|c| !c.is_empty())
+    }
+
+    /// For the stall check: `root` and each process under it, with its parent, running time and CPU time.
+    pub fn processes(&self, root: u32) -> Vec<Value> {
+        let parent: HashMap<u32, u32> = self
+            .children
+            .iter()
+            .flat_map(|(ppid, kids)| kids.iter().map(move |(pid, _)| (*pid, *ppid)))
+            .collect();
+        let own = self
+            .children
+            .values()
+            .flatten()
+            .find(|(pid, _)| *pid == root)
+            .map(|(_, command)| command.as_str())
+            .unwrap_or_default();
+        std::iter::once((root, own))
+            .chain(self.subtree(root))
+            .take(25)
+            .map(|(pid, command)| {
+                json!({
+                    "pid": pid,
+                    "parentPid": parent.get(&pid),
+                    "command": command.replace("\\012", "\n").chars().take(600).collect::<String>(),
+                    "runningSeconds": self.elapsed.get(&pid),
+                    "cpuSeconds": self.cpu.get(&pid),
+                    "hasChildren": self.has_children(pid),
+                })
+            })
+            .collect()
+    }
+}
+
+/// The folder macOS asks permission for that a command names, as the prompt calls it.
+pub fn protected_folder(command: &str, home: &str) -> Option<&'static str> {
+    const FOLDERS: [(&str, &str); 4] = [
+        ("Documents", "Documents"),
+        ("Desktop", "Desktop"),
+        ("Downloads", "Downloads"),
+        ("Library/Mobile Documents", "iCloud Drive"),
+    ];
+    let mut homes = vec!["~/".to_string(), "$HOME/".to_string()];
+    if !home.is_empty() {
+        homes.push(format!("{home}/"));
+    }
+    FOLDERS.iter().find_map(|(folder, name)| {
+        homes
+            .iter()
+            .any(|h| {
+                let path = format!("{h}{folder}");
+                command.match_indices(&path).any(|(at, _)| {
+                    let after = command[at + path.len()..].chars().next();
+                    after.is_none_or(|c| !c.is_alphanumeric() && c != '_' && c != '-')
+                })
+            })
+            .then_some(*name)
+    })
+}
+
+/// The first whitespace-separated field of a line, and the rest of it.
+fn field(line: &str) -> (&str, &str) {
+    let line = line.trim_start();
+    line.split_once(char::is_whitespace)
+        .map_or((line, ""), |(first, rest)| (first, rest.trim_start()))
+}
+
+/// `ps`'s elapsed time, `[[dd-]hh:]mm:ss`, in seconds.
+fn parse_etime(etime: &str) -> Option<u64> {
+    let (days, clock) = match etime.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, etime),
+    };
+    let seconds = clock.split(':').try_fold(0u64, |total, part| {
+        Some(total * 60 + part.parse::<u64>().ok()?)
+    })?;
+    Some(days * 86_400 + seconds)
+}
+
+/// `ps`'s CPU time, `[[hh:]mm:]ss.cc`, in seconds.
+fn parse_cpu_time(time: &str) -> Option<f64> {
+    time.split(':').try_fold(0f64, |total, part| {
+        Some(total * 60.0 + part.parse::<f64>().ok()?)
+    })
+}
+
+/// The bridge's user's home folder, as commands spell it out.
+pub fn home() -> String {
+    std::env::var("HOME").unwrap_or_default()
 }
 
 /// The command inside Prime's wrapper: `exec 9>&0 …`, `read -r _prime_agent_gate …`, `{`, the command, `}`.
@@ -116,7 +319,8 @@ impl App {
                 }
                 // The count comes from the processes, so list every running one, listed by Prime or not.
                 let worker = session.state.lock().await.worker_pid;
-                if let (Some(worker), Some(tree)) = (worker, ProcessTree::snapshot().await) {
+                let tree = ProcessTree::snapshot().await;
+                if let (Some(worker), Some(tree)) = (worker, &tree) {
                     let known: HashSet<u32> = jobs.iter().filter_map(|job| job.pid).collect();
                     for (pid, command) in tree
                         .kernel_jobs(worker)
@@ -132,12 +336,18 @@ impl App {
                             status: "running".into(),
                             exit_code: None,
                             persistent: false,
+                            stuck: None,
                         });
                     }
                 }
+                mark_permission_prompts(&mut jobs, tree.as_ref());
                 jobs
             }
-            Backend::Pi => pi_jobs(&session.id),
+            Backend::Pi => {
+                let mut jobs = pi_jobs(&session.id);
+                mark_permission_prompts(&mut jobs, ProcessTree::snapshot().await.as_ref());
+                jobs
+            }
             Backend::PiSubagent => Vec::new(),
         };
         jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
@@ -264,6 +474,18 @@ impl App {
     }
 }
 
+/// Running jobs that look stuck on macOS's permission prompt.
+fn mark_permission_prompts(jobs: &mut [BackgroundJob], tree: Option<&ProcessTree>) {
+    let Some(tree) = tree else { return };
+    let home = home();
+    for job in jobs.iter_mut().filter(|job| job.status == "running") {
+        job.stuck = job
+            .pid
+            .and_then(|pid| tree.permission_prompt(pid, &home))
+            .map(permission_reason);
+    }
+}
+
 fn activities(data: &Value) -> impl Iterator<Item = &Value> {
     data["activities"]
         .as_array()
@@ -283,6 +505,7 @@ fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
         status: a["status"].as_str().unwrap_or("running").to_string(),
         exit_code: a["exitCode"].as_i64(),
         persistent: !prefix.is_empty() || a["persistent"].as_bool().unwrap_or(false),
+        stuck: None,
     })
 }
 
@@ -311,17 +534,34 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
                 status,
                 exit_code: j["exitCode"].as_i64(),
                 persistent: false,
+                stuck: None,
             })
         })
         .collect()
 }
 
-/// The running Pi jobs of a session, for the summary's count.
-pub fn pi_running(session_id: &str) -> u32 {
-    pi_jobs(session_id)
-        .iter()
+/// The running Pi jobs of a session, for the summary: how many, and the one stuck on a permission prompt or else
+/// the longest-running.
+pub fn pi_running(session_id: &str, tree: Option<&ProcessTree>) -> (u32, Option<WaitingOn>) {
+    let running: Vec<BackgroundJob> = pi_jobs(session_id)
+        .into_iter()
         .filter(|job| job.status == "running")
-        .count() as u32
+        .collect();
+    let home = home();
+    let prompt = |job: &BackgroundJob| {
+        tree.zip(job.pid)
+            .and_then(|(tree, pid)| tree.permission_prompt(pid, &home))
+    };
+    let waiting = running
+        .iter()
+        .map(|job| (job, prompt(job)))
+        .min_by_key(|(job, prompt)| (prompt.is_none(), job.started_at.unwrap_or(u64::MAX)))
+        .map(|(job, _)| WaitingOn {
+            command: job.command.clone(),
+            started_at: job.started_at,
+            pid: job.pid,
+        });
+    (running.len() as u32, waiting)
 }
 
 fn alive(pid: u32) -> bool {
@@ -345,12 +585,78 @@ mod tests {
 
     #[test]
     fn counts_only_wrappers_still_running_a_command() {
-        let ps = "  10     1 prime-agent worker\n  11    10 python -m rlm.repl\n  20    11 /bin/bash -c exec 9>&0 8>&1 0</dev/null\\012read -r _prime_agent_gate <&9 || exit 127\\012{\\012sleep 50; echo hi\\012}\\012\n  21    20 sleep 50\n  30    11 /bin/bash -c exec 9>&0\\012{\\012python -m http.server 1\\012}\n";
+        let ps = "  10     1 1-02:03:04 0:01.00 prime-agent worker\n  11    10 05:00 0:00.50 python -m rlm.repl\n  20    11 01:40 0:00.00 /bin/bash -c exec 9>&0 8>&1 0</dev/null\\012read -r _prime_agent_gate <&9 || exit 127\\012{\\012sleep 50; echo hi\\012}\\012\n  21    20 01:40 0:00.00 sleep 50\n  30    11 00:03 0:00.00 /bin/bash -c exec 9>&0\\012{\\012python -m http.server 1\\012}\n";
         let tree = ProcessTree::parse(ps);
         assert_eq!(
             tree.kernel_jobs(10),
             vec![(20, "sleep 50; echo hi".to_string())]
         );
         assert!(tree.kernel_jobs(11).is_empty());
+        let waiting = tree.kernel_waiting_on(10, 1_000_000, "/Users/me").unwrap();
+        assert_eq!(
+            (waiting.command.as_str(), waiting.started_at),
+            ("sleep 50; echo hi", Some(900_000))
+        );
+    }
+
+    #[test]
+    fn tells_a_command_stuck_on_a_permission_prompt() {
+        let ps = "  10     1 20:00 0:01.00 prime-agent worker\n  11    10 20:00 0:00.50 python -m rlm.repl\n  20    11 17:44 0:00.00 /bin/bash -c exec 9>&0\\012{\\012ls /Users/me/Documents; ls ~/Downloads\\012}\n  21    20 17:44 0:00.00 ls /Users/me/Documents\n  30    11 20:00 0:00.00 /bin/bash -c exec 9>&0\\012{\\012sleep 5000\\012}\n  31    30 20:00 0:00.00 sleep 5000\n";
+        let tree = ProcessTree::parse(ps);
+        assert_eq!(tree.permission_prompt(20, "/Users/me"), Some("Documents"));
+        assert_eq!(tree.permission_prompt(30, "/Users/me"), None);
+        // Stuck beats longest-running.
+        let waiting = tree.kernel_waiting_on(10, 2_000_000, "/Users/me").unwrap();
+        assert_eq!(waiting.pid, Some(20));
+        // Not yet idle long enough, or busy reading.
+        let young = ProcessTree::parse(&ps.replace("17:44 0:00.00 ls", "00:10 0:00.00 ls"));
+        assert_eq!(young.permission_prompt(20, "/Users/me"), None);
+        let busy = ProcessTree::parse(&ps.replace("17:44 0:00.00 ls", "17:44 0:03.20 ls"));
+        assert_eq!(busy.permission_prompt(20, "/Users/me"), None);
+    }
+
+    #[test]
+    fn names_only_the_protected_folders_in_the_home() {
+        let home = "/Users/me";
+        assert_eq!(
+            protected_folder("ls /Users/me/Documents", home),
+            Some("Documents")
+        );
+        assert_eq!(
+            protected_folder("cat ~/Desktop/notes.txt", home),
+            Some("Desktop")
+        );
+        assert_eq!(
+            protected_folder("du -sh \"$HOME/Downloads\"", home),
+            Some("Downloads")
+        );
+        assert_eq!(
+            protected_folder(
+                "ls '/Users/me/Library/Mobile Documents/com~apple~CloudDocs'",
+                home
+            ),
+            Some("iCloud Drive")
+        );
+        assert_eq!(
+            protected_folder("ls /Users/me/DocumentsArchive", home),
+            None
+        );
+        assert_eq!(protected_folder("ls /srv/Documents", home), None);
+        assert_eq!(protected_folder("ls /Users/me/src", home), None);
+    }
+
+    #[test]
+    fn parses_cpu_times() {
+        assert_eq!(parse_cpu_time("0:00.00"), Some(0.0));
+        assert_eq!(parse_cpu_time("1:55.68"), Some(115.68));
+        assert_eq!(parse_cpu_time("1:00:01.50"), Some(3601.5));
+    }
+
+    #[test]
+    fn parses_elapsed_times() {
+        assert_eq!(parse_etime("00:07"), Some(7));
+        assert_eq!(parse_etime("10:13"), Some(613));
+        assert_eq!(parse_etime("02:00:01"), Some(7201));
+        assert_eq!(parse_etime("1-00:00:00"), Some(86_400));
     }
 }

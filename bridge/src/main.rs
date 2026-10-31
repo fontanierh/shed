@@ -11,6 +11,7 @@ mod rpc;
 mod runaway;
 mod server;
 mod session;
+mod stall;
 mod store;
 mod transcript;
 

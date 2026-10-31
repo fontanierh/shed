@@ -267,12 +267,30 @@ pub struct SessionSummary {
     /// Background commands still running (Prime's REPL `bash()`, Pi's background-jobs extension). They outlive the
     /// agent's turn and wake it when they finish, so an idle session with jobs is still at work.
     pub background_jobs: u32,
+    /// The longest-running of them, which is usually what the session is waiting for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<WaitingOn>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<Stuck>,
     /// When a subagent last did anything or was sent anything (epoch ms). One left idle long enough is taken to be
     /// gone: Prime keeps finished subagents alive until it retires them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_active_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<Goal>,
+}
+
+/// A background command a session is waiting on.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingOn {
+    pub command: String,
+    /// Epoch ms.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
+    /// Tells a command apart from a later run of the same one.
+    #[serde(skip)]
+    pub pid: Option<u32>,
 }
 
 /// A background command, as the agent's own TUI lists it.
@@ -294,6 +312,30 @@ pub struct BackgroundJob {
     pub exit_code: Option<i64>,
     /// Prime's persistent shells, which stay open between commands.
     pub persistent: bool,
+    /// Why it looks stuck, when it does (see `Stuck`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck: Option<String>,
+}
+
+/// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission
+/// prompt, or the verdict of a model asked about it (`stallCheck` in config.json).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Stuck {
+    /// "tool": the agent's current tool call. "command": a background command.
+    pub kind: &'static str,
+    pub command: String,
+    /// One sentence for the reader: "macOS is probably asking for permission to read Documents".
+    pub reason: String,
+    /// How likely the model judged it stuck; none when the permission prompt was recognised from the folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probability: Option<f64>,
+    /// The background command's id, for cancelling it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<String>,
+    /// Epoch ms the command started.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

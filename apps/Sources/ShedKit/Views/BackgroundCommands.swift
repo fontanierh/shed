@@ -241,7 +241,9 @@ private struct JobTiming: View {
     var body: some View {
         if job.isRunning, let started = job.started {
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text("Running · " + Format.duration(ms: max(0, context.date.timeIntervalSince(started)) * 1000))
+                Text((job.stuck == nil ? "Running · " : "Looks stuck · ")
+                     + Format.duration(ms: max(0, context.date.timeIntervalSince(started)) * 1000))
+                    .foregroundStyle(job.stuck == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Palette.amber))
             }
         } else {
             Text([JobDetail.outcome(job), job.durationMs.map { Format.duration(ms: $0) }].compactMap { $0 }.joined(separator: " · "))
@@ -295,6 +297,9 @@ private struct JobDetail: View {
                     .help("Terminate the running process. The agent is told it ended.")
                 }
             }
+            if job.isRunning, let reason = job.stuck ?? store.sessions[sessionId]?.stuck.flatMap({ $0.jobId == job.id ? $0.reason : nil }) {
+                StuckNote(reason: reason, computer: store.environment(of: sessionId)?.name)
+            }
             OutputView(text: output)
         }
         .padding(14)
@@ -306,6 +311,25 @@ private struct JobDetail: View {
                 try? await Task.sleep(for: .seconds(2))
             } while !Task.isCancelled
         }
+    }
+}
+
+/// Why a command looks stuck, and the way out.
+private struct StuckNote: View {
+    let reason: String
+    let computer: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(Palette.amber).padding(.top, 1)
+            Text(StuckBanner.phrase(reason, on: computer) + " Cancel it to let the agent carry on: it sees the command fail.")
+                .font(.caption)
+                .foregroundStyle(Palette.moon.opacity(0.85))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 10, fill: Palette.amber.opacity(0.08), border: Palette.amber.opacity(0.35))
     }
 }
 

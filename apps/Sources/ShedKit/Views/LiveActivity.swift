@@ -155,7 +155,7 @@ final class LiveActivities {
             let description = ToolDescription(tool)
             return [description.title, description.detail].compactMap { $0 }.joined(separator: " ")
         }
-        return session.activityText ?? "Working"
+        return session.activityText()?.sentenceCased ?? "Working"
     }
 }
 

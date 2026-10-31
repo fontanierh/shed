@@ -151,6 +151,15 @@ struct ToolDescription {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
+    /// The part of a command worth reading in a short line: "cd /Users/me/dev/project && git -C /Users/me/dev/project
+    /// -c lfs.concurrenttransfers=4 lfs pull --include=…" is "git lfs pull --include=…".
+    static func shortCommand(_ command: String, limit: Int = 48) -> String {
+        let line = oneLine(command)
+            .replacingOccurrences(of: #"^cd \S+ && "#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"^(git)((?: -[Cc] \S+)+)"#, with: "$1", options: .regularExpression)
+        return line.count > limit ? String(line.prefix(limit - 1)) + "…" : line
+    }
+
     private static func matches(_ pattern: String, in text: String, group: Int = 1) -> [String] {
         guard let regex = regexes.get(pattern) ?? (try? NSRegularExpression(pattern: pattern)).map({ regexes.set(pattern, $0); return $0 })
         else { return [] }

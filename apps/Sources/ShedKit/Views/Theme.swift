@@ -265,6 +265,14 @@ enum Format {
         return "\(minutes / 60)h \(minutes % 60)m"
     }
 
+    /// A running time at a glance: "40s", "14m", "2h 5m".
+    static func elapsed(ms: Double) -> String {
+        let seconds = max(0, Int(ms / 1000))
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        return minutes < 60 ? "\(minutes)m" : "\(minutes / 60)h \(minutes % 60)m"
+    }
+
     static func time(_ date: Date) -> String { date.formatted(date: .omitted, time: .shortened) }
 
     /// "950", "31.3K", "1M", "1.05M".

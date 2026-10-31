@@ -17,16 +17,49 @@ pub struct Runaway {
     /// Whitespace bytes at the very end of it.
     blank_run: usize,
     since_check: usize,
+    /// "text", "thinking" or "toolcall".
+    kind: &'static str,
+    started: Option<std::time::Instant>,
+    streamed: usize,
+}
+
+/// What a looping block looked like when it was stopped, for the loop log.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopSample {
+    pub kind: &'static str,
+    pub seconds: f64,
+    pub bytes: usize,
+    /// The last few KB as streamed: for a tool call, raw JSON.
+    pub tail: String,
 }
 
 impl Runaway {
     /// A new block (text, reasoning or a tool call) started streaming.
-    pub fn reset(&mut self) {
-        *self = Self::default();
+    pub fn reset(&mut self, kind: &'static str) {
+        *self = Self {
+            kind,
+            started: Some(std::time::Instant::now()),
+            ..Self::default()
+        };
+    }
+
+    /// The block streaming now, as it stands.
+    pub fn sample(&self) -> LoopSample {
+        let tail = &self.tail[self.tail.len().saturating_sub(4_000)..];
+        LoopSample {
+            kind: self.kind,
+            seconds: self
+                .started
+                .map_or(0.0, |started| started.elapsed().as_secs_f64()),
+            bytes: self.streamed,
+            tail: String::from_utf8_lossy(tail).into_owned(),
+        }
     }
 
     /// Takes the next delta of the streaming block; says why when the block has turned into a loop.
     pub fn feed(&mut self, delta: &str) -> Option<&'static str> {
+        self.streamed += delta.len();
         for &byte in delta.as_bytes() {
             if byte.is_ascii_whitespace() {
                 self.blank_run += 1;
@@ -89,7 +122,7 @@ mod tests {
     fn a_new_block_starts_over() {
         let mut guard = Runaway::default();
         assert!(guard.feed(&" ".repeat(MAX_BLANK_RUN - 10)).is_none());
-        guard.reset();
+        guard.reset("text");
         assert!(guard.feed(&" ".repeat(20)).is_none());
     }
 }

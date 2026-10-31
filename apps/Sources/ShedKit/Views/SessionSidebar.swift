@@ -53,7 +53,7 @@ struct SessionSidebar: View {
                             SectionTitle("At work · \(active.count)")
                             ForEach(active) { sub in
                                 SidebarRow(session: sub, depth: 0, selected: store.selectedId == sub.id, selection: selection,
-                                           detail: [sub.activityText, store.parent(of: sub).map { "in \($0.title)" },
+                                           detail: [sub.activityText(), store.parent(of: sub).map { "in \($0.title)" },
                                                     store.environments.count > 1 ? store.environment(of: sub.id)?.name : nil].compactMap { $0 }.joined(separator: " · "))
                                     .onTapGesture { store.select(sub.id) }
                             }
@@ -241,11 +241,14 @@ struct SidebarRow: View {
                     // Subagents often run on other models than their parent: say which.
                     if session.isSubagent, let model = session.model { ModelTag(model: model, size: 10) }
                 }
-                Text(detail ?? secondary)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.amber.opacity(0.9)) : AnyShapeStyle(.secondary))
-                    .lineLimit(1)
-                    .contentTransition(.opacity)
+                // Ticks while a command is waited on, to keep its running time current.
+                TimelineView(.periodic(from: .now, by: session.waitingOn == nil ? 3600 : 30)) { context in
+                    Text(detail ?? secondary(at: context.date))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.amber.opacity(0.9)) : AnyShapeStyle(.secondary))
+                        .lineLimit(1)
+                        .contentTransition(.opacity)
+                }
             }
             Spacer(minLength: 4)
             if activeBelow > 0 {
@@ -282,8 +285,8 @@ struct SidebarRow: View {
         .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
     }
 
-    private var secondary: String {
-        if let activity = session.activityText { return activity.prefix(1).uppercased() + activity.dropFirst() }
+    private func secondary(at now: Date) -> String {
+        if let activity = session.activityText(at: now) { return activity.sentenceCased }
         if session.isSubagent { return session.title }
         return "\(session.agent.displayName) · \(session.folderName)"
     }
@@ -386,12 +389,27 @@ struct Ember: View {
 }
 
 extension SessionSummary {
-    /// "working", "2 background jobs", or nil when finished.
-    var activityText: String? {
+    /// "working", "waiting on git lfs pull · 14m", or nil when finished.
+    func activityText(at now: Date = .now) -> String? {
+        if let stuck, stuck.isToolCall || !status.isBusy {
+            let started = stuck.startedAt.map { " · " + Format.elapsed(ms: now.timeIntervalSince1970 * 1000 - $0) } ?? ""
+            return (stuck.isToolCall ? "tool call looks stuck" : "looks stuck on " + ToolDescription.shortCommand(stuck.command)) + started
+        }
         if status.isBusy { return status == .compacting ? "compacting" : "working" }
-        if backgroundJobs > 0 { return backgroundJobs == 1 ? "1 background command" : "\(backgroundJobs) background commands" }
-        return nil
+        guard backgroundJobs > 0 else { return nil }
+        guard let waitingOn else { return backgroundJobs == 1 ? "waiting on 1 command" : "waiting on \(backgroundJobs) commands" }
+        var text = "waiting on " + ToolDescription.shortCommand(waitingOn.command)
+        if backgroundJobs > 1 { text += " + \(backgroundJobs - 1) more" }
+        if let started = waitingOn.startedAt {
+            text += " · " + Format.elapsed(ms: now.timeIntervalSince1970 * 1000 - started)
+        }
+        return text
     }
+}
+
+extension String {
+    /// "waiting on git lfs pull" as "Waiting on git lfs pull", where `capitalized` would capitalize every word.
+    var sentenceCased: String { prefix(1).uppercased() + dropFirst() }
 }
 
 struct StatusDot: View {

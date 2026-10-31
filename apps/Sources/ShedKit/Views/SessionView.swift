@@ -9,19 +9,15 @@ struct SessionView: View {
     @State private var restartingKernel = false
     @State private var showingSubagents = false
     /// The running background commands, fetched when their count changes, so the transcript can name what it waits on.
-    @State private var runningCommands: [String] = []
 
     /// Where the session stands once idle, so a quiet session is never a mystery: the commands and subagents that
     /// will wake it, each opening its list, or plainly that nothing will.
     private var idleLines: [IdleLine] {
         guard session.status == .idle, !store.transcript.isEmpty else { return [] }
         var lines: [IdleLine] = []
-        let jobs = session.backgroundJobs
         // One short line each, naming the thing when there is one; the list is a tap away.
-        if jobs > 0 {
-            let what = jobs == 1 && runningCommands.count == 1
-                ? Self.short(ToolDescription.oneLine(runningCommands[0])) : "\(jobs) background commands"
-            lines.append(IdleLine(id: "jobs", text: "Waiting on " + what, systemImage: "apple.terminal", tint: Palette.amber, action: openJobs))
+        if let waiting = session.activityText() {
+            lines.append(IdleLine(id: "jobs", text: waiting.sentenceCased, systemImage: "apple.terminal", tint: Palette.amber, action: openJobs))
         }
         let total = store.activeDescendants(of: session.id)
         if total > 0 {
@@ -46,13 +42,6 @@ struct SessionView: View {
         case .connecting: return "Connecting to \(store.environment(of: session.id)?.name ?? "the bridge")…"
         case .disconnected: return "Can't reach \(store.environment(of: session.id)?.name ?? "the bridge")"
         }
-    }
-
-    /// The part of a command worth reading: "cd /Users/me/dev/project && uv run tool watch …" is "uv run tool
-    /// watch …", which otherwise falls past the cut.
-    private static func short(_ line: String) -> String {
-        let line = line.replacingOccurrences(of: #"^cd \S+ && "#, with: "", options: .regularExpression)
-        return line.count > 48 ? String(line.prefix(47)) + "…" : line
     }
 
     /// Read-only sessions are watched, not driven: no stopping their calls.
@@ -106,6 +95,10 @@ struct SessionView: View {
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
+                    if let stuck = session.stuck {
+                        StuckBanner(store: store, session: session, stuck: stuck)
+                            .transition(.opacity.combined(with: .offset(y: 8)))
+                    }
                     if let error = session.error, session.status == .error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .font(.callout).foregroundStyle(Palette.danger)
@@ -115,6 +108,7 @@ struct SessionView: View {
                     }
                     ComposerArea(store: store, session: session)
                 }
+                .animation(.spring(response: 0.4, dampingFraction: 0.85), value: session.stuck)
                 .frame(maxWidth: Layout.column)
                 .padding(.horizontal, Layout.gutter)
                 .padding(.bottom, 14)
@@ -147,10 +141,6 @@ struct SessionView: View {
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         #endif
         .renameSession($renaming, store: store)
-        .task(id: "\(session.id)-\(session.backgroundJobs)") {
-            guard hasJobs, session.backgroundJobs > 0 else { runningCommands = []; return }
-            if let jobs = try? await store.listJobs(session.id) { runningCommands = jobs.filter(\.isRunning).map(\.command) }
-        }
     }
 
     /// The phone opens the lists from the idle lines; the Mac has both in its header.
@@ -392,7 +382,7 @@ struct PhoneSubagentList: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(child.isActive ? (child.activityText ?? "working").capitalized : child.status.rawValue.capitalized)
+                    Text(child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(child.isActive ? Palette.amber : child.status == .error ? Palette.danger : Palette.moon.opacity(0.5))
                     if child.cost > 0 {
@@ -439,7 +429,7 @@ struct SubagentMenu: View {
                 ForEach(children) { child in
                     Button { store.select(child.id) } label: {
                         Text(child.name ?? child.title)
-                        Text([child.isActive ? (child.activityText ?? "working").capitalized : child.status.rawValue.capitalized, child.model?.name]
+                        Text([child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized, child.model?.name]
                             .compactMap { $0 }.joined(separator: " · "))
                     }
                 }
@@ -603,7 +593,7 @@ struct StatusLabel: View {
     // A Prime agent keeps going while its subagents and background jobs run, so say so next to "idle".
     private var text: String {
         var parts = [session.status == .running ? "working" : session.status.rawValue]
-        if !session.status.isBusy, session.backgroundJobs > 0, let jobs = session.activityText { parts.append(jobs) }
+        if !session.status.isBusy, session.backgroundJobs > 0, let jobs = session.activityText() { parts.append(jobs) }
         if activeSubagents > 0 { parts.append(activeSubagents == 1 ? "1 subagent at work" : "\(activeSubagents) subagents at work") }
         return parts.joined(separator: " · ")
     }
@@ -689,6 +679,82 @@ struct ModelPicker: View {
     }
 
     private var filtered: [ModelInfo] { ModelInfo.newestFirst(store.models, matching: query) }
+}
+
+/// A tool call or background command that looks stuck, why, and the way out, above the composer.
+struct StuckBanner: View {
+    let store: SessionStore
+    let session: SessionSummary
+    let stuck: Stuck
+    @State private var confirming = false
+
+    /// The bridge's reason as a sentence, naming the computer it runs on.
+    static func phrase(_ reason: String, on computer: String?) -> String {
+        var text = computer.map { reason.replacingOccurrences(of: "this Mac", with: $0) } ?? reason
+        if let last = text.last, !".!?".contains(last) { text += "." }
+        return text.sentenceCased
+    }
+
+    private var what: String {
+        stuck.isToolCall ? ToolDescription.python(code: stuck.command).detail ?? ToolDescription.shortCommand(stuck.command, limit: 60)
+            : ToolDescription.shortCommand(stuck.command, limit: 60)
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.amber).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(stuck.isToolCall ? "This tool call looks stuck" : "A background command looks stuck")
+                        .font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.moon)
+                    if let probability = stuck.probability {
+                        Text("\(Int((probability * 100).rounded()))% sure")
+                            .font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(Palette.amber)
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Palette.amber.opacity(0.14), in: Capsule())
+                            .help("How likely the stall check judged it stuck")
+                    }
+                }
+                Text(Self.phrase(stuck.reason, on: store.environment(of: session.id)?.name))
+                    .font(.caption).foregroundStyle(Palette.moon.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(what).font(.mono(11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+            }
+            Spacer(minLength: 8)
+            if !session.readOnly, stuck.isToolCall || stuck.jobId != nil {
+                Button { confirming = true } label: {
+                    Text(stuck.isToolCall ? "Stop" : "Cancel")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.amber)
+                        .padding(.horizontal, 12).frame(height: 28)
+                        .background(Palette.amber.opacity(0.14), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressStyle())
+                .confirmationDialog(stuck.isToolCall ? "Stop this tool call?" : "Cancel this command?", isPresented: $confirming,
+                                    titleVisibility: .visible) {
+                    Button(stuck.isToolCall ? "Stop" : "Cancel Command", role: .destructive) { act() }
+                    Button("Keep Waiting", role: .cancel) {}
+                } message: {
+                    Text(stuck.isToolCall ? "The agent's turn ends here. Messages you queued are sent right away so it can carry on."
+                         : "The agent is told the command ended, and carries on.")
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 12, fill: Palette.amber.opacity(0.08), border: Palette.amber.opacity(0.4))
+    }
+
+    private func act() {
+        if stuck.isToolCall {
+            store.stopTool()
+        } else if let jobId = stuck.jobId {
+            let store = store, id = session.id
+            Task { await store.killJob(id, jobId) }
+        }
+    }
 }
 
 /// The composer, or why there isn't one.

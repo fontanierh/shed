@@ -129,6 +129,10 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// Background commands still running (Prime's REPL `bash()`, Pi's background-jobs extension). They wake the agent
     /// when they finish.
     public let backgroundJobs: Int
+    /// The longest-running of them, usually what the session is waiting for.
+    public let waitingOn: WaitingOn?
+    /// Its tool call or a background command, when one looks stuck.
+    public let stuck: Stuck?
     /// When a subagent last did anything or was sent anything (epoch ms).
     public let lastActiveAt: Double?
     public let goal: Goal?
@@ -145,6 +149,31 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public var folderName: String { (cwd as NSString).lastPathComponent }
 }
 
+/// The background command a session is waiting on.
+public struct WaitingOn: Codable, Equatable, Sendable {
+    public let command: String
+    /// Epoch milliseconds.
+    public let startedAt: Double?
+}
+
+/// A tool call or background command that stood still long enough to look stuck, and why: macOS's permission
+/// prompt, or the verdict of the model the bridge asks when it has an OpenAI key for it.
+public struct Stuck: Codable, Equatable, Sendable {
+    /// "tool": the agent's current tool call. "command": a background command.
+    public let kind: String
+    public let command: String
+    /// One sentence: "macOS is probably asking for permission to read Documents…".
+    public let reason: String
+    /// How likely the model judged it stuck, 0 to 1; none when the bridge recognised the permission prompt itself.
+    public let probability: Double?
+    /// The background command, for cancelling it.
+    public let jobId: String?
+    /// Epoch milliseconds.
+    public let startedAt: Double?
+
+    public var isToolCall: Bool { kind == "tool" }
+}
+
 /// A shell command an agent left running in the background, as its own TUI lists it.
 public struct BackgroundJob: Decodable, Identifiable, Hashable, Sendable {
     public let id: String
@@ -159,6 +188,8 @@ public struct BackgroundJob: Decodable, Identifiable, Hashable, Sendable {
     public let exitCode: Int?
     /// Prime's persistent shells.
     public let persistent: Bool
+    /// Why it looks stuck, when it does.
+    public let stuck: String?
 
     public var isRunning: Bool { status == "running" }
     public var started: Date? { startedAt.map { Date(timeIntervalSince1970: $0 / 1000) } }

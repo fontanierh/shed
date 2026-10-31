@@ -87,6 +87,25 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// The model asked whether a command that stopped moving is stuck: `stallCheck` in config.json, set only when
+    /// the bridge is given an OpenAI key for it. Read each time, so editing the file takes effect without a restart.
+    pub fn stall_check(&self) -> Option<crate::stall::Judge> {
+        let raw = std::fs::read_to_string(self.dir.join("config.json")).ok()?;
+        let config: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let check = &config["stallCheck"];
+        let key = check["openaiApiKey"].as_str().filter(|k| !k.is_empty())?;
+        Some(crate::stall::Judge {
+            key: key.to_string(),
+            model: check["model"]
+                .as_str()
+                .unwrap_or(crate::stall::DEFAULT_MODEL)
+                .to_string(),
+            threshold: check["threshold"]
+                .as_f64()
+                .unwrap_or(crate::stall::DEFAULT_THRESHOLD),
+        })
+    }
+
     /// Context windows chosen per session, Pi's and Prime's alike, by session id.
     pub fn load_limits(&self) -> HashMap<String, u64> {
         std::fs::read_to_string(self.dir.join("limits.json"))

@@ -104,9 +104,23 @@ Run `setup/install.sh` on each Mac that should run agents, then add it in the ap
 To keep a remote Mac's bridge in step with your checkout, run this from your own Mac over SSH:
 
 ```bash
-setup/sync-remote.sh user@host            # copy, build there, restart the bridge if it changed
+setup/sync-remote.sh user@host            # build, sign, copy over, restart the bridge if it changed
 setup/sync-remote.sh user@host --watch    # and repeat every 5 minutes from launchd
 ```
+
+### Folder access and stuck commands
+
+macOS asks before a program first reads Documents, Desktop or Downloads, and holds the read until someone answers on that Mac. Commands an agent runs count as the bridge's, so the prompt names `agent-remote`. Grant it once, in System Settings › Privacy & Security › Full Disk Access (add `~/.agent-remote/bin/agent-remote`), or answer each prompt as it comes.
+
+The answer sticks across updates only if the bridge keeps the same signature. The installer and `sync-remote.sh` sign it with the first Developer ID or Apple Development certificate in your keychain (set `SHED_SIGN_IDENTITY` to choose one). Without a certificate it is signed ad hoc, and macOS asks again after every update.
+
+When a tool call or background command has run for a minute and stood still for 45 seconds, the bridge looks into it. If it names one of those folders, the apps say macOS is probably waiting for an answer and offer to stop it. To judge any other stall, give the bridge an OpenAI key in `~/.agent-remote/config.json`:
+
+```json
+"stallCheck": { "openaiApiKey": "sk-...", "threshold": 0.8 }
+```
+
+The bridge then asks OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) how likely the command is to be stuck, and on what. It sends the code or command, its processes with their CPU time, its latest output, the working directory and what the agent wrote before running it. At `threshold` or above (0.8 by default), the apps show the likely cause and offer to stop it.
 
 ## Uninstall
 

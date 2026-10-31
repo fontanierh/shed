@@ -88,7 +88,7 @@ pub struct Transcript {
     /// Watches the block streaming now for a generation loop.
     runaway: crate::runaway::Runaway,
     /// Why the streaming reply was found looping, until the session takes it to stop the reply.
-    looping: Option<&'static str>,
+    looping: Option<(&'static str, crate::runaway::LoopSample)>,
     /// The block streaming now was already found looping: its stop is on its way, so it isn't reported again.
     stopped: bool,
 }
@@ -99,7 +99,7 @@ impl Transcript {
     }
 
     /// Why the reply streaming now is a generation loop, once: the session stops it.
-    pub fn take_looping(&mut self) -> Option<&'static str> {
+    pub fn take_looping(&mut self) -> Option<(&'static str, crate::runaway::LoopSample)> {
         self.looping.take()
     }
 
@@ -108,7 +108,7 @@ impl Transcript {
             return;
         }
         if let Some(reason) = self.runaway.feed(delta) {
-            self.looping = Some(reason);
+            self.looping = Some((reason, self.runaway.sample()));
             self.stopped = true;
         }
     }
@@ -302,8 +302,12 @@ impl Transcript {
         let item_id = self.stream.get(&index).cloned();
         let text = || delta["delta"].as_str().unwrap_or("").to_string();
         match delta["type"].as_str().unwrap_or("") {
-            "text_start" | "thinking_start" | "toolcall_start" => {
-                self.runaway.reset();
+            kind @ ("text_start" | "thinking_start" | "toolcall_start") => {
+                self.runaway.reset(match kind {
+                    "text_start" => "text",
+                    "thinking_start" => "thinking",
+                    _ => "toolcall",
+                });
                 self.stopped = false;
             }
             "text_delta" | "thinking_delta" | "toolcall_delta" => {

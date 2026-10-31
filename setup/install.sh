@@ -92,6 +92,7 @@ if ! command -v cargo >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 fi
 (cd "$ROOT/bridge" && cargo build --release)
+note "signed with $("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/release/agent-remote")"
 mkdir -p "$HOME/.agent-remote/bin" "$HOME/.agent-remote/logs"
 install -m 755 "$ROOT/bridge/target/release/agent-remote" "$HOME/.agent-remote/bin/agent-remote"
 note "installed ~/.agent-remote/bin/agent-remote"
