@@ -323,7 +323,10 @@ struct PhoneSubagentsButton: View {
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
                     .foregroundStyle(active > 0 ? Palette.amber : Palette.moon.opacity(0.7))
                     .contentTransition(.numericText())
+                    .lineLimit(1)
+                    .fixedSize()
             }
+            .fixedSize()
             .padding(.horizontal, 4)
             .frame(height: 32)
             .contentShape(Rectangle())
