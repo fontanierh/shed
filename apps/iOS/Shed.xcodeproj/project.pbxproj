@@ -7,9 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		2291D40CCD8103C8F5049E8D /* AgentRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */; };
+		2291D40CCD8103C8F5049E8D /* ShedKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1313A0E8DF59416BDB172F7D /* ShedKit */; };
 		32C28BDA5D313AF7E7D9CA45 /* ShedLive.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2524201A2CA96490408E8DF /* ShedLive.swift */; };
-		3450DBDA772A5FC7093ADEA4 /* AgentRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = C4A52723F453412993503A87 /* AgentRemoteKit */; };
+		3450DBDA772A5FC7093ADEA4 /* ShedKit in Frameworks */ = {isa = PBXBuildFile; productRef = 8ACAAA68785A75F5024F8445 /* ShedKit */; };
 		381B1CC5DD0A1E290EDD2F51 /* ShedLive.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AE62A22BEA2C59500BFE30CA /* ShedLive.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		72156B4FAFD811F82B887E04 /* ShedApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D8EEA2BF488D58C8E05550E /* ShedApp.swift */; };
 		AAEF0377BC4B1CAC17DBEDD9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FBBA36BE61BFCF4C8776E24D /* Assets.xcassets */; };
@@ -57,7 +57,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				3450DBDA772A5FC7093ADEA4 /* AgentRemoteKit in Frameworks */,
+				3450DBDA772A5FC7093ADEA4 /* ShedKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,7 +65,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2291D40CCD8103C8F5049E8D /* AgentRemoteKit in Frameworks */,
+				2291D40CCD8103C8F5049E8D /* ShedKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,7 +155,7 @@
 			);
 			name = Shed;
 			packageProductDependencies = (
-				1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */,
+				1313A0E8DF59416BDB172F7D /* ShedKit */,
 			);
 			productName = Shed;
 			productReference = 9337968E55E83A4F3E83E282 /* Shed.app */;
@@ -174,7 +174,7 @@
 			);
 			name = ShedLive;
 			packageProductDependencies = (
-				C4A52723F453412993503A87 /* AgentRemoteKit */,
+				8ACAAA68785A75F5024F8445 /* ShedKit */,
 			);
 			productName = ShedLive;
 			productReference = AE62A22BEA2C59500BFE30CA /* ShedLive.appex */;
@@ -190,11 +190,9 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					141317845F0372ED275902D7 = {
-						DevelopmentTeam = XQ8P3CLCKV;
 						ProvisioningStyle = Automatic;
 					};
 					302792D1C30DA5E4A5995F95 = {
-						DevelopmentTeam = XQ8P3CLCKV;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -298,7 +296,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = XQ8P3CLCKV;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -314,6 +311,7 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				SHED_BUNDLE_ID = dev.agentremote.shed;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
@@ -330,7 +328,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed.live;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SHED_BUNDLE_ID).live";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -347,7 +345,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SHED_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -362,7 +360,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed.live;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SHED_BUNDLE_ID).live";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -404,7 +402,6 @@
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = XQ8P3CLCKV;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -427,6 +424,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
+				SHED_BUNDLE_ID = dev.agentremote.shed;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
@@ -445,7 +443,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(SHED_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -491,13 +489,13 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */ = {
+		1313A0E8DF59416BDB172F7D /* ShedKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = AgentRemoteKit;
+			productName = ShedKit;
 		};
-		C4A52723F453412993503A87 /* AgentRemoteKit */ = {
+		8ACAAA68785A75F5024F8445 /* ShedKit */ = {
 			isa = XCSwiftPackageProductDependency;
-			productName = AgentRemoteKit;
+			productName = ShedKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -22,7 +22,7 @@ fn usage() -> ! {
     eprintln!("usage: agent-remote [--host 127.0.0.1] [--port 7878]");
     eprintln!();
     eprintln!("Binds to localhost by default. Expose it on your tailnet with TLS via:");
-    eprintln!("  tailscale serve --bg 7878");
+    eprintln!("  tailscale serve --bg --https=7878 http://127.0.0.1:7878");
     std::process::exit(2)
 }
 

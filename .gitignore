@@ -5,4 +5,3 @@ DerivedData/
 .DS_Store
 apps/build/
 target/
-/media-demo.*

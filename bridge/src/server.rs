@@ -105,7 +105,7 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
 
 async fn send_snapshot(out: &mpsc::UnboundedSender<Arc<str>>, attached: &mut HashMap<String, u64>, session: &crate::session::Session) {
     let (seq, summary, snapshot) = attach_snapshot(session).await;
-    let _ = out.send(encode(&ServerMessage::Session { session: summary }));
+    let _ = out.send(encode(&ServerMessage::Session { session: Box::new(summary) }));
     let _ = out.send(encode(&snapshot));
     attached.insert(session.id.clone(), seq);
 }

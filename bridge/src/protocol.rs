@@ -1,4 +1,4 @@
-//! Wire types shared with the Swift clients (apps/Sources/AgentRemoteKit/Protocol.swift).
+//! Wire types shared with the Swift clients (apps/Sources/ShedKit/Protocol.swift).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -462,7 +462,7 @@ pub enum ServerMessage {
         sessions: Vec<SessionSummary>,
     },
     Session {
-        session: SessionSummary,
+        session: Box<SessionSummary>,
     },
     SessionRemoved {
         #[serde(rename = "sessionId")]

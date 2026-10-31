@@ -4,8 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 config="${1:-release}"
-swift build -c "$config" --product AgentRemoteMac
-bin="$(swift build -c "$config" --show-bin-path)/AgentRemoteMac"
+swift build -c "$config" --product ShedMac
+bin="$(swift build -c "$config" --show-bin-path)/ShedMac"
 app="build/Shed.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
@@ -20,7 +20,6 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Kept from the Agent Remote days so saved settings carry over. -->
   <key>CFBundleIdentifier</key><string>dev.agentremote.mac</string>
   <key>CFBundleName</key><string>Shed</string>
   <key>CFBundleDisplayName</key><string>Shed</string>
@@ -29,7 +28,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
   <key>ATSApplicationFontsPath</key><string>Fonts</string>

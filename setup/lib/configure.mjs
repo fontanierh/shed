@@ -1,6 +1,6 @@
 // JSON edits for install.sh, run with the Node that Pi ships. Every step merges into what is already there.
 // Usage: node configure.mjs <step> [args]
-//   auth <file>                      add the OPENAI_API_KEY from the environment as the "openai" credential
+//   auth <file>                      add the provider API keys set in the environment (see KEYS) as credentials
 //   prime-models <vendored> <file>   add our model definitions to Prime's models.json, by provider and id
 //   pi-models <vendored> <file>      add our model overrides to Pi's models.json, by provider and model id
 //   bridge-defaults <vendored> <file>   set the bridge's per-model default context windows, keeping its token
@@ -16,17 +16,28 @@ const write = (file, value, mode = 0o600) => {
   fs.renameSync(tmp, file);
 };
 
+/// Environment variable → provider id, as Pi and Prime name them in auth.json.
+const KEYS = {
+  OPENAI_API_KEY: "openai",
+  ANTHROPIC_API_KEY: "anthropic",
+  GEMINI_API_KEY: "google",
+  DEEPSEEK_API_KEY: "deepseek",
+};
+
 const [step, ...args] = process.argv.slice(2);
 switch (step) {
   case "auth": {
     const [file] = args;
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) throw new Error("OPENAI_API_KEY is not set");
     const auth = read(file);
-    const changed = auth.openai?.key !== key;
-    auth.openai = { type: "api_key", key };
+    const set = [];
+    for (const [variable, provider] of Object.entries(KEYS)) {
+      const key = process.env[variable];
+      if (!key || auth[provider]?.key === key) continue;
+      auth[provider] = { type: "api_key", key };
+      set.push(provider);
+    }
     write(file, auth);
-    console.log(changed ? `  set the OpenAI key in ${file}` : `  OpenAI key already in ${file}`);
+    console.log(set.length ? `  set ${set.join(", ")} keys in ${file}` : `  keys already in ${file}`);
     break;
   }
   case "prime-models": {

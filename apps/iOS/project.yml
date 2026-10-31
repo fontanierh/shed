@@ -5,14 +5,14 @@ options:
     iOS: "18.0"
   createIntermediateGroups: true
 packages:
-  AgentRemote:
+  Shed:
     path: ..
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    # Henry's Personal Team. Free provisioning: installs expire after 7 days, then rebuild.
-    DEVELOPMENT_TEAM: XQ8P3CLCKV
     CODE_SIGN_STYLE: Automatic
+    # Bundle IDs are unique per Apple developer account: override with SHED_BUNDLE_ID=com.example.shed.
+    SHED_BUNDLE_ID: dev.agentremote.shed
     TARGETED_DEVICE_FAMILY: "1"
 targets:
   Shed:
@@ -24,12 +24,12 @@ targets:
         type: folder
         buildPhase: resources
     dependencies:
-      - package: AgentRemote
-        product: AgentRemoteKit
+      - package: Shed
+        product: ShedKit
       - target: ShedLive
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.agentremote.shed
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHED_BUNDLE_ID)
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Shed
     info:
@@ -62,11 +62,11 @@ targets:
     sources:
       - ShedLive
     dependencies:
-      - package: AgentRemote
-        product: AgentRemoteKit
+      - package: Shed
+        product: ShedKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.agentremote.shed.live
+        PRODUCT_BUNDLE_IDENTIFIER: $(SHED_BUNDLE_ID).live
     info:
       path: ShedLive/Info.plist
       properties:

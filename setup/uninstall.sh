@@ -13,4 +13,4 @@ ts="$(command -v tailscale || true)"
 [ -z "$ts" ] && [ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ] && ts=/Applications/Tailscale.app/Contents/MacOS/Tailscale
 [ -n "$ts" ] && "$ts" serve --https="$PORT" off 2>/dev/null && echo "removed the tailnet publication on port $PORT"
 
-rm -rf "$HOME/Applications/Shed.app" "$HOME/Applications/Agent Remote.app" && echo "removed ~/Applications/Shed.app"
+rm -rf "$HOME/Applications/Shed.app" && echo "removed ~/Applications/Shed.app"

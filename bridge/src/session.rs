@@ -280,7 +280,7 @@ impl App {
         if st.removed {
             return;
         }
-        self.broadcast_global(&ServerMessage::Session { session: st.summary.clone() });
+        self.broadcast_global(&ServerMessage::Session { session: Box::new(st.summary.clone()) });
     }
 
     fn flush_changes(&self, session_id: &str, st: &mut SessionState) {

@@ -1,5 +1,5 @@
 // The iPhone app: the shared session store and the phone layout.
-import AgentRemoteKit
+import ShedKit
 import SwiftUI
 
 @main

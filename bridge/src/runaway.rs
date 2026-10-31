@@ -65,13 +65,13 @@ mod tests {
     #[test]
     fn trips_on_endless_whitespace() {
         // What a looping model streamed into a tool call's arguments.
-        let chunks = std::iter::repeat(" \t\t\t\t\t\t\t\t\n      ".to_string()).take(1_000);
+        let chunks = std::iter::repeat_n(" \t\t\t\t\t\t\t\t\n      ".to_string(), 1_000);
         assert!(feed_all(chunks).is_some());
     }
 
     #[test]
     fn trips_on_a_repeated_phrase() {
-        let chunks = std::iter::repeat("I'll check the build again. ".to_string()).take(2_000);
+        let chunks = std::iter::repeat_n("I'll check the build again. ".to_string(), 2_000);
         assert!(feed_all(chunks).is_some());
     }
 

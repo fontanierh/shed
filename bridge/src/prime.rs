@@ -1,4 +1,4 @@
-//! Client for the Prime Agent supervisor socket (see PRIME-DAEMON.md). One connection carries
+//! Client for the Prime Agent supervisor socket (see docs/prime-daemon-protocol.md). One connection carries
 //! every Prime session, including subagents and sessions started from Prime's own TUI.
 
 use std::collections::HashMap;

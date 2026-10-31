@@ -1,9 +1,11 @@
 #!/bin/bash
-# Set up Shed on this Mac: Pi and Prime Agent at their latest versions with the OpenAI key, GPT-6.1 Terra and
+# Set up Shed on this Mac: Pi and Prime Agent at their latest versions with your API keys, GPT-6.1 Terra and
 # Pi's subagent extension; the bridge as a login service; the Mac app; HTTPS access over Tailscale.
 # Safe to run again: every step updates in place and keeps settings it doesn't own.
 #
 #   OPENAI_API_KEY=sk-... setup/install.sh [--no-service] [--no-app] [--no-tailscale]
+#
+#   Keys are read from OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY and DEEPSEEK_API_KEY, any of them.
 #
 #   --no-service    build and install the bridge, but don't register it with launchd
 #   --no-app        skip building the Mac app
@@ -19,7 +21,7 @@ for arg in "$@"; do
     --no-service) SERVICE=0 ;;
     --no-app) APP=0 ;;
     --no-tailscale) TAILSCALE=0 ;;
-    -h | --help) sed -n '2,10p' "$0" | cut -c3-; exit 0 ;;
+    -h | --help) sed -n '2,12p' "$0" | cut -c3-; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -58,16 +60,18 @@ SERVICE_PATH="$HOME/.local/bin:$(dirname "$NODE"):$HOME/.cargo/bin:/opt/homebrew
 configure() { "$NODE" "$ROOT/setup/lib/configure.mjs" "$@"; }
 
 step "Agent configuration"
-if [ -n "${OPENAI_API_KEY:-}" ]; then
+if [ -n "${OPENAI_API_KEY:-}${ANTHROPIC_API_KEY:-}${GEMINI_API_KEY:-}${DEEPSEEK_API_KEY:-}" ]; then
   configure auth "$HOME/.pi/agent/auth.json"
   configure auth "$HOME/.prime/agent/auth.json"
+else
+  note "No API key in the environment: leaving both agents' credentials as they are."
+fi
+if [ -n "${OPENAI_API_KEY:-}" ]; then
   # Only where no default is set yet, and only with a key that makes it usable.
   configure default-model "$HOME/.pi/agent/settings.json" openai gpt-6.1-terra medium
   configure default-model "$HOME/.prime/agent/settings.json" openai gpt-6.1-terra medium
-else
-  note "OPENAI_API_KEY is not set: leaving both agents' credentials as they are."
 fi
-# Prime's model catalog doesn't list GPT-6.1 Terra yet. Both agents get its full 1M window; the bridge holds
+# Prime's model catalog doesn't list GPT-6.1 Terra or Claude Haiku 5.5 yet. Both agents get its full 1M window; the bridge holds
 # sessions to 272k (the standard price) unless one picks a larger window.
 configure prime-models "$ROOT/setup/prime/models.json" "$HOME/.prime/agent/models.json"
 configure pi-models "$ROOT/setup/pi/models.json" "$HOME/.pi/agent/models.json"
@@ -140,8 +144,7 @@ if [ "$APP" = 1 ]; then
   if command -v swift >/dev/null; then
     "$ROOT/apps/scripts/bundle-mac.sh" release
     mkdir -p "$HOME/Applications"
-    # The app was called Agent Remote before.
-    rm -rf "$HOME/Applications/Shed.app" "$HOME/Applications/Agent Remote.app"
+    rm -rf "$HOME/Applications/Shed.app"
     cp -R "$ROOT/apps/build/Shed.app" "$HOME/Applications/"
     note "installed ~/Applications/Shed.app (it reads the local bridge token on its own)"
   else
@@ -166,5 +169,9 @@ if [ "$TAILSCALE" = 1 ]; then
 fi
 
 step "Done"
-note "Bridge token (for other devices): ~/.agent-remote/config.json"
-note "On this Mac the app connects to ws://127.0.0.1:$PORT/ws without any setup."
+note "The Mac app on this Mac connects to the bridge on its own."
+if [ -n "${host:-}" ]; then
+  note "To control this Mac from an iPhone or another Mac, add a computer in Shed with:"
+  note "  address  wss://$host:$PORT/ws"
+  note "  token    plutil -extract token raw -o - ~/.agent-remote/config.json"
+fi

@@ -1,6 +1,8 @@
 /**
  * Subagent Tool - Delegate tasks to specialized agents
  *
+ * Adapted from the subagent example that ships with Pi (MIT License).
+ *
  * Spawns a separate `pi` process for each subagent invocation,
  * giving it an isolated context window.
  *

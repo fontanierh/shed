@@ -1,5 +1,7 @@
 /**
  * Agent discovery and configuration
+ *
+ * Adapted from the subagent example that ships with Pi (MIT License).
  */
 
 import * as fs from "node:fs";
