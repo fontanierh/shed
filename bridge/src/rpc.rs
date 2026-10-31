@@ -61,14 +61,20 @@ fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {
     }
     args.extend(["--append-system-prompt".into(), crate::media::GUIDE.into()]);
     if let Some(resume) = &opts.resume {
-        let flag = if opts.agent == AgentKind::Pi { "--session" } else { "--resume" };
+        let flag = if opts.agent == AgentKind::Pi {
+            "--session"
+        } else {
+            "--resume"
+        };
         args.extend([flag.into(), resume.clone()]);
     }
     (program.into(), args)
 }
 
 impl RpcChild {
-    pub fn spawn(opts: &SpawnOptions) -> Result<(Arc<RpcChild>, mpsc::UnboundedReceiver<ChildOutput>)> {
+    pub fn spawn(
+        opts: &SpawnOptions,
+    ) -> Result<(Arc<RpcChild>, mpsc::UnboundedReceiver<ChildOutput>)> {
         let (program, args) = command_line(opts);
         let mut child = Command::new(&program)
             .args(&args)
@@ -123,14 +129,23 @@ impl RpcChild {
                 }
                 let line = String::from_utf8_lossy(&buf);
                 let line = line.trim_end_matches(['\n', '\r']);
-                let Ok(record) = serde_json::from_str::<Value>(line) else { continue };
+                let Ok(record) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
                 if record["type"] == "response" {
-                    let Some(id) = record["id"].as_str() else { continue };
-                    let Some(waiter) = pending.lock().unwrap().remove(id) else { continue };
+                    let Some(id) = record["id"].as_str() else {
+                        continue;
+                    };
+                    let Some(waiter) = pending.lock().unwrap().remove(id) else {
+                        continue;
+                    };
                     let result = if record["success"] == true {
                         Ok(record.get("data").cloned().unwrap_or(Value::Null))
                     } else {
-                        Err(record["error"].as_str().unwrap_or("command failed").to_string())
+                        Err(record["error"]
+                            .as_str()
+                            .unwrap_or("command failed")
+                            .to_string())
                     };
                     let _ = waiter.send(result);
                 } else {
@@ -185,7 +200,10 @@ impl RpcChild {
         let child = self.child.lock().unwrap().take();
         if let Some(mut child) = child {
             tokio::spawn(async move {
-                if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await.is_err() {
+                if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
+                    .await
+                    .is_err()
+                {
                     let _ = child.kill().await;
                 }
             });
@@ -198,7 +216,16 @@ impl RpcChild {
             Some(mut child) => child.wait().await.ok().and_then(|s| s.code()),
             None => None,
         };
-        let tail: Vec<String> = self.stderr_tail.lock().unwrap().iter().rev().take(5).rev().cloned().collect();
+        let tail: Vec<String> = self
+            .stderr_tail
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .cloned()
+            .collect();
         let code = code.map(|c| format!(" (code {c})")).unwrap_or_default();
         if tail.is_empty() {
             format!("agent exited{code}")

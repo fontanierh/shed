@@ -20,10 +20,15 @@ pub enum DaemonEvent {
     /// (Re)connected; carries the full roster from `roster_subscribe`.
     Roster(Vec<Value>),
     RosterUpdate(Vec<Value>),
-    SessionEvent { active_session_id: String, event: Value },
+    SessionEvent {
+        active_session_id: String,
+        event: Value,
+    },
     SessionClosed(String),
     /// A session stopped. Its last roster row has no activeSessionId, only its transcript file.
-    Inactive { session_file: String },
+    Inactive {
+        session_file: String,
+    },
     Disconnected(String),
 }
 
@@ -51,7 +56,10 @@ pub fn socket_paths() -> Vec<String> {
         .unwrap_or_else(|| "/tmp/".into());
     let uid = unsafe { libc_getuid() };
     let tmp = tmp.trim_end_matches('/');
-    vec![format!("{tmp}/prime-agent-rust-{uid}/daemon.sock"), format!("{tmp}/prime-agent-{uid}/daemon.sock")]
+    vec![
+        format!("{tmp}/prime-agent-rust-{uid}/daemon.sock"),
+        format!("{tmp}/prime-agent-{uid}/daemon.sock"),
+    ]
 }
 
 async fn connect_any(paths: &[String]) -> Option<UnixStream> {
@@ -71,14 +79,17 @@ extern "C" {
 /// The environment Prime workers get for sessions the bridge creates. Prime's TUI forwards its
 /// whole environment; the bridge forwards only what tools need.
 fn launch_env() -> Value {
-    let keys = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR"];
+    let keys = [
+        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR",
+    ];
     let mut env = serde_json::Map::new();
     for key in keys {
         if let Ok(value) = std::env::var(key) {
             env.insert(key.into(), Value::String(value));
         }
     }
-    env.entry("TERM").or_insert_with(|| Value::String("xterm-256color".into()));
+    env.entry("TERM")
+        .or_insert_with(|| Value::String("xterm-256color".into()));
     Value::Object(env)
 }
 
@@ -128,7 +139,9 @@ impl PrimeDaemon {
                         break;
                     }
                 }
-                connected.ok_or_else(|| anyhow!("Prime daemon did not start (socket {})", paths.join(" or ")))?
+                connected.ok_or_else(|| {
+                    anyhow!("Prime daemon did not start (socket {})", paths.join(" or "))
+                })?
             }
         };
         let (read, write) = stream.into_split();
@@ -158,14 +171,19 @@ impl PrimeDaemon {
                         Ok(0) | Err(_) => break,
                         Ok(_) => {}
                     }
-                    let Ok(message) = serde_json::from_slice::<Value>(&buf) else { continue };
+                    let Ok(message) = serde_json::from_slice::<Value>(&buf) else {
+                        continue;
+                    };
                     daemon.dispatch(message, &tx);
                 }
             })
         };
 
         let roster = self.supervisor("roster_subscribe", json!({})).await?;
-        let rows = roster["roster"].as_array().map(|rows| rows.iter().map(|r| r["summary"].clone()).collect()).unwrap_or_default();
+        let rows = roster["roster"]
+            .as_array()
+            .map(|rows| rows.iter().map(|r| r["summary"].clone()).collect())
+            .unwrap_or_default();
         let _ = tx.send(DaemonEvent::Roster(rows));
         let _ = reader.await;
         bail!("Prime daemon connection closed")
@@ -174,18 +192,28 @@ impl PrimeDaemon {
     fn dispatch(&self, message: Value, tx: &mpsc::UnboundedSender<DaemonEvent>) {
         match message["type"].as_str().unwrap_or("") {
             "response" => {
-                let Some(id) = message["id"].as_str() else { return };
-                let Some(waiter) = self.pending.lock().unwrap().remove(id) else { return };
+                let Some(id) = message["id"].as_str() else {
+                    return;
+                };
+                let Some(waiter) = self.pending.lock().unwrap().remove(id) else {
+                    return;
+                };
                 let result = if message["success"] == true {
                     Ok(message.get("data").cloned().unwrap_or(Value::Null))
                 } else {
-                    Err(message["error"].as_str().unwrap_or("command failed").to_string())
+                    Err(message["error"]
+                        .as_str()
+                        .unwrap_or("command failed")
+                        .to_string())
                 };
                 let _ = waiter.send(result);
             }
             "session_event" => {
                 if let Some(id) = message["activeSessionId"].as_str() {
-                    let _ = tx.send(DaemonEvent::SessionEvent { active_session_id: id.into(), event: message["event"].clone() });
+                    let _ = tx.send(DaemonEvent::SessionEvent {
+                        active_session_id: id.into(),
+                        event: message["event"].clone(),
+                    });
                 }
             }
             "roster_update" => {
@@ -193,7 +221,9 @@ impl PrimeDaemon {
                 for row in message["changed"].as_array().into_iter().flatten() {
                     if row["status"] == "inactive" {
                         if let Some(file) = row["summary"]["sessionFile"].as_str() {
-                            let _ = tx.send(DaemonEvent::Inactive { session_file: file.into() });
+                            let _ = tx.send(DaemonEvent::Inactive {
+                                session_file: file.into(),
+                            });
                         }
                     } else {
                         rows.push(row["summary"].clone());
@@ -202,7 +232,9 @@ impl PrimeDaemon {
                 let _ = tx.send(DaemonEvent::RosterUpdate(rows));
             }
             "session_closed" => {
-                let id = message["activeSessionId"].as_str().or_else(|| message["summary"]["activeSessionId"].as_str());
+                let id = message["activeSessionId"]
+                    .as_str()
+                    .or_else(|| message["summary"]["activeSessionId"].as_str());
                 if let Some(id) = id {
                     let _ = tx.send(DaemonEvent::SessionClosed(id.into()));
                 }
@@ -248,16 +280,29 @@ impl PrimeDaemon {
     }
 
     /// An RPC-style command addressed to one session.
-    pub async fn session(&self, active_session_id: &str, kind: &str, mut fields: Value) -> Result<Value> {
+    pub async fn session(
+        &self,
+        active_session_id: &str,
+        kind: &str,
+        mut fields: Value,
+    ) -> Result<Value> {
         if let Value::Object(obj) = &mut fields {
-            obj.insert("activeSessionId".into(), Value::String(active_session_id.into()));
+            obj.insert(
+                "activeSessionId".into(),
+                Value::String(active_session_id.into()),
+            );
         } else {
             fields = json!({ "activeSessionId": active_session_id });
         }
         self.supervisor(kind, fields).await
     }
 
-    pub async fn create(&self, cwd: &str, model: Option<&str>, thinking: Option<&str>) -> Result<Value> {
+    pub async fn create(
+        &self,
+        cwd: &str,
+        model: Option<&str>,
+        thinking: Option<&str>,
+    ) -> Result<Value> {
         let home = std::env::var("HOME").unwrap_or_default();
         let mut config = json!({
             "cwd": cwd,
@@ -271,7 +316,11 @@ impl PrimeDaemon {
         if let Some(thinking) = thinking {
             config["thinking"] = json!(thinking);
         }
-        self.supervisor("create", json!({ "config": config, "launchEnv": launch_env() })).await
+        self.supervisor(
+            "create",
+            json!({ "config": config, "launchEnv": launch_env() }),
+        )
+        .await
     }
 
     pub async fn attach(&self, active_session_id: &str) -> Result<Value> {

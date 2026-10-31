@@ -69,7 +69,13 @@ pub async fn media_handler(
     let Some(kind) = content_type(path) else {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "not a media file").into_response();
     };
-    match serve(path, kind, headers.get(header::RANGE).and_then(|v| v.to_str().ok())).await {
+    match serve(
+        path,
+        kind,
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+    )
+    .await
+    {
         Ok(response) => response,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -94,7 +100,10 @@ async fn serve(path: &str, kind: &'static str, range: Option<&str>) -> std::io::
                 .body(Body::empty())
                 .unwrap());
         }
-        return Ok(common(Response::builder()).header(header::CONTENT_LENGTH, len).body(stream(file, len)).unwrap());
+        return Ok(common(Response::builder())
+            .header(header::CONTENT_LENGTH, len)
+            .body(stream(file, len))
+            .unwrap());
     };
 
     // The whole range asked for: AVFoundation refuses a shorter answer than its request, even a valid partial one.
@@ -133,7 +142,10 @@ fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
             (len.checked_sub(n.min(len))?, len.checked_sub(1)?)
         }
         (from, "") => (from.parse().ok()?, len.checked_sub(1)?),
-        (from, to) => (from.parse().ok()?, to.parse::<u64>().ok()?.min(len.checked_sub(1)?)),
+        (from, to) => (
+            from.parse().ok()?,
+            to.parse::<u64>().ok()?.min(len.checked_sub(1)?),
+        ),
     };
     (start <= end && end < len).then_some((start, end))
 }

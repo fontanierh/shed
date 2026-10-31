@@ -10,7 +10,11 @@ const MAX_FIELD: usize = 20_000;
 
 pub enum Change {
     Add(Item),
-    Patch { item_id: String, set: Option<ItemSet>, append: Option<ItemAppend> },
+    Patch {
+        item_id: String,
+        set: Option<ItemSet>,
+        append: Option<ItemAppend>,
+    },
 }
 
 fn clip(text: String) -> String {
@@ -117,7 +121,11 @@ impl Transcript {
         self.silent = true;
         for message in messages {
             // Epoch ms, except Prime's custom messages (bash-done, agent messages), which carry ISO 8601.
-            self.clock = message["timestamp"].as_u64().or_else(|| message["timestamp"].as_str().and_then(crate::session::parse_iso_ms));
+            self.clock = message["timestamp"].as_u64().or_else(|| {
+                message["timestamp"]
+                    .as_str()
+                    .and_then(crate::session::parse_iso_ms)
+            });
             self.add_message(message);
         }
         self.clock = None;
@@ -138,7 +146,10 @@ impl Transcript {
     }
 
     pub fn first_user_text(&self) -> Option<&str> {
-        self.items.iter().find(|i| i.kind == ItemKind::User).map(|i| i.text.as_str())
+        self.items
+            .iter()
+            .find(|i| i.kind == ItemKind::User)
+            .map(|i| i.text.as_str())
     }
 
     pub fn handle_event(&mut self, event: &Value) {
@@ -161,17 +172,28 @@ impl Transcript {
                 _ => {}
             },
             "tool_execution_start" => {
-                let set = ItemSet { status: Some(ToolStatus::Running), args: Some(args_of(&event["args"])), ..Default::default() };
+                let set = ItemSet {
+                    status: Some(ToolStatus::Running),
+                    args: Some(args_of(&event["args"])),
+                    ..Default::default()
+                };
                 self.upsert_tool(event, set);
             }
             "tool_execution_update" => {
-                let set = ItemSet { output: Some(clip(result_text(&event["partialResult"]))), ..Default::default() };
+                let set = ItemSet {
+                    output: Some(clip(result_text(&event["partialResult"]))),
+                    ..Default::default()
+                };
                 self.upsert_tool(event, set);
             }
             "tool_execution_end" => {
                 let failed = event["isError"].as_bool().unwrap_or(false);
                 let set = ItemSet {
-                    status: Some(if failed { ToolStatus::Error } else { ToolStatus::Done }),
+                    status: Some(if failed {
+                        ToolStatus::Error
+                    } else {
+                        ToolStatus::Done
+                    }),
                     output: Some(clip(result_text(&event["result"]))),
                     duration_ms: event["durationMs"].as_f64().map(|d| d as u64),
                     ..Default::default()
@@ -181,14 +203,26 @@ impl Transcript {
             "compaction_end" => {
                 if event["aborted"] == true || event["errorMessage"].is_string() {
                     let reason = event["errorMessage"].as_str().unwrap_or("aborted");
-                    let text = if reason.starts_with("Compaction") { reason.to_string() } else { format!("Compaction failed: {reason}") };
+                    let text = if reason.starts_with("Compaction") {
+                        reason.to_string()
+                    } else {
+                        format!("Compaction failed: {reason}")
+                    };
                     self.add(Item::new(ItemKind::Error, text));
                 }
             }
             "auto_retry_start" => {
-                let attempt = event["attempt"].as_u64().map(|a| a.to_string()).unwrap_or("?".into());
+                let attempt = event["attempt"]
+                    .as_u64()
+                    .map(|a| a.to_string())
+                    .unwrap_or("?".into());
                 let reason = event["errorMessage"].as_str().unwrap_or("");
-                self.add(Item::new(ItemKind::Note, format!("Retrying (attempt {attempt}) {reason}").trim().to_string()));
+                self.add(Item::new(
+                    ItemKind::Note,
+                    format!("Retrying (attempt {attempt}) {reason}")
+                        .trim()
+                        .to_string(),
+                ));
             }
             _ => {}
         }
@@ -208,7 +242,9 @@ impl Transcript {
     }
 
     fn patch(&mut self, item_id: &str, set: Option<ItemSet>, append: Option<ItemAppend>) {
-        let Some(&pos) = self.index.get(item_id) else { return };
+        let Some(&pos) = self.index.get(item_id) else {
+            return;
+        };
         let item = &mut self.items[pos];
         if let Some(set) = &set {
             set.apply(item);
@@ -222,7 +258,11 @@ impl Transcript {
             }
         }
         if !self.silent {
-            self.changes.push(Change::Patch { item_id: item_id.to_string(), set, append });
+            self.changes.push(Change::Patch {
+                item_id: item_id.to_string(),
+                set,
+                append,
+            });
         }
     }
 
@@ -266,7 +306,9 @@ impl Transcript {
                 self.runaway.reset();
                 self.stopped = false;
             }
-            "text_delta" | "thinking_delta" | "toolcall_delta" => self.watch(delta["delta"].as_str().unwrap_or("")),
+            "text_delta" | "thinking_delta" | "toolcall_delta" => {
+                self.watch(delta["delta"].as_str().unwrap_or(""))
+            }
             _ => {}
         }
         match delta["type"].as_str().unwrap_or("") {
@@ -291,21 +333,45 @@ impl Transcript {
                 self.stream.insert(index, id);
             }
             kind @ ("text_delta" | "thinking_delta") => match item_id {
-                Some(id) => self.patch(&id, None, Some(ItemAppend { text: Some(text()), args: None })),
+                Some(id) => self.patch(
+                    &id,
+                    None,
+                    Some(ItemAppend {
+                        text: Some(text()),
+                        args: None,
+                    }),
+                ),
                 None => {
-                    let item_kind = if kind == "text_delta" { ItemKind::Text } else { ItemKind::Thinking };
+                    let item_kind = if kind == "text_delta" {
+                        ItemKind::Text
+                    } else {
+                        ItemKind::Thinking
+                    };
                     let id = self.add(Item::new(item_kind, text()));
                     self.stream.insert(index, id);
                 }
             },
             "toolcall_delta" => {
                 if let Some(id) = item_id {
-                    self.patch(&id, None, Some(ItemAppend { text: None, args: Some(text()) }));
+                    self.patch(
+                        &id,
+                        None,
+                        Some(ItemAppend {
+                            text: None,
+                            args: Some(text()),
+                        }),
+                    );
                 }
             }
             "text_end" | "thinking_end" => {
                 if let (Some(id), Some(content)) = (item_id, delta["content"].as_str()) {
-                    self.set(&id, ItemSet { text: Some(content.to_string()), ..Default::default() });
+                    self.set(
+                        &id,
+                        ItemSet {
+                            text: Some(content.to_string()),
+                            ..Default::default()
+                        },
+                    );
                 }
             }
             "toolcall_end" => {
@@ -340,7 +406,13 @@ impl Transcript {
                 "text" => {
                     let text = block["text"].as_str().unwrap_or("").to_string();
                     match item_id {
-                        Some(id) => self.set(&id, ItemSet { text: Some(text), ..Default::default() }),
+                        Some(id) => self.set(
+                            &id,
+                            ItemSet {
+                                text: Some(text),
+                                ..Default::default()
+                            },
+                        ),
                         None if !text.is_empty() => {
                             self.add(Item::new(ItemKind::Text, text));
                         }
@@ -353,7 +425,13 @@ impl Transcript {
                         text = "(redacted reasoning)".into();
                     }
                     match item_id {
-                        Some(id) => self.set(&id, ItemSet { text: Some(text), ..Default::default() }),
+                        Some(id) => self.set(
+                            &id,
+                            ItemSet {
+                                text: Some(text),
+                                ..Default::default()
+                            },
+                        ),
                         None if !text.is_empty() => {
                             self.add(Item::new(ItemKind::Thinking, text));
                         }
@@ -413,9 +491,16 @@ impl Transcript {
                     .and_then(|id| self.index.get(id))
                     .and_then(|&i| self.items[i].at);
                 let set = ItemSet {
-                    status: Some(if failed { ToolStatus::Error } else { ToolStatus::Done }),
+                    status: Some(if failed {
+                        ToolStatus::Error
+                    } else {
+                        ToolStatus::Done
+                    }),
                     output: Some(clip(text_of(&message["content"]))),
-                    duration_ms: self.clock.zip(started).map(|(end, start)| end.saturating_sub(start)),
+                    duration_ms: self
+                        .clock
+                        .zip(started)
+                        .map(|(end, start)| end.saturating_sub(start)),
                     ..Default::default()
                 };
                 self.upsert_tool(message, set);
@@ -425,16 +510,26 @@ impl Transcript {
                 item.tool_name = Some("user bash".into());
                 item.args = str_field(message, "command");
                 item.output = Some(clip(str_field(message, "output").unwrap_or_default()));
-                item.status = Some(if message["exitCode"] == 0 { ToolStatus::Done } else { ToolStatus::Error });
+                item.status = Some(if message["exitCode"] == 0 {
+                    ToolStatus::Done
+                } else {
+                    ToolStatus::Error
+                });
                 self.add(item);
             }
             "compactionSummary" => {
-                let mut item = Item::new(ItemKind::Compaction, str_field(message, "summary").unwrap_or_default());
+                let mut item = Item::new(
+                    ItemKind::Compaction,
+                    str_field(message, "summary").unwrap_or_default(),
+                );
                 item.output = message["tokensBefore"].as_u64().map(|t| t.to_string());
                 self.add(item);
             }
             "branchSummary" => {
-                self.add(Item::new(ItemKind::Note, str_field(message, "summary").unwrap_or("Branch summary".into())));
+                self.add(Item::new(
+                    ItemKind::Note,
+                    str_field(message, "summary").unwrap_or("Branch summary".into()),
+                ));
             }
             // The goal's continuation prompt is for the model; the app shows the goal itself.
             "custom" if message["customType"] == "goal_context" => {}
@@ -447,7 +542,10 @@ impl Transcript {
 }
 
 fn now_ms() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

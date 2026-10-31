@@ -12,7 +12,10 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use crate::history::{self, History};
 use crate::prime::{DaemonEvent, PrimeDaemon};
-use crate::protocol::{ContextUsage, Goal, Item, ItemKind, ModelInfo, Queue, ServerMessage, SessionKind, SessionStatus, SessionSummary};
+use crate::protocol::{
+    ContextUsage, Goal, Item, ItemKind, ModelInfo, Queue, ServerMessage, SessionKind,
+    SessionStatus, SessionSummary,
+};
 use crate::rpc::{AgentKind, ChildOutput, RpcChild, SpawnOptions};
 use crate::store::{SessionRecord, Store};
 use crate::transcript::{Change, Transcript};
@@ -92,7 +95,10 @@ pub struct SessionState {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Parses `2026-10-30T09:49:57.304Z` into epoch milliseconds.
@@ -115,30 +121,47 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
 }
 
 fn default_title(cwd: &str) -> String {
-    std::path::Path::new(cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| cwd.to_string())
+    std::path::Path::new(cwd)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| cwd.to_string())
 }
 
 fn first_line(text: &str, max: usize) -> String {
-    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().chars().take(max).collect()
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(max)
+        .collect()
 }
 
 fn queue_texts(v: &Value) -> Vec<String> {
-    let Some(entries) = v.as_array() else { return Vec::new() };
+    let Some(entries) = v.as_array() else {
+        return Vec::new();
+    };
     entries
         .iter()
         .filter_map(|e| match e {
             Value::String(s) => Some(s.clone()),
-            _ => ["text", "message", "content"].iter().find_map(|k| match &e[*k] {
-                Value::String(s) => Some(s.clone()),
-                Value::Array(blocks) => blocks.iter().find_map(|b| b["text"].as_str().map(str::to_string)),
-                _ => None,
-            }),
+            _ => ["text", "message", "content"]
+                .iter()
+                .find_map(|k| match &e[*k] {
+                    Value::String(s) => Some(s.clone()),
+                    Value::Array(blocks) => blocks
+                        .iter()
+                        .find_map(|b| b["text"].as_str().map(str::to_string)),
+                    _ => None,
+                }),
         })
         .collect()
 }
 
 fn to_json(msg: &ServerMessage) -> Arc<str> {
-    serde_json::to_string(msg).expect("server messages serialize").into()
+    serde_json::to_string(msg)
+        .expect("server messages serialize")
+        .into()
 }
 
 fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> SessionSummary {
@@ -206,7 +229,11 @@ impl SessionState {
         let start = earlier.len().saturating_sub(history::PAGE);
         let mut items = earlier[start..].to_vec();
         items.extend(self.transcript.items.iter().cloned());
-        ServerMessage::Snapshot { session_id: session_id.to_string(), items, earlier: start }
+        ServerMessage::Snapshot {
+            session_id: session_id.to_string(),
+            items,
+            earlier: start,
+        }
     }
 
     /// Up to a page of the history items just before `before`, and how many remain before those.
@@ -233,7 +260,13 @@ impl App {
                 summary.created_at = r.created_at;
                 let mut state = SessionState::new(summary, r.session_file);
                 state.named = r.title != default_title(&r.cwd);
-                Arc::new(Session { id: r.id, agent: r.agent, backend: Backend::Pi, cwd: r.cwd, state: Mutex::new(state) })
+                Arc::new(Session {
+                    id: r.id,
+                    agent: r.agent,
+                    backend: Backend::Pi,
+                    cwd: r.cwd,
+                    state: Mutex::new(state),
+                })
             })
             .collect();
         let limits = std::sync::Mutex::new(store.load_limits());
@@ -254,7 +287,13 @@ impl App {
     }
 
     pub async fn find(&self, id: &str) -> Result<Arc<Session>> {
-        self.sessions.read().await.iter().find(|s| s.id == id).cloned().ok_or_else(|| anyhow!("unknown session {id}"))
+        self.sessions
+            .read()
+            .await
+            .iter()
+            .find(|s| s.id == id)
+            .cloned()
+            .ok_or_else(|| anyhow!("unknown session {id}"))
     }
 
     pub async fn summaries(&self) -> Vec<SessionSummary> {
@@ -267,12 +306,20 @@ impl App {
     }
 
     pub fn broadcast_global(&self, msg: &ServerMessage) {
-        let _ = self.hub.send(Arc::new(Envelope { session_id: None, seq: 0, json: to_json(msg) }));
+        let _ = self.hub.send(Arc::new(Envelope {
+            session_id: None,
+            seq: 0,
+            json: to_json(msg),
+        }));
     }
 
     fn broadcast_session(&self, session_id: &str, st: &mut SessionState, msg: &ServerMessage) {
         st.seq += 1;
-        let envelope = Envelope { session_id: Some(session_id.to_string()), seq: st.seq, json: to_json(msg) };
+        let envelope = Envelope {
+            session_id: Some(session_id.to_string()),
+            seq: st.seq,
+            json: to_json(msg),
+        };
         let _ = self.hub.send(Arc::new(envelope));
     }
 
@@ -280,16 +327,28 @@ impl App {
         if st.removed {
             return;
         }
-        self.broadcast_global(&ServerMessage::Session { session: Box::new(st.summary.clone()) });
+        self.broadcast_global(&ServerMessage::Session {
+            session: Box::new(st.summary.clone()),
+        });
     }
 
     fn flush_changes(&self, session_id: &str, st: &mut SessionState) {
         for change in st.transcript.take_changes() {
             let msg = match change {
-                Change::Add(item) => ServerMessage::ItemAdd { session_id: session_id.to_string(), item },
-                Change::Patch { item_id, set, append } => {
-                    ServerMessage::ItemPatch { session_id: session_id.to_string(), item_id, set, append }
-                }
+                Change::Add(item) => ServerMessage::ItemAdd {
+                    session_id: session_id.to_string(),
+                    item,
+                },
+                Change::Patch {
+                    item_id,
+                    set,
+                    append,
+                } => ServerMessage::ItemPatch {
+                    session_id: session_id.to_string(),
+                    item_id,
+                    set,
+                    append,
+                },
             };
             self.broadcast_session(session_id, st, &msg);
         }
@@ -310,7 +369,9 @@ impl App {
         for session in removed {
             session.state.lock().await.removed = true;
         }
-        self.broadcast_global(&ServerMessage::SessionRemoved { session_id: id.to_string() });
+        self.broadcast_global(&ServerMessage::SessionRemoved {
+            session_id: id.to_string(),
+        });
     }
 
     /// Persist the registry of Pi sessions. Never call while holding a session lock.
@@ -342,12 +403,20 @@ impl App {
         match session.backend {
             Backend::Pi => self.child(session).await?.send(kind, fields).await,
             Backend::Prime => self.prime.session(&session.id, kind, fields).await,
-            Backend::PiSubagent => bail!("Pi subagents are read-only; steer the parent session instead"),
+            Backend::PiSubagent => {
+                bail!("Pi subagents are read-only; steer the parent session instead")
+            }
         }
     }
 
     async fn child(&self, session: &Session) -> Result<Arc<RpcChild>> {
-        session.state.lock().await.child.clone().ok_or_else(|| anyhow!("session is not running"))
+        session
+            .state
+            .lock()
+            .await
+            .child
+            .clone()
+            .ok_or_else(|| anyhow!("session is not running"))
     }
 
     // ---- creating and stopping ----
@@ -361,8 +430,14 @@ impl App {
     ) -> Result<SessionSummary> {
         let cwd = expand_dir(&cwd)?;
         if agent == AgentKind::Prime {
-            let row = self.prime.create(&cwd, model.as_deref(), thinking.as_deref()).await?;
-            let session = self.apply_prime_row(&row).await.ok_or_else(|| anyhow!("Prime returned no session id"))?;
+            let row = self
+                .prime
+                .create(&cwd, model.as_deref(), thinking.as_deref())
+                .await?;
+            let session = self
+                .apply_prime_row(&row)
+                .await
+                .ok_or_else(|| anyhow!("Prime returned no session id"))?;
             self.refresh(&session).await?;
             let summary = session.state.lock().await.summary.clone();
             return Ok(summary);
@@ -383,7 +458,10 @@ impl App {
         Ok(summary)
     }
 
-    pub async fn resume_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<SessionSummary> {
+    pub async fn resume_session(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+    ) -> Result<SessionSummary> {
         if session.backend != Backend::Pi {
             bail!("only Pi sessions can be resumed; Prime sessions stay live in its daemon");
         }
@@ -392,7 +470,9 @@ impl App {
             if st.child.is_some() {
                 bail!("session is already running");
             }
-            st.session_file.clone().ok_or_else(|| anyhow!("session has no saved transcript to resume"))?
+            st.session_file
+                .clone()
+                .ok_or_else(|| anyhow!("session has no saved transcript to resume"))?
         };
         self.start_pi(session, Some(resume), None, None).await?;
         let summary = session.state.lock().await.summary.clone();
@@ -407,8 +487,20 @@ impl App {
         thinking: Option<String>,
     ) -> Result<()> {
         // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
-        let env = vec![("AGENT_REMOTE_JOBS_DIR".to_string(), crate::jobs::pi_dir(&session.id).to_string_lossy().into_owned())];
-        let opts = SpawnOptions { agent: session.agent, cwd: session.cwd.clone(), model, thinking, resume, env };
+        let env = vec![(
+            "AGENT_REMOTE_JOBS_DIR".to_string(),
+            crate::jobs::pi_dir(&session.id)
+                .to_string_lossy()
+                .into_owned(),
+        )];
+        let opts = SpawnOptions {
+            agent: session.agent,
+            cwd: session.cwd.clone(),
+            model,
+            thinking,
+            resume,
+            env,
+        };
         let spawned = RpcChild::spawn(&opts);
         let (child, rx) = {
             let mut st = session.state.lock().await;
@@ -458,7 +550,10 @@ impl App {
                 Ok(())
             }
             Backend::Prime => {
-                let out = tokio::process::Command::new("prime-agent").args(["stop", &session.id]).output().await?;
+                let out = tokio::process::Command::new("prime-agent")
+                    .args(["stop", &session.id])
+                    .output()
+                    .await?;
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 // An empty draft (e.g. right after new_session) has no worker to stop.
                 if !out.status.success() && !stderr.contains("Unknown active session") {
@@ -539,8 +634,14 @@ impl App {
         let mut ticker = tokio::time::interval(Duration::from_secs(2));
         loop {
             ticker.tick().await;
-            let pi: Vec<Arc<Session>> =
-                self.sessions.read().await.iter().filter(|s| s.backend == Backend::Pi).cloned().collect();
+            let pi: Vec<Arc<Session>> = self
+                .sessions
+                .read()
+                .await
+                .iter()
+                .filter(|s| s.backend == Backend::Pi)
+                .cloned()
+                .collect();
             for session in pi {
                 let jobs = crate::jobs::pi_running(&session.id);
                 let mut st = session.state.lock().await;
@@ -549,8 +650,14 @@ impl App {
                     self.publish_summary(&st);
                 }
             }
-            let prime: Vec<Arc<Session>> =
-                self.sessions.read().await.iter().filter(|s| s.backend == Backend::Prime).cloned().collect();
+            let prime: Vec<Arc<Session>> = self
+                .sessions
+                .read()
+                .await
+                .iter()
+                .filter(|s| s.backend == Backend::Prime)
+                .cloned()
+                .collect();
             let mut workers = Vec::new();
             for s in prime {
                 let pid = s.state.lock().await.worker_pid;
@@ -561,7 +668,11 @@ impl App {
             if workers.is_empty() {
                 continue;
             }
-            let Ok(out) = tokio::process::Command::new("/bin/ps").args(["-axo", "pid=,ppid=,command="]).output().await else {
+            let Ok(out) = tokio::process::Command::new("/bin/ps")
+                .args(["-axo", "pid=,ppid=,command="])
+                .output()
+                .await
+            else {
                 continue;
             };
             let tree = crate::jobs::ProcessTree::parse(&String::from_utf8_lossy(&out.stdout));
@@ -589,14 +700,21 @@ impl App {
                         }
                     }
                     // Drop sessions that ended while disconnected, and re-attach the rest.
-                    let prime: Vec<Arc<Session>> =
-                        self.sessions.read().await.iter().filter(|s| s.backend == Backend::Prime).cloned().collect();
+                    let prime: Vec<Arc<Session>> = self
+                        .sessions
+                        .read()
+                        .await
+                        .iter()
+                        .filter(|s| s.backend == Backend::Prime)
+                        .cloned()
+                        .collect();
                     for s in prime {
                         if !live.contains(&s.id) {
                             self.remove(&s.id).await;
                             continue;
                         }
-                        let was_attached = std::mem::replace(&mut s.state.lock().await.attached, false);
+                        let was_attached =
+                            std::mem::replace(&mut s.state.lock().await.attached, false);
                         if was_attached {
                             let app = self.clone();
                             tokio::spawn(async move {
@@ -610,17 +728,28 @@ impl App {
                         self.apply_prime_row(row).await;
                     }
                 }
-                DaemonEvent::SessionEvent { active_session_id, event } => {
+                DaemonEvent::SessionEvent {
+                    active_session_id,
+                    event,
+                } => {
                     if let Ok(session) = self.find(&active_session_id).await {
                         self.handle_event(&session, &event).await;
                     }
                 }
                 DaemonEvent::SessionClosed(id) => self.remove(&id).await,
                 DaemonEvent::Inactive { session_file } => {
-                    let prime: Vec<Arc<Session>> =
-                        self.sessions.read().await.iter().filter(|s| s.backend == Backend::Prime).cloned().collect();
+                    let prime: Vec<Arc<Session>> = self
+                        .sessions
+                        .read()
+                        .await
+                        .iter()
+                        .filter(|s| s.backend == Backend::Prime)
+                        .cloned()
+                        .collect();
                     for s in prime {
-                        if s.state.lock().await.session_file.as_deref() == Some(session_file.as_str()) {
+                        if s.state.lock().await.session_file.as_deref()
+                            == Some(session_file.as_str())
+                        {
                             self.remove(&s.id).await;
                         }
                     }
@@ -630,8 +759,14 @@ impl App {
                         eprintln!("prime daemon: {error}");
                         last_error = Some(error.clone());
                     }
-                    let prime: Vec<Arc<Session>> =
-                        self.sessions.read().await.iter().filter(|s| s.backend == Backend::Prime).cloned().collect();
+                    let prime: Vec<Arc<Session>> = self
+                        .sessions
+                        .read()
+                        .await
+                        .iter()
+                        .filter(|s| s.backend == Backend::Prime)
+                        .cloned()
+                        .collect();
                     for s in prime {
                         let mut st = s.state.lock().await;
                         st.summary.status = SessionStatus::Error;
@@ -651,7 +786,10 @@ impl App {
             Ok(s) => s,
             Err(_) => {
                 let mut summary = new_summary(&id, AgentKind::Prime, SessionKind::Root, &cwd);
-                summary.created_at = row["created"].as_str().and_then(parse_iso_ms).unwrap_or_else(now_ms);
+                summary.created_at = row["created"]
+                    .as_str()
+                    .and_then(parse_iso_ms)
+                    .unwrap_or_else(now_ms);
                 let session = Arc::new(Session {
                     id: id.clone(),
                     agent: AgentKind::Prime,
@@ -671,12 +809,19 @@ impl App {
         };
         let mut st = session.state.lock().await;
         let s = &mut st.summary;
-        s.kind = if row["runtimeKind"] == "subagent" { SessionKind::Subagent } else { SessionKind::Root };
+        s.kind = if row["runtimeKind"] == "subagent" {
+            SessionKind::Subagent
+        } else {
+            SessionKind::Root
+        };
         s.parent_id = row["parentActiveSessionId"].as_str().map(str::to_string);
         s.name = row["sessionName"].as_str().map(str::to_string);
         s.depth = row["rlmDepth"].as_u64().unwrap_or(0) as u32;
         s.running_subagents = row["hasRunningSubagents"] == true;
-        s.last_active_at = row["lastActivityAt"].as_str().and_then(parse_iso_ms).or(s.last_active_at);
+        s.last_active_at = row["lastActivityAt"]
+            .as_str()
+            .and_then(parse_iso_ms)
+            .or(s.last_active_at);
         s.title = match (&s.name, row["firstMessage"].as_str()) {
             (Some(name), _) => name.clone(),
             (None, Some(first)) if !first_line(first, 60).is_empty() => first_line(first, 60),
@@ -684,22 +829,34 @@ impl App {
         };
         s.status = if row["isCompacting"] == true {
             SessionStatus::Compacting
-        } else if row["isStreaming"] == true || row["activity"].as_str().is_some_and(|a| a != "idle") {
+        } else if row["isStreaming"] == true
+            || row["activity"].as_str().is_some_and(|a| a != "idle")
+        {
             SessionStatus::Running
         } else {
             SessionStatus::Idle
         };
         s.error = None;
         if let Some(model) = ModelInfo::from_value(&row["model"]) {
-            let window = s.model.as_ref().filter(|m| m.id == model.id).and_then(|m| m.context_window);
-            s.model = Some(ModelInfo { context_window: model.context_window.or(window), ..model });
+            let window = s
+                .model
+                .as_ref()
+                .filter(|m| m.id == model.id)
+                .and_then(|m| m.context_window);
+            s.model = Some(ModelInfo {
+                context_window: model.context_window.or(window),
+                ..model
+            });
         }
         if let Some(level) = row["thinkingLevel"].as_str() {
             s.thinking_level = Some(level.to_string());
         }
         let reported = row["usage"]["cost"].as_f64();
         if let Some(actions) = row.get("sessionActions") {
-            s.queue = Queue { steering: queue_texts(&actions["steering"]), follow_up: queue_texts(&actions["followUps"]) };
+            s.queue = Queue {
+                steering: queue_texts(&actions["steering"]),
+                follow_up: queue_texts(&actions["followUps"]),
+            };
         }
         st.session_file = row["sessionFile"].as_str().map(str::to_string);
         if let Some(own) = reported {
@@ -708,7 +865,10 @@ impl App {
         if let Some(pid) = row["workerPid"].as_u64() {
             st.worker_pid = Some(pid as u32);
         }
-        let mark = (row["activity"].as_str().unwrap_or("").to_string(), row["messageCount"].as_u64().unwrap_or(0));
+        let mark = (
+            row["activity"].as_str().unwrap_or("").to_string(),
+            row["messageCount"].as_u64().unwrap_or(0),
+        );
         let refresh = st.roster_mark != mark || st.summary.thinking_levels.is_empty();
         st.roster_mark = mark;
         self.publish_summary(&st);
@@ -726,16 +886,28 @@ impl App {
         }
         let current = {
             let st = session.state.lock().await;
-            st.attached.then(|| st.transcript.items.first().filter(|i| i.kind == ItemKind::Compaction).map(|i| i.text.clone()))
+            st.attached.then(|| {
+                st.transcript
+                    .items
+                    .first()
+                    .filter(|i| i.kind == ItemKind::Compaction)
+                    .map(|i| i.text.clone())
+            })
         };
         if let Some(summary) = current {
             // Already live: only catch up on history a compaction wrote after the last load.
-            let messages: Vec<Value> = summary.into_iter().map(|s| json!({ "role": "compactionSummary", "summary": s })).collect();
+            let messages: Vec<Value> = summary
+                .into_iter()
+                .map(|s| json!({ "role": "compactionSummary", "summary": s }))
+                .collect();
             self.load_history(session, &messages).await;
             return Ok(());
         }
         let data = self.prime.attach(&session.id).await?;
-        let messages = data["snapshot"]["messages"].as_array().cloned().unwrap_or_default();
+        let messages = data["snapshot"]["messages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
         self.load_history(session, &messages).await;
         let mut st = session.state.lock().await;
         st.attached = true;
@@ -767,7 +939,10 @@ impl App {
                 resnapshot = event["aborted"] != true && !event["errorMessage"].is_string();
             }
             "queue_update" => {
-                st.summary.queue = Queue { steering: queue_texts(&event["steering"]), follow_up: queue_texts(&event["followUp"]) };
+                st.summary.queue = Queue {
+                    steering: queue_texts(&event["steering"]),
+                    follow_up: queue_texts(&event["followUp"]),
+                };
                 summary_changed = true;
             }
             "thinking_level_changed" => {
@@ -776,7 +951,10 @@ impl App {
             }
             "session_info_changed" => {
                 st.named = event["name"].is_string();
-                st.summary.title = event["name"].as_str().map(str::to_string).unwrap_or_else(|| default_title(&session.cwd));
+                st.summary.title = event["name"]
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| default_title(&session.cwd));
                 summary_changed = true;
             }
             "session_action_update" => refresh = true,
@@ -790,7 +968,11 @@ impl App {
                 let finished = kind == "tool_execution_end";
                 st.summary.running_subagents = !finished;
                 summary_changed = true;
-                let details = if finished { &event["result"]["details"] } else { &event["partialResult"]["details"] };
+                let details = if finished {
+                    &event["result"]["details"]
+                } else {
+                    &event["partialResult"]["details"]
+                };
                 if details.is_object() {
                     let call_id = event["toolCallId"].as_str().unwrap_or("call").to_string();
                     pi_subagents = Some((call_id, details.clone(), finished));
@@ -819,7 +1001,8 @@ impl App {
         }
         drop(st);
         if let Some((call_id, details, finished)) = pi_subagents {
-            self.update_pi_subagents(session, &call_id, &details, finished).await;
+            self.update_pi_subagents(session, &call_id, &details, finished)
+                .await;
         }
         if resnapshot {
             let (app, session) = (self.clone(), session.clone());
@@ -836,35 +1019,72 @@ impl App {
     /// A reply stuck in a generation loop streams until the model's output limit, a quarter of an hour or more, with
     /// nothing to show. Stop it, and tell the agent why so it tries again rather than repeating itself.
     async fn stop_looping_reply(self: &Arc<Self>, session: &Arc<Session>, reason: &str) {
-        eprintln!("session {}: stopping a looping reply ({reason})", session.id);
+        eprintln!(
+            "session {}: stopping a looping reply ({reason})",
+            session.id
+        );
         let note = format!(
             "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
              Carry on from where you were; if you were writing a tool call, write it again."
         );
         if session.backend == Backend::Prime {
             // Queued as a steer first, so stopping the reply delivers it straight away.
-            let _ = self.command(session, "prompt", json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true })).await;
-            let _ = self.command(session, "abort_and_send_queued", json!({})).await;
+            let _ = self
+                .command(
+                    session,
+                    "prompt",
+                    json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true }),
+                )
+                .await;
+            let _ = self
+                .command(session, "abort_and_send_queued", json!({}))
+                .await;
         } else {
             let _ = self.command(session, "abort", json!({})).await;
-            let _ = self.command(session, "prompt", json!({ "message": note })).await;
+            let _ = self
+                .command(session, "prompt", json!({ "message": note }))
+                .await;
         }
         let mut st = session.state.lock().await;
         self.schedule_refresh(session, &mut st);
     }
 
     /// Mirror the children of a Pi `subagent` tool call as read-only sessions.
-    async fn update_pi_subagents(self: &Arc<Self>, parent: &Arc<Session>, call_id: &str, details: &Value, finished: bool) {
-        let Some(results) = details["results"].as_array() else { return };
-        let parent_window = parent.state.lock().await.summary.context.as_ref().map(|c| c.window);
+    async fn update_pi_subagents(
+        self: &Arc<Self>,
+        parent: &Arc<Session>,
+        call_id: &str,
+        details: &Value,
+        finished: bool,
+    ) {
+        let Some(results) = details["results"].as_array() else {
+            return;
+        };
+        let parent_window = parent
+            .state
+            .lock()
+            .await
+            .summary
+            .context
+            .as_ref()
+            .map(|c| c.window);
         let mode = details["mode"].as_str().unwrap_or("single");
-        let short_call: String = call_id.chars().filter(|c| c.is_ascii_alphanumeric()).rev().take(8).collect::<String>().chars().rev().collect();
+        let short_call: String = call_id
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .rev()
+            .take(8)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
         for (index, result) in results.iter().enumerate() {
             let id = format!("{}.{}.{}", parent.id, short_call, index);
             let session = match self.find(&id).await {
                 Ok(s) => s,
                 Err(_) => {
-                    let mut summary = new_summary(&id, AgentKind::Pi, SessionKind::Subagent, &parent.cwd);
+                    let mut summary =
+                        new_summary(&id, AgentKind::Pi, SessionKind::Subagent, &parent.cwd);
                     summary.parent_id = Some(parent.id.clone());
                     summary.depth = 1;
                     summary.read_only = true;
@@ -882,34 +1102,66 @@ impl App {
             let exit = result["exitCode"].as_i64().unwrap_or(0);
             // A running child reports exitCode 0 (or -1 as a parallel placeholder) until its process exits; it is
             // finished once its last assistant message stopped for a reason other than calling tools.
-            let settled = exit != -1 && matches!(result["stopReason"].as_str(), Some(reason) if reason != "toolUse");
+            let settled = exit != -1
+                && matches!(result["stopReason"].as_str(), Some(reason) if reason != "toolUse");
             let done = finished || settled || (mode == "chain" && index + 1 < results.len());
-            let failed = exit > 0 || matches!(result["stopReason"].as_str(), Some("error" | "aborted"));
-            let messages: Vec<Value> =
-                result["messages"].as_array().map(|ms| ms.iter().filter(|m| m["role"] != "system").cloned().collect()).unwrap_or_default();
+            let failed =
+                exit > 0 || matches!(result["stopReason"].as_str(), Some("error" | "aborted"));
+            let messages: Vec<Value> = result["messages"]
+                .as_array()
+                .map(|ms| {
+                    ms.iter()
+                        .filter(|m| m["role"] != "system")
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
 
             let mut st = session.state.lock().await;
             let agent = result["agent"].as_str().unwrap_or("subagent");
-            if !done || !matches!(st.summary.status, SessionStatus::Done | SessionStatus::Error) {
+            if !done
+                || !matches!(
+                    st.summary.status,
+                    SessionStatus::Done | SessionStatus::Error
+                )
+            {
                 st.summary.last_active_at = Some(now_ms());
             }
             st.summary.name = Some(agent.to_string());
-            st.summary.title = format!("{agent}: {}", first_line(result["task"].as_str().unwrap_or(""), 60));
+            st.summary.title = format!(
+                "{agent}: {}",
+                first_line(result["task"].as_str().unwrap_or(""), 60)
+            );
             st.summary.status = match (done, failed) {
                 (false, _) => SessionStatus::Running,
                 (true, true) => SessionStatus::Error,
                 (true, false) => SessionStatus::Done,
             };
-            st.summary.error = if done && failed { result["stderr"].as_str().map(|e| first_line(e, 200)) } else { None };
-            if let Some((provider, model)) = result["model"].as_str().and_then(|m| m.split_once('/')) {
-                st.summary.model =
-                    Some(ModelInfo { provider: provider.into(), id: model.into(), name: model.into(), context_window: parent_window, reasoning: true });
+            st.summary.error = if done && failed {
+                result["stderr"].as_str().map(|e| first_line(e, 200))
+            } else {
+                None
+            };
+            if let Some((provider, model)) =
+                result["model"].as_str().and_then(|m| m.split_once('/'))
+            {
+                st.summary.model = Some(ModelInfo {
+                    provider: provider.into(),
+                    id: model.into(),
+                    name: model.into(),
+                    context_window: parent_window,
+                    reasoning: true,
+                });
             }
             let usage = &result["usage"];
             st.summary.cost = usage["cost"].as_f64().unwrap_or(0.0);
             st.summary.context = parent_window.map(|window| {
                 let tokens = usage["contextTokens"].as_u64();
-                ContextUsage { tokens, window, percent: tokens.map(|t| t as f64 * 100.0 / window as f64) }
+                ContextUsage {
+                    tokens,
+                    window,
+                    percent: tokens.map(|t| t as f64 * 100.0 / window as f64),
+                }
             });
             if messages.len() != st.sent_messages || done {
                 st.transcript.reset(&messages);
@@ -949,7 +1201,11 @@ impl App {
         let state = state?;
         let model = ModelInfo::from_value(&state["model"]);
         let model_key = model.as_ref().map(|m| format!("{}/{}", m.provider, m.id));
-        let levels = if model_key != levels_for { Some(self.thinking_levels(session, model.as_ref()).await) } else { None };
+        let levels = if model_key != levels_for {
+            Some(self.thinking_levels(session, model.as_ref()).await)
+        } else {
+            None
+        };
 
         let mut st = session.state.lock().await;
         if let Some(levels) = levels {
@@ -959,7 +1215,10 @@ impl App {
         if let Some(mut model) = model {
             // Prime's daemon state omits the context window; stats carry it.
             if model.context_window.is_none() {
-                model.context_window = stats.as_ref().ok().and_then(|s| s["contextUsage"]["contextWindow"].as_u64());
+                model.context_window = stats
+                    .as_ref()
+                    .ok()
+                    .and_then(|s| s["contextUsage"]["contextWindow"].as_u64());
             }
             st.summary.model = Some(model);
         }
@@ -969,7 +1228,10 @@ impl App {
         if let Some(auto) = state["autoCompactionEnabled"].as_bool() {
             st.summary.auto_compaction = auto;
         }
-        if !matches!(st.summary.status, SessionStatus::Stopped | SessionStatus::Error | SessionStatus::Done) {
+        if !matches!(
+            st.summary.status,
+            SessionStatus::Stopped | SessionStatus::Error | SessionStatus::Done
+        ) {
             st.summary.status = if state["isCompacting"] == true {
                 SessionStatus::Compacting
             } else if state["isStreaming"] == true {
@@ -983,12 +1245,18 @@ impl App {
             st.summary.title = name.to_string();
         }
         if let Some(actions) = state.get("sessionActions") {
-            st.summary.queue = Queue { steering: queue_texts(&actions["steering"]), follow_up: queue_texts(&actions["followUps"]) };
+            st.summary.queue = Queue {
+                steering: queue_texts(&actions["steering"]),
+                follow_up: queue_texts(&actions["followUps"]),
+            };
         }
         if let Ok(stats) = stats {
             if let Some(own) = stats["cost"].as_f64() {
                 st.summary.cost = if session.backend == Backend::Prime {
-                    let file = stats["sessionFile"].as_str().map(str::to_string).or_else(|| st.session_file.clone());
+                    let file = stats["sessionFile"]
+                        .as_str()
+                        .map(str::to_string)
+                        .or_else(|| st.session_file.clone());
                     self.prime_cost(file.as_deref(), own, st.summary.cost)
                 } else {
                     own
@@ -1004,7 +1272,11 @@ impl App {
         // A chosen window, else the model's standard one: report against it, and compact once the session settles
         // near it.
         let chosen = self.limits.lock().unwrap().get(&session.id).copied();
-        let model_key = st.summary.model.as_ref().map(|m| format!("{}/{}", m.provider, m.id));
+        let model_key = st
+            .summary
+            .model
+            .as_ref()
+            .map(|m| format!("{}/{}", m.provider, m.id));
         let standard = model_key.and_then(|key| self.store.default_windows().get(&key).copied());
         st.summary.context_limit = chosen;
         st.summary.standard_window = standard;
@@ -1013,8 +1285,13 @@ impl App {
         let mut compact = false;
         if let (Some(limit), Some(context)) = (limit, st.summary.context.as_mut()) {
             context.window = limit.min(context.window);
-            context.percent = context.tokens.map(|t| t as f64 * 100.0 / context.window as f64);
-            compact = settled && context.tokens.is_some_and(|t| t > context.window - compaction_reserve(context.window));
+            context.percent = context
+                .tokens
+                .map(|t| t as f64 * 100.0 / context.window as f64);
+            compact = settled
+                && context
+                    .tokens
+                    .is_some_and(|t| t > context.window - compaction_reserve(context.window));
         }
         let file = state["sessionFile"].as_str().map(str::to_string);
         let file_changed = file.is_some() && file != st.session_file;
@@ -1045,7 +1322,10 @@ impl App {
     fn compact_for_limit(self: &Arc<Self>, session: &Arc<Session>) {
         {
             let mut asked = self.compacting_for_limit.lock().unwrap();
-            if asked.get(&session.id).is_some_and(|at| at.elapsed() < Duration::from_secs(120)) {
+            if asked
+                .get(&session.id)
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(120))
+            {
                 return;
             }
             asked.insert(session.id.clone(), Instant::now());
@@ -1053,7 +1333,10 @@ impl App {
         let (app, session) = (self.clone(), session.clone());
         tokio::spawn(async move {
             if let Err(e) = app.compact(&session, None).await {
-                eprintln!("compacting {} for its context window failed: {e}", session.id);
+                eprintln!(
+                    "compacting {} for its context window failed: {e}",
+                    session.id
+                );
             }
             let _ = app.refresh(&session).await;
         });
@@ -1073,7 +1356,11 @@ impl App {
         }
     }
 
-    pub async fn set_context_limit(self: &Arc<Self>, session: &Arc<Session>, limit: Option<u64>) -> Result<()> {
+    pub async fn set_context_limit(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        limit: Option<u64>,
+    ) -> Result<()> {
         // Pi keeps the last 20k tokens verbatim when it compacts, so a smaller window could never get under its limit.
         if limit.is_some_and(|l| l < 32_000) {
             bail!("a context window needs at least 32k tokens");
@@ -1086,7 +1373,10 @@ impl App {
             };
             limits.clone()
         };
-        self.compacting_for_limit.lock().unwrap().remove(&session.id);
+        self.compacting_for_limit
+            .lock()
+            .unwrap()
+            .remove(&session.id);
         self.store.save_limits(&limits)?;
         let mut st = session.state.lock().await;
         st.summary.context_limit = limit;
@@ -1103,14 +1393,19 @@ impl App {
 
     /// Names the session in the agent itself, so its own listings agree. A stopped Pi session is named here and
     /// takes the name when it resumes.
-    pub async fn rename_session(self: &Arc<Self>, session: &Arc<Session>, name: &str) -> Result<()> {
+    pub async fn rename_session(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        name: &str,
+    ) -> Result<()> {
         let name = name.trim();
         if name.is_empty() {
             bail!("a session name can't be empty");
         }
         let stopped = session.backend == Backend::Pi && session.state.lock().await.child.is_none();
         if !stopped {
-            self.command(session, "set_session_name", json!({ "name": name })).await?;
+            self.command(session, "set_session_name", json!({ "name": name }))
+                .await?;
             self.refresh(session).await?;
         }
         let mut st = session.state.lock().await;
@@ -1125,25 +1420,41 @@ impl App {
     }
 
     async fn thinking_levels(&self, session: &Session, model: Option<&ModelInfo>) -> Vec<String> {
-        let Some(model) = model else { return Vec::new() };
+        let Some(model) = model else {
+            return Vec::new();
+        };
         if !model.reasoning {
             return vec!["off".to_string()];
         }
         if session.backend == Backend::Pi {
-            if let Ok(data) = self.command(session, "get_available_thinking_levels", json!({})).await {
+            if let Ok(data) = self
+                .command(session, "get_available_thinking_levels", json!({}))
+                .await
+            {
                 if let Ok(levels) = serde_json::from_value::<Vec<String>>(data["levels"].clone()) {
                     return levels;
                 }
             }
         }
         // Prime has no levels command; its model catalog marks unsupported levels as null.
-        let models = self.command(session, "get_available_models", json!({})).await.unwrap_or(Value::Null);
+        let models = self
+            .command(session, "get_available_models", json!({}))
+            .await
+            .unwrap_or(Value::Null);
         let map = models["models"]
             .as_array()
-            .and_then(|ms| ms.iter().find(|x| x["id"] == model.id.as_str() && x["provider"] == model.provider.as_str()))
+            .and_then(|ms| {
+                ms.iter().find(|x| {
+                    x["id"] == model.id.as_str() && x["provider"] == model.provider.as_str()
+                })
+            })
             .map(|x| x["thinkingLevelMap"].clone())
             .unwrap_or(Value::Null);
-        ALL_LEVELS.iter().filter(|l| !map.get(**l).is_some_and(Value::is_null)).map(|s| s.to_string()).collect()
+        ALL_LEVELS
+            .iter()
+            .filter(|l| !map.get(**l).is_some_and(Value::is_null))
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Reload the whole transcript from the agent and send it to attached clients.
@@ -1161,9 +1472,13 @@ impl App {
         }
         // Rebuild Pi subagents from completed subagent tool results (e.g. after a resume).
         if session.backend == Backend::Pi {
-            for message in messages.iter().filter(|m| m["role"] == "toolResult" && m["toolName"] == "subagent") {
+            for message in messages
+                .iter()
+                .filter(|m| m["role"] == "toolResult" && m["toolName"] == "subagent")
+            {
                 let call_id = message["toolCallId"].as_str().unwrap_or("call").to_string();
-                self.update_pi_subagents(session, &call_id, &message["details"], true).await;
+                self.update_pi_subagents(session, &call_id, &message["details"], true)
+                    .await;
             }
         }
         Ok(())
@@ -1175,7 +1490,10 @@ impl App {
         if session.backend != Backend::Prime {
             return;
         }
-        let summary = messages.first().filter(|m| m["role"] == "compactionSummary").and_then(|m| m["summary"].as_str());
+        let summary = messages
+            .first()
+            .filter(|m| m["role"] == "compactionSummary")
+            .and_then(|m| m["summary"].as_str());
         let (file, previous) = {
             let mut st = session.state.lock().await;
             if summary.is_none() {
@@ -1184,7 +1502,9 @@ impl App {
             }
             (st.session_file.clone(), st.history.clone())
         };
-        let (Some(file), Some(summary)) = (file, summary.map(str::to_string)) else { return };
+        let (Some(file), Some(summary)) = (file, summary.map(str::to_string)) else {
+            return;
+        };
         let path = file.clone();
         match tokio::task::spawn_blocking(move || history::load(&path, &summary, previous)).await {
             Ok(Ok(history)) => session.state.lock().await.history = history,
@@ -1196,18 +1516,31 @@ impl App {
     // ---- client operations ----
 
     /// Prompt when idle; steer while the agent is working.
-    pub async fn send_text(self: &Arc<Self>, session: &Arc<Session>, text: String) -> Result<Value> {
+    pub async fn send_text(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        text: String,
+    ) -> Result<Value> {
         let result = if session.backend == Backend::Prime {
-            let fields = json!({ "message": text, "streamingBehavior": "steer", "queueIfBusy": true });
+            let fields =
+                json!({ "message": text, "streamingBehavior": "steer", "queueIfBusy": true });
             self.command(session, "prompt", fields).await
         } else {
-            let busy = matches!(session.state.lock().await.summary.status, SessionStatus::Running | SessionStatus::Compacting);
+            let busy = matches!(
+                session.state.lock().await.summary.status,
+                SessionStatus::Running | SessionStatus::Compacting
+            );
             if busy {
-                self.command(session, "steer", json!({ "message": text })).await
+                self.command(session, "steer", json!({ "message": text }))
+                    .await
             } else {
-                match self.command(session, "prompt", json!({ "message": text })).await {
+                match self
+                    .command(session, "prompt", json!({ "message": text }))
+                    .await
+                {
                     Err(e) if e.to_string().to_lowercase().contains("stream") => {
-                        self.command(session, "steer", json!({ "message": text })).await
+                        self.command(session, "steer", json!({ "message": text }))
+                            .await
                     }
                     other => other,
                 }
@@ -1221,14 +1554,24 @@ impl App {
     /// Prime's `compact` command aborts the session first, which drops the background-command and subagent notices
     /// waiting to wake it and holds the rest until the next prompt: an idle session waiting on its jobs never wakes.
     /// Its `/compact` slash command compacts without aborting, after the current turn if one is running.
-    pub async fn compact(self: &Arc<Self>, session: &Arc<Session>, instructions: Option<String>) -> Result<Value> {
+    pub async fn compact(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        instructions: Option<String>,
+    ) -> Result<Value> {
         let instructions = instructions.filter(|text| !text.trim().is_empty());
         if session.backend == Backend::Prime {
             let message = match instructions {
                 Some(text) => format!("/compact {text}"),
                 None => "/compact".to_string(),
             };
-            return self.command(session, "prompt", json!({ "message": message, "streamingBehavior": "followUp" })).await;
+            return self
+                .command(
+                    session,
+                    "prompt",
+                    json!({ "message": message, "streamingBehavior": "followUp" }),
+                )
+                .await;
         }
         let fields = match instructions {
             Some(text) => json!({ "customInstructions": text }),
@@ -1242,7 +1585,12 @@ impl App {
         if session.backend != Backend::Prime {
             bail!("Only Prime sessions have goals");
         }
-        self.command(session, "prompt", json!({ "message": "/goal clear", "streamingBehavior": "steer" })).await
+        self.command(
+            session,
+            "prompt",
+            json!({ "message": "/goal clear", "streamingBehavior": "steer" }),
+        )
+        .await
     }
 
     /// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
@@ -1252,9 +1600,22 @@ impl App {
         if session.backend != Backend::Prime {
             bail!("Only Prime sessions have a Python kernel");
         }
-        let file = session.state.lock().await.session_file.clone().context("Prime hasn't reported this session's file yet")?;
-        let rlm_session = std::path::Path::new(&file).file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
-        let output = tokio::process::Command::new("ps").args(["-axww", "-E", "-o", "pid=,ppid=,command="]).output().await?;
+        let file = session
+            .state
+            .lock()
+            .await
+            .session_file
+            .clone()
+            .context("Prime hasn't reported this session's file yet")?;
+        let rlm_session = std::path::Path::new(&file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let output = tokio::process::Command::new("ps")
+            .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
+            .output()
+            .await?;
         let table = String::from_utf8_lossy(&output.stdout);
         let processes: Vec<(u32, u32, &str)> = table
             .lines()
@@ -1268,7 +1629,9 @@ impl App {
         let marker = format!("RLM_SESSION_ID={rlm_session}");
         let kernels: Vec<u32> = processes
             .iter()
-            .filter(|(_, _, line)| line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker))
+            .filter(|(_, _, line)| {
+                line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker)
+            })
             .map(|(pid, _, _)| *pid)
             .collect();
         if kernels.is_empty() {
@@ -1279,13 +1642,20 @@ impl App {
         let mut i = 0;
         while i < doomed.len() {
             let parent = doomed[i];
-            let children: Vec<u32> =
-                processes.iter().filter(|(pid, ppid, _)| *ppid == parent && !doomed.contains(pid)).map(|(pid, _, _)| *pid).collect();
+            let children: Vec<u32> = processes
+                .iter()
+                .filter(|(pid, ppid, _)| *ppid == parent && !doomed.contains(pid))
+                .map(|(pid, _, _)| *pid)
+                .collect();
             doomed.extend(children);
             i += 1;
         }
         let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
-        tokio::process::Command::new("kill").arg("-9").args(&pids).status().await?;
+        tokio::process::Command::new("kill")
+            .arg("-9")
+            .args(&pids)
+            .status()
+            .await?;
         Ok(json!({ "killed": doomed.len() }))
     }
 
@@ -1293,7 +1663,11 @@ impl App {
     /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
     /// is queued.
     pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let command = if session.backend == Backend::Prime { "abort_and_send_queued" } else { "abort" };
+        let command = if session.backend == Backend::Prime {
+            "abort_and_send_queued"
+        } else {
+            "abort"
+        };
         self.command(session, command, json!({})).await
     }
 

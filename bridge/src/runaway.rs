@@ -45,7 +45,9 @@ impl Runaway {
         if self.since_check >= CHECK_EVERY && self.tail.len() >= WINDOW {
             self.since_check = 0;
             let window = &self.tail[self.tail.len() - WINDOW..];
-            if (1..=MAX_PERIOD).any(|period| window[period..].iter().zip(window).all(|(a, b)| a == b)) {
+            if (1..=MAX_PERIOD)
+                .any(|period| window[period..].iter().zip(window).all(|(a, b)| a == b))
+            {
                 return Some("it was repeating the same few characters over and over");
             }
         }
@@ -78,7 +80,8 @@ mod tests {
     #[test]
     fn leaves_real_code_alone() {
         // Long, indented, repetitive-looking code is still not one unit repeated exactly.
-        let chunks = (0..3_000).map(|i| format!("    values[{i}] = compute({i}, \"key-{}\")\n", i % 7));
+        let chunks =
+            (0..3_000).map(|i| format!("    values[{i}] = compute({i}, \"key-{}\")\n", i % 7));
         assert!(feed_all(chunks).is_none());
     }
 

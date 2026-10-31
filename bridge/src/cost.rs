@@ -39,10 +39,16 @@ impl Costs {
             let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
             ledger.partial = bytes.split_off(complete);
             for line in bytes.split(|&b| b == b'\n').filter(|l| !l.is_empty()) {
-                let Ok(entry) = serde_json::from_slice::<Value>(line) else { continue };
+                let Ok(entry) = serde_json::from_slice::<Value>(line) else {
+                    continue;
+                };
                 match entry["type"].as_str().unwrap_or("") {
-                    "message" if entry["message"]["role"] == "assistant" => ledger.own += total(&entry["message"]["usage"]),
-                    "compaction" | "branch_summary" | "usage" => ledger.own += total(&entry["usage"]),
+                    "message" if entry["message"]["role"] == "assistant" => {
+                        ledger.own += total(&entry["message"]["usage"])
+                    }
+                    "compaction" | "branch_summary" | "usage" => {
+                        ledger.own += total(&entry["usage"])
+                    }
                     "child_usage_attributed" => ledger.children += total(&entry["childUsage"]),
                     _ => {}
                 }
@@ -54,5 +60,8 @@ impl Costs {
 
 /// `usage.cost.total`, or a bare `usage.cost` number.
 fn total(usage: &Value) -> f64 {
-    usage["cost"]["total"].as_f64().or_else(|| usage["cost"].as_f64()).unwrap_or(0.0)
+    usage["cost"]["total"]
+        .as_f64()
+        .or_else(|| usage["cost"].as_f64())
+        .unwrap_or(0.0)
 }

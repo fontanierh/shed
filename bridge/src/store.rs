@@ -40,8 +40,15 @@ impl Store {
                 return Ok(token.to_string());
             }
         }
-        let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
-        write_private(&path, &serde_json::to_vec_pretty(&json!({ "token": token }))?)?;
+        let token = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        write_private(
+            &path,
+            &serde_json::to_vec_pretty(&json!({ "token": token }))?,
+        )?;
         Ok(token)
     }
 
@@ -64,7 +71,10 @@ impl Store {
     }
 
     pub fn save_sessions(&self, records: &[SessionRecord]) -> Result<()> {
-        write_private(&self.dir.join("sessions.json"), &serde_json::to_vec_pretty(records)?)
+        write_private(
+            &self.dir.join("sessions.json"),
+            &serde_json::to_vec_pretty(records)?,
+        )
     }
 
     /// The window each model keeps to by default, by "provider/id" (`defaultContextWindows` in config.json, which
@@ -86,7 +96,10 @@ impl Store {
     }
 
     pub fn save_limits(&self, limits: &HashMap<String, u64>) -> Result<()> {
-        write_private(&self.dir.join("limits.json"), &serde_json::to_vec_pretty(limits)?)
+        write_private(
+            &self.dir.join("limits.json"),
+            &serde_json::to_vec_pretty(limits)?,
+        )
     }
 }
 

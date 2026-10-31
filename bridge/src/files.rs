@@ -18,11 +18,17 @@ pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
             continue;
         }
         // Follows symlinks, so linked project folders are listed too.
-        let Ok(meta) = std::fs::metadata(entry.path()) else { continue };
+        let Ok(meta) = std::fs::metadata(entry.path()) else {
+            continue;
+        };
         if !meta.is_dir() {
             continue;
         }
-        let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
         entries.push(json!({
             "name": name,
             "path": entry.path().to_string_lossy(),
@@ -32,7 +38,9 @@ pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
         }));
     }
     entries.sort_by_key(|e| e["name"].as_str().unwrap_or("").to_lowercase());
-    let parent = std::path::Path::new(&dir).parent().map(|p| p.to_string_lossy().into_owned());
+    let parent = std::path::Path::new(&dir)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned());
     Ok(json!({
         "path": dir,
         "parent": parent,

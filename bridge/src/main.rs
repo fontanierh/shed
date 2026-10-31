@@ -34,7 +34,12 @@ async fn main() -> Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--host" => host = args.next().unwrap_or_else(|| usage()),
-            "--port" => port = args.next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage()),
+            "--port" => {
+                port = args
+                    .next()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or_else(|| usage())
+            }
             "-h" | "--help" => usage(),
             other => bail!("unknown argument: {other}"),
         }

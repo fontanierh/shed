@@ -44,13 +44,25 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn encode(msg: &ServerMessage) -> Arc<str> {
-    serde_json::to_string(msg).expect("server messages serialize").into()
+    serde_json::to_string(msg)
+        .expect("server messages serialize")
+        .into()
 }
 
 fn reply(id: Option<String>, result: Result<Value>) -> Arc<str> {
     encode(&match result {
-        Ok(data) => ServerMessage::Reply { id, ok: true, data: Some(data), error: None },
-        Err(e) => ServerMessage::Reply { id, ok: false, data: None, error: Some(e.to_string()) },
+        Ok(data) => ServerMessage::Reply {
+            id,
+            ok: true,
+            data: Some(data),
+            error: None,
+        },
+        Err(e) => ServerMessage::Reply {
+            id,
+            ok: false,
+            data: None,
+            error: Some(e.to_string()),
+        },
     })
 }
 
@@ -59,7 +71,11 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     let (out, mut out_rx) = mpsc::unbounded_channel::<Arc<str>>();
     let writer = tokio::spawn(async move {
         while let Some(text) = out_rx.recv().await {
-            if sink.send(Message::Text(text.as_ref().into())).await.is_err() {
+            if sink
+                .send(Message::Text(text.as_ref().into()))
+                .await
+                .is_err()
+            {
                 break;
             }
         }
@@ -68,7 +84,9 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     let mut hub = app.hub.subscribe();
     // Session id -> sequence number of the snapshot this client received.
     let mut attached: HashMap<String, u64> = HashMap::new();
-    let _ = out.send(encode(&ServerMessage::Sessions { sessions: app.summaries().await }));
+    let _ = out.send(encode(&ServerMessage::Sessions {
+        sessions: app.summaries().await,
+    }));
 
     loop {
         tokio::select! {
@@ -103,18 +121,31 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     writer.abort();
 }
 
-async fn send_snapshot(out: &mpsc::UnboundedSender<Arc<str>>, attached: &mut HashMap<String, u64>, session: &crate::session::Session) {
+async fn send_snapshot(
+    out: &mpsc::UnboundedSender<Arc<str>>,
+    attached: &mut HashMap<String, u64>,
+    session: &crate::session::Session,
+) {
     let (seq, summary, snapshot) = attach_snapshot(session).await;
-    let _ = out.send(encode(&ServerMessage::Session { session: Box::new(summary) }));
+    let _ = out.send(encode(&ServerMessage::Session {
+        session: Box::new(summary),
+    }));
     let _ = out.send(encode(&snapshot));
     attached.insert(session.id.clone(), seq);
 }
 
-async fn handle_text(app: &Arc<App>, out: &mpsc::UnboundedSender<Arc<str>>, attached: &mut HashMap<String, u64>, text: &str) {
+async fn handle_text(
+    app: &Arc<App>,
+    out: &mpsc::UnboundedSender<Arc<str>>,
+    attached: &mut HashMap<String, u64>,
+    text: &str,
+) {
     let message: ClientMessage = match serde_json::from_str(text) {
         Ok(m) => m,
         Err(e) => {
-            let id = serde_json::from_str::<Value>(text).ok().and_then(|v| v["id"].as_str().map(str::to_string));
+            let id = serde_json::from_str::<Value>(text)
+                .ok()
+                .and_then(|v| v["id"].as_str().map(str::to_string));
             let _ = out.send(reply(id, Err(anyhow::anyhow!("invalid message: {e}"))));
             return;
         }
@@ -156,16 +187,20 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
         ClientOp::Attach { .. } | ClientOp::Detach { .. } => unreachable!("handled inline"),
         ClientOp::ListSessions => serde_json::to_value(app.summaries().await)?,
         ClientOp::Ping => Value::Null,
-        ClientOp::CreateSession { agent, cwd, model, thinking } => {
-            serde_json::to_value(app.create_session(agent, cwd, model, thinking).await?)?
-        }
+        ClientOp::CreateSession {
+            agent,
+            cwd,
+            model,
+            thinking,
+        } => serde_json::to_value(app.create_session(agent, cwd, model, thinking).await?)?,
         ClientOp::Send { session_id, text } => {
             let session = app.find(&session_id).await?;
             app.send_text(&session, text).await?
         }
         ClientOp::FollowUp { session_id, text } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "follow_up", json!({ "message": text })).await?
+            app.command(&session, "follow_up", json!({ "message": text }))
+                .await?
         }
         ClientOp::Abort { session_id } => {
             let session = app.find(&session_id).await?;
@@ -175,7 +210,10 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let session = app.find(&session_id).await?;
             app.stop_tool(&session).await?
         }
-        ClientOp::Compact { session_id, instructions } => {
+        ClientOp::Compact {
+            session_id,
+            instructions,
+        } => {
             let session = app.find(&session_id).await?;
             let result = app.compact(&session, instructions).await?;
             app.refresh(&session).await?;
@@ -187,26 +225,48 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
         }
         ClientOp::ListModels { session_id } => {
             let session = app.find(&session_id).await?;
-            let data = app.command(&session, "get_available_models", json!({})).await?;
-            let models: Vec<ModelInfo> =
-                data["models"].as_array().map(|ms| ms.iter().filter_map(ModelInfo::from_value).collect()).unwrap_or_default();
+            let data = app
+                .command(&session, "get_available_models", json!({}))
+                .await?;
+            let models: Vec<ModelInfo> = data["models"]
+                .as_array()
+                .map(|ms| ms.iter().filter_map(ModelInfo::from_value).collect())
+                .unwrap_or_default();
             serde_json::to_value(models)?
         }
-        ClientOp::SetModel { session_id, provider, model_id } => {
+        ClientOp::SetModel {
+            session_id,
+            provider,
+            model_id,
+        } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "set_model", json!({ "provider": provider, "modelId": model_id })).await?;
+            app.command(
+                &session,
+                "set_model",
+                json!({ "provider": provider, "modelId": model_id }),
+            )
+            .await?;
             app.refresh(&session).await?;
             Value::Null
         }
         ClientOp::SetThinking { session_id, level } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "set_thinking_level", json!({ "level": level })).await?;
+            app.command(&session, "set_thinking_level", json!({ "level": level }))
+                .await?;
             app.refresh(&session).await?;
             Value::Null
         }
-        ClientOp::SetAutoCompaction { session_id, enabled } => {
+        ClientOp::SetAutoCompaction {
+            session_id,
+            enabled,
+        } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "set_auto_compaction", json!({ "enabled": enabled })).await?;
+            app.command(
+                &session,
+                "set_auto_compaction",
+                json!({ "enabled": enabled }),
+            )
+            .await?;
             app.refresh(&session).await?;
             Value::Null
         }
@@ -246,7 +306,11 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let session = app.find(&session_id).await?;
             serde_json::to_value(app.list_jobs(&session).await?)?
         }
-        ClientOp::JobOutput { session_id, job_id, lines } => {
+        ClientOp::JobOutput {
+            session_id,
+            job_id,
+            lines,
+        } => {
             let session = app.find(&session_id).await?;
             json!({ "tail": app.job_output(&session, &job_id, lines).await? })
         }

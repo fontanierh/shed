@@ -275,7 +275,6 @@ pub struct SessionSummary {
     pub goal: Option<Goal>,
 }
 
-
 /// A background command, as the agent's own TUI lists it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

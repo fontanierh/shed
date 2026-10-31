@@ -16,7 +16,9 @@ use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
 pub fn pi_dir(session_id: &str) -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".agent-remote/jobs").join(session_id)
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".agent-remote/jobs")
+        .join(session_id)
 }
 
 /// Prime prefixes persistent shell ids so one list can hold both kinds.
@@ -34,17 +36,28 @@ impl ProcessTree {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
         for line in ps.lines() {
             let line = line.trim_start();
-            let Some((pid, rest)) = line.split_once(char::is_whitespace) else { continue };
+            let Some((pid, rest)) = line.split_once(char::is_whitespace) else {
+                continue;
+            };
             let rest = rest.trim_start();
             let (ppid, command) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            let (Ok(pid), Ok(ppid)) = (pid.parse(), ppid.parse()) else { continue };
-            children.entry(ppid).or_default().push((pid, command.trim().to_string()));
+            let (Ok(pid), Ok(ppid)) = (pid.parse(), ppid.parse()) else {
+                continue;
+            };
+            children
+                .entry(ppid)
+                .or_default()
+                .push((pid, command.trim().to_string()));
         }
         Self { children }
     }
 
     pub async fn snapshot() -> Option<Self> {
-        let out = tokio::process::Command::new("/bin/ps").args(["-axo", "pid=,ppid=,command="]).output().await.ok()?;
+        let out = tokio::process::Command::new("/bin/ps")
+            .args(["-axo", "pid=,ppid=,command="])
+            .output()
+            .await
+            .ok()?;
         Some(Self::parse(&String::from_utf8_lossy(&out.stdout)))
     }
 
@@ -52,7 +65,12 @@ impl ProcessTree {
     /// wrapper with nothing under it is left over from a command that already ended, and is not counted.
     pub fn kernel_jobs(&self, worker: u32) -> Vec<(u32, String)> {
         let none = Vec::new();
-        let kernels = self.children.get(&worker).unwrap_or(&none).iter().filter(|(_, cmd)| cmd.contains("rlm.repl"));
+        let kernels = self
+            .children
+            .get(&worker)
+            .unwrap_or(&none)
+            .iter()
+            .filter(|(_, cmd)| cmd.contains("rlm.repl"));
         kernels
             .flat_map(|(kernel, _)| self.children.get(kernel).unwrap_or(&none))
             .filter(|(pid, _)| self.children.get(pid).is_some_and(|c| !c.is_empty()))
@@ -63,12 +81,18 @@ impl ProcessTree {
 
 /// The command inside Prime's wrapper: `exec 9>&0 …`, `read -r _prime_agent_gate …`, `{`, the command, `}`.
 fn wrapped_command(wrapper: &str) -> String {
-    let script = wrapper.strip_prefix("/bin/bash -c ").unwrap_or(wrapper).replace("\\012", "\n");
+    let script = wrapper
+        .strip_prefix("/bin/bash -c ")
+        .unwrap_or(wrapper)
+        .replace("\\012", "\n");
     let lines: Vec<&str> = script.lines().collect();
     match lines.iter().position(|l| l.trim() == "{") {
         Some(open) => {
             let body = &lines[open + 1..];
-            let end = body.iter().rposition(|l| l.trim().starts_with('}')).unwrap_or(body.len());
+            let end = body
+                .iter()
+                .rposition(|l| l.trim().starts_with('}'))
+                .unwrap_or(body.len());
             body[..end].join("\n").trim().to_string()
         }
         None => script.trim().to_string(),
@@ -81,16 +105,24 @@ impl App {
         let mut jobs = match session.backend {
             Backend::Prime => {
                 let bash = self.command(session, "list_kernel_bash", json!({})).await?;
-                let mut jobs: Vec<BackgroundJob> = activities(&bash).filter_map(|a| prime_job(a, "")).collect();
+                let mut jobs: Vec<BackgroundJob> =
+                    activities(&bash).filter_map(|a| prime_job(a, "")).collect();
                 // Older daemons have no persistent shells; they still list kernel bash.
-                if let Ok(shells) = self.command(session, "list_persistent_shells", json!({})).await {
+                if let Ok(shells) = self
+                    .command(session, "list_persistent_shells", json!({}))
+                    .await
+                {
                     jobs.extend(activities(&shells).filter_map(|a| prime_job(a, SHELL)));
                 }
                 // The count comes from the processes, so list every running one, listed by Prime or not.
                 let worker = session.state.lock().await.worker_pid;
                 if let (Some(worker), Some(tree)) = (worker, ProcessTree::snapshot().await) {
                     let known: HashSet<u32> = jobs.iter().filter_map(|job| job.pid).collect();
-                    for (pid, command) in tree.kernel_jobs(worker).into_iter().filter(|(pid, _)| !known.contains(pid)) {
+                    for (pid, command) in tree
+                        .kernel_jobs(worker)
+                        .into_iter()
+                        .filter(|(pid, _)| !known.contains(pid))
+                    {
                         jobs.push(BackgroundJob {
                             id: format!("{PROCESS}{pid}"),
                             command,
@@ -122,21 +154,35 @@ impl App {
             Backend::Prime => {
                 let data = match job_id.strip_prefix(SHELL) {
                     Some(shell) => {
-                        self.command(session, "tail_persistent_shell", json!({ "shellId": shell, "lines": lines }))
-                            .await?
+                        self.command(
+                            session,
+                            "tail_persistent_shell",
+                            json!({ "shellId": shell, "lines": lines }),
+                        )
+                        .await?
                     }
                     None => {
-                        self.command(session, "tail_kernel_bash", json!({ "activityId": job_id, "lines": lines }))
-                            .await?
+                        self.command(
+                            session,
+                            "tail_kernel_bash",
+                            json!({ "activityId": job_id, "lines": lines }),
+                        )
+                        .await?
                     }
                 };
-                Ok(data["tail"].as_str().or(data["output"].as_str()).unwrap_or_default().to_string())
+                Ok(data["tail"]
+                    .as_str()
+                    .or(data["output"].as_str())
+                    .unwrap_or_default()
+                    .to_string())
             }
             Backend::Pi => {
-                let log = std::fs::read(pi_dir(&session.id).join(format!("{}.log", safe_id(job_id)?)))
-                    .map_err(|_| anyhow!("This command is no longer available."))?;
+                let log =
+                    std::fs::read(pi_dir(&session.id).join(format!("{}.log", safe_id(job_id)?)))
+                        .map_err(|_| anyhow!("This command is no longer available."))?;
                 // At most 16 KiB, like Prime's tail.
-                let text = String::from_utf8_lossy(&log[log.len().saturating_sub(16 * 1024)..]).into_owned();
+                let text = String::from_utf8_lossy(&log[log.len().saturating_sub(16 * 1024)..])
+                    .into_owned();
                 let all: Vec<&str> = text.lines().collect();
                 Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"))
             }
@@ -150,22 +196,40 @@ impl App {
         if let Some(pid) = job_id.strip_prefix(PROCESS) {
             // Only a command still running under this session's kernel, never an arbitrary pid.
             let pid: u32 = pid.parse().map_err(|_| anyhow!("invalid job id"))?;
-            let worker = session.state.lock().await.worker_pid.ok_or_else(|| anyhow!("This command is no longer available."))?;
-            let tree = ProcessTree::snapshot().await.ok_or_else(|| anyhow!("could not list processes"))?;
+            let worker = session
+                .state
+                .lock()
+                .await
+                .worker_pid
+                .ok_or_else(|| anyhow!("This command is no longer available."))?;
+            let tree = ProcessTree::snapshot()
+                .await
+                .ok_or_else(|| anyhow!("could not list processes"))?;
             if !tree.kernel_jobs(worker).iter().any(|(p, _)| *p == pid) {
                 return Ok(false);
             }
             // The wrapper leads its own process group: terminate the whole command, as Prime's kill does.
-            let status = tokio::process::Command::new("/bin/kill").args(["-TERM", "--", &format!("-{pid}")]).status().await?;
+            let status = tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", "--", &format!("-{pid}")])
+                .status()
+                .await?;
             return Ok(status.success());
         }
         match session.backend {
             Backend::Prime => {
                 let data = match job_id.strip_prefix(SHELL) {
                     Some(shell) => {
-                        self.command(session, "kill_persistent_shell", json!({ "shellId": shell })).await?
+                        self.command(
+                            session,
+                            "kill_persistent_shell",
+                            json!({ "shellId": shell }),
+                        )
+                        .await?
                     }
-                    None => self.command(session, "kill_kernel_bash", json!({ "activityId": job_id })).await?,
+                    None => {
+                        self.command(session, "kill_kernel_bash", json!({ "activityId": job_id }))
+                            .await?
+                    }
                 };
                 Ok(data["killed"].as_bool().unwrap_or(true))
             }
@@ -179,12 +243,18 @@ impl App {
                 }
                 let pid = job.pid.ok_or_else(|| anyhow!("job has no pid"))?;
                 let group = format!("-{pid}");
-                let status = tokio::process::Command::new("/bin/kill").args(["-TERM", "--", &group]).status().await?;
+                let status = tokio::process::Command::new("/bin/kill")
+                    .args(["-TERM", "--", &group])
+                    .status()
+                    .await?;
                 // Like the extension's job_kill: SIGKILL after 5 seconds for commands that ignore SIGTERM.
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     if alive(pid) {
-                        let _ = tokio::process::Command::new("/bin/kill").args(["-KILL", "--", &group]).status().await;
+                        let _ = tokio::process::Command::new("/bin/kill")
+                            .args(["-KILL", "--", &group])
+                            .status()
+                            .await;
                     }
                 });
                 Ok(status.success())
@@ -195,7 +265,11 @@ impl App {
 }
 
 fn activities(data: &Value) -> impl Iterator<Item = &Value> {
-    data["activities"].as_array().or(data["shells"].as_array()).into_iter().flatten()
+    data["activities"]
+        .as_array()
+        .or(data["shells"].as_array())
+        .into_iter()
+        .flatten()
 }
 
 fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
@@ -214,7 +288,9 @@ fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
 
 /// A Pi job whose process is gone without a recorded exit (Pi was killed) is reported as lost.
 fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
-    let Ok(entries) = std::fs::read_dir(pi_dir(session_id)) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(pi_dir(session_id)) else {
+        return Vec::new();
+    };
     entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
@@ -242,11 +318,17 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
 
 /// The running Pi jobs of a session, for the summary's count.
 pub fn pi_running(session_id: &str) -> u32 {
-    pi_jobs(session_id).iter().filter(|job| job.status == "running").count() as u32
+    pi_jobs(session_id)
+        .iter()
+        .filter(|job| job.status == "running")
+        .count() as u32
 }
 
 fn alive(pid: u32) -> bool {
-    std::process::Command::new("/bin/kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
+    std::process::Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Job ids name files; keep them to the extension's alphabet.
@@ -265,7 +347,10 @@ mod tests {
     fn counts_only_wrappers_still_running_a_command() {
         let ps = "  10     1 prime-agent worker\n  11    10 python -m rlm.repl\n  20    11 /bin/bash -c exec 9>&0 8>&1 0</dev/null\\012read -r _prime_agent_gate <&9 || exit 127\\012{\\012sleep 50; echo hi\\012}\\012\n  21    20 sleep 50\n  30    11 /bin/bash -c exec 9>&0\\012{\\012python -m http.server 1\\012}\n";
         let tree = ProcessTree::parse(ps);
-        assert_eq!(tree.kernel_jobs(10), vec![(20, "sleep 50; echo hi".to_string())]);
+        assert_eq!(
+            tree.kernel_jobs(10),
+            vec![(20, "sleep 50; echo hi".to_string())]
+        );
         assert!(tree.kernel_jobs(11).is_empty());
     }
 }
