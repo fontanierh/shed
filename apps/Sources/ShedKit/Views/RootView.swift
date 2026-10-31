@@ -184,19 +184,48 @@ struct ConnectionBar: View {
         let shown = sessionId.flatMap { store.environment(of: $0) }.map { [$0] } ?? store.environments
         VStack(spacing: 0) {
             ForEach(shown) { env in
-                switch store.connection(of: env.id) {
-                case .connected:
-                    EmptyView()
-                case .connecting:
-                    bar(env, Text("Connecting to \(env.name)\u{2026}"), color: Palette.amber)
-                case .disconnected(let reason):
-                    bar(env, Text("Can\u{2019}t reach \(env.name)") + Text(reason.map { ": \($0)" } ?? ""), color: Palette.danger)
-                }
+                Line(store: store, env: env, showSettings: showSettings)
             }
         }
     }
+}
 
-    private func bar(_ env: BridgeEnvironment, _ text: Text, color: Color) -> some View {
+/// One computer's line, shown only once it has been down for a moment. iOS drops the socket whenever the app leaves
+/// the screen, even for a second, and it's back within half a second of returning: a bar flashing in and out above the
+/// transcript in that time pushed it down and let it snap back.
+private struct Line: View {
+    let store: SessionStore
+    let env: BridgeEnvironment
+    let showSettings: Binding<Bool>?
+    @State private var shown = false
+
+    private static let grace = Duration.seconds(2)
+
+    var body: some View {
+        let state = store.connection(of: env.id)
+        Group {
+            if shown {
+                switch state {
+                case .connected:
+                    EmptyView()
+                case .connecting:
+                    bar(Text("Connecting to \(env.name)\u{2026}"), color: Palette.amber)
+                case .disconnected(let reason):
+                    bar(Text("Can\u{2019}t reach \(env.name)") + Text(reason.map { ": \($0)" } ?? ""), color: Palette.danger)
+                }
+            }
+        }
+        .task(id: state == .connected) {
+            guard state != .connected else {
+                shown = false
+                return
+            }
+            try? await Task.sleep(for: Self.grace)
+            if !Task.isCancelled { shown = true }
+        }
+    }
+
+    private func bar(_ text: Text, color: Color) -> some View {
         HStack {
             Circle().fill(color).frame(width: 8, height: 8)
             text.font(.callout).lineLimit(1)
