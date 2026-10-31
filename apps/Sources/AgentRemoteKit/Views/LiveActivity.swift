@@ -54,7 +54,11 @@ final class LiveActivities {
         }
         // Ended activities linger on the Lock Screen until dismissed; only live ones take updates.
         let all = ActivityKit.Activity<ShedActivity>.activities
-        let live = all.filter { $0.activityState == .active }
+        // From before session ids carried their computer: the new ones take their place.
+        for old in all where !old.attributes.sessionId.contains(":") {
+            Task { await old.end(nil, dismissalPolicy: .immediate) }
+        }
+        let live = all.filter { $0.activityState == .active && $0.attributes.sessionId.contains(":") }
         for session in sessions.values where !session.isSubagent && !session.readOnly {
             let existing = live.first { $0.attributes.sessionId == session.id }
             if session.status.isBusy || session.runningSubagents {

@@ -101,10 +101,11 @@ public struct Goal: Codable, Equatable, Sendable {
 }
 
 public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
-    public let id: String
+    /// Tagged with its environment by the store ("<environment>:<bridge's id>"), so ids stay unique across computers.
+    public internal(set) var id: String
     public let agent: AgentKind
     public let kind: SessionKind
-    public let parentId: String?
+    public internal(set) var parentId: String?
     public let name: String?
     public let depth: Int
     public let runningSubagents: Bool

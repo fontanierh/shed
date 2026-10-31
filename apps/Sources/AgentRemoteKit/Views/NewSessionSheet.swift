@@ -1,29 +1,69 @@
-// Starting a session: the agent, a folder on the bridge's machine, and the model and effort.
+// Starting a session: the computer, the agent, a folder on that computer, and the model and effort.
 import SwiftUI
 
 struct NewSessionSheet: View {
     let store: SessionStore
     @Environment(\.dismiss) private var dismiss
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
-    @AppStorage("newSession.cwd") private var cwd = ""
+    @AppStorage("newSession.environment") private var chosenEnv = ""
+    /// The folder last started in, per environment, as "<environment>\t<path>" lines.
+    @AppStorage("newSession.folders") private var lastFolders = ""
+    /// The folder last started in before Shed knew several computers: the first environment's.
+    @AppStorage("newSession.cwd") private var legacyCwd = ""
+    @State private var cwd = ""
     @AppStorage("newSession.model") private var model = ""
     @AppStorage("newSession.thinking") private var thinking = ""
     @AppStorage("newSession.recentFolders") private var recentFolders = ""
     @AppStorage("newSession.recentModels") private var recentModels = ""
     @State private var creating = false
 
-    private var recents: [String] { recentFolders.split(separator: "\n").map(String.init) }
+    /// The computer the session starts on: the one chosen last, while it is still there.
+    private var env: String {
+        store.environments.contains { $0.id == chosenEnv } ? chosenEnv : store.environments.first?.id ?? ""
+    }
+
+    /// Recent folders are "<environment>\t<path>" lines; older ones without an environment belong to the first.
+    private func folders(_ lines: String) -> [(env: String, path: String)] {
+        lines.split(separator: "\n").map { line in
+            let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+            return parts.count == 2 ? (parts[0], parts[1]) : (store.environments.first?.id ?? "", parts[0])
+        }
+    }
+
+    private var recents: [String] { folders(recentFolders).filter { $0.env == env }.map(\.path) }
+
+    private func restoreFolder() {
+        let first = store.environments.first?.id
+        cwd = folders(lastFolders).first { $0.env == env }?.path ?? (env == first ? legacyCwd : "")
+    }
+
+    @ViewBuilder private var environmentPicker: some View {
+        if store.environments.count > 1 {
+            Picker("Computer", selection: Binding(get: { env }, set: { chosenEnv = $0 })) {
+                ForEach(store.environments) { e in Text(e.name).tag(e.id) }
+            }
+            .labelsHidden()
+            #if os(macOS)
+            .pickerStyle(.segmented)
+            .fixedSize()
+            #endif
+        }
+    }
     private var models: [String] {
         let saved = recentModels.split(separator: "\n").map(String.init)
         return saved + ["openai/gpt-6.1-terra"].filter { !saved.contains($0) }
     }
 
     var body: some View {
-        #if os(iOS)
-        phone
-        #else
-        mac
-        #endif
+        Group {
+            #if os(iOS)
+            phone
+            #else
+            mac
+            #endif
+        }
+        .onAppear(perform: restoreFolder)
+        .onChange(of: env) { restoreFolder() }
     }
 
     private var mac: some View {
@@ -32,9 +72,11 @@ struct NewSessionSheet: View {
                 Sprout(size: 34)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("New session").font(.system(size: 26, design: .serif)).foregroundStyle(Palette.moon)
-                    Text("Choose an agent and a folder to work in.")
+                    Text(store.environments.count > 1 ? "Choose a computer, an agent and a folder to work in." : "Choose an agent and a folder to work in.")
                         .font(.system(size: 13.5)).foregroundStyle(.secondary)
                 }
+                Spacer()
+                environmentPicker
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 32).padding(.top, 28).padding(.bottom, 20)
@@ -48,7 +90,8 @@ struct NewSessionSheet: View {
                 }
 
                 section("Folder", note: "Double-click or › to open a folder") {
-                    FolderBrowser(store: store, selection: $cwd, recents: recents)
+                    FolderBrowser(store: store, env: env, selection: $cwd, recents: recents)
+                        .id(env)
                         .frame(height: 420)
                 }
 
@@ -139,6 +182,15 @@ struct NewSessionSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
+                    if store.environments.count > 1 {
+                        section("Computer") {
+                            environmentPicker
+                                .pickerStyle(.menu)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6).frame(height: 44)
+                                .card(radius: 12, fill: Palette.sunken)
+                        }
+                    }
                     VStack(spacing: 10) {
                         AgentCard(kind: .prime, selected: agent == .prime,
                                   detail: "Python REPL agent. Asynchronous subagents keep working in the background.") { agent = .prime }
@@ -148,7 +200,7 @@ struct NewSessionSheet: View {
 
                     section("Folder") {
                         NavigationLink {
-                            PhoneFolderPicker(store: store, selection: $cwd, recents: recents,
+                            PhoneFolderPicker(store: store, env: env, selection: $cwd, recents: recents,
                                               start: cwd.isEmpty ? nil : (cwd as NSString).deletingLastPathComponent)
                         } label: {
                             HStack(spacing: 10) {
@@ -206,12 +258,17 @@ struct NewSessionSheet: View {
         creating = true
         let folder = cwd
         let chosenModel = model
+        let env = env
         Task {
-            let ok = await store.createSession(agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
+            let ok = await store.createSession(in: env, agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
                                                firstMessage: "")
             creating = false
             if ok {
-                recentFolders = ([folder] + recents.filter { $0 != folder }).prefix(6).joined(separator: "\n")
+                func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
+                let others = folders(recentFolders).filter { $0.env != env }
+                let mine = ([folder] + recents.filter { $0 != folder }).prefix(6).map { (env: env, path: $0) }
+                recentFolders = (mine + others).map(line).joined(separator: "\n")
+                lastFolders = ([(env: env, path: folder)] + folders(lastFolders).filter { $0.env != env }).map(line).joined(separator: "\n")
                 if !chosenModel.isEmpty {
                     let saved = recentModels.split(separator: "\n").map(String.init)
                     recentModels = ([chosenModel] + saved.filter { $0 != chosenModel }).prefix(5).joined(separator: "\n")
@@ -275,6 +332,7 @@ struct AgentCard: View {
 /// Selecting a row picks it; double-click, Return or › opens it.
 struct FolderBrowser: View {
     let store: SessionStore
+    let env: String
     @Binding var selection: String
     let recents: [String]
 
@@ -541,7 +599,7 @@ struct FolderBrowser: View {
         let current = listing?.path
         Task {
             do {
-                let next = try await store.listDir(path, hidden: showHidden)
+                let next = try await store.listDir(in: env, path, hidden: showHidden)
                 if record, let current, current != next.path {
                     back.append(current)
                     forward = []
@@ -560,6 +618,7 @@ struct FolderBrowser: View {
 /// The phone's folder chooser: tap a folder to go into it, "Use this folder" to pick where you are.
 struct PhoneFolderPicker: View {
     let store: SessionStore
+    let env: String
     @Binding var selection: String
     let recents: [String]
     let start: String?
@@ -661,7 +720,7 @@ struct PhoneFolderPicker: View {
     private func load(_ path: String?) {
         Task {
             do {
-                let next = try await store.listDir(path, hidden: showHidden)
+                let next = try await store.listDir(in: env, path, hidden: showHidden)
                 withAnimation(.snappy) { listing = next }
                 error = nil
                 filter = ""

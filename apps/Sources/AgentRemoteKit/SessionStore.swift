@@ -1,6 +1,36 @@
-// App state: the session tree, the selected session's live transcript, and the actions on it.
+// App state: the computers Shed controls, their session trees, the selected session's live transcript, and the
+// actions on it.
 import Foundation
 import Observation
+
+/// A computer running the bridge: this Mac, or another one reached over Tailscale.
+public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var url: String
+    public var token: String
+
+    public init(id: String = BridgeEnvironment.newId(), name: String, url: String, token: String) {
+        self.id = id
+        self.name = name
+        self.url = url
+        self.token = token
+    }
+
+    public static func newId() -> String { String(UUID().uuidString.prefix(8)).lowercased() }
+
+    /// The bridge on this machine, whose token Shed can read from its config.
+    public var isLocal: Bool {
+        let host = URLComponents(string: url.trimmingCharacters(in: .whitespaces))?.host
+        return host == "127.0.0.1" || host == "localhost" || host == "::1"
+    }
+
+    /// "jims-macbook-pro" from "wss://jims-macbook-pro.tail362838.ts.net:7878/ws".
+    public static func name(for url: String) -> String {
+        let host = URLComponents(string: url.trimmingCharacters(in: .whitespaces))?.host ?? ""
+        return host.split(separator: ".").first.map(String.init) ?? "Computer"
+    }
+}
 
 public struct SessionNode: Identifiable {
     public let session: SessionSummary
@@ -28,7 +58,9 @@ public final class SessionStore {
     public var transcriptLoaded: Bool { selectedId != nil && loadedId == selectedId }
     /// The open session's transcript with its messages still on their way.
     public var transcript: [Item] { items + (selectedId.flatMap { sending[$0] } ?? []) }
-    public private(set) var connection: BridgeClient.State = .disconnected(nil)
+    public private(set) var environments: [BridgeEnvironment] = []
+    /// Each environment's connection to its bridge.
+    public private(set) var connections: [String: BridgeClient.State] = [:]
     public private(set) var models: [ModelInfo] = []
     public var errorMessage: String?
     /// Unsent composer text per session, kept while switching between sessions and across launches.
@@ -39,33 +71,76 @@ public final class SessionStore {
         UserDefaults.standard.set(drafts, forKey: "drafts")
     }
 
-    public var bridgeURL: String {
-        didSet { UserDefaults.standard.set(bridgeURL, forKey: "bridgeURL") }
-    }
-    public var token: String {
-        didSet { UserDefaults.standard.set(token, forKey: "bridgeToken") }
-    }
-
     /// Moves on every half minute, so subagents left idle drop out of the lists.
     public private(set) var clock = Date.now
 
-    @ObservationIgnored private let client = BridgeClient()
+    @ObservationIgnored private var clients: [String: BridgeClient] = [:]
     @ObservationIgnored private var itemIndex: [String: Int] = [:]
+    @ObservationIgnored private var started = false
 
     public init() {
-        bridgeURL = UserDefaults.standard.string(forKey: "bridgeURL") ?? "ws://127.0.0.1:7878/ws"
-        token = UserDefaults.standard.string(forKey: "bridgeToken") ?? ""
-        client.onMessage = { [weak self] in self?.apply($0) }
-        client.onState = { [weak self] state in self?.connectionChanged(state) }
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: "environments"),
+           let saved = try? JSONDecoder().decode([BridgeEnvironment].self, from: data) {
+            environments = saved
+        } else {
+            migrate()
+        }
+    }
+
+    /// From the single bridge Shed used to know: it becomes the first environment, and on the Mac this Mac's own bridge
+    /// is always there. Drafts were keyed by bare session ids; they belong to that first environment.
+    private func migrate() {
+        let defaults = UserDefaults.standard
+        let url = defaults.string(forKey: "bridgeURL").map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let token = defaults.string(forKey: "bridgeToken") ?? ""
+        var found: [BridgeEnvironment] = []
+        #if os(macOS)
+        found.append(BridgeEnvironment(name: "This Mac", url: "ws://127.0.0.1:7878/ws", token: ""))
+        #endif
+        if !url.isEmpty, !token.isEmpty {
+            let old = BridgeEnvironment(name: BridgeEnvironment.name(for: url), url: url, token: token)
+            if !old.isLocal || found.isEmpty { found.append(old) }
+        }
+        environments = found
+        saveEnvironments()
+        if let first = found.first {
+            drafts = Dictionary(uniqueKeysWithValues: drafts.map { (Self.split($0.key) == nil ? Self.tag(first.id, $0.key) : $0.key, $0.value) })
+            defaults.set(drafts, forKey: "drafts")
+        }
+    }
+
+    private func saveEnvironments() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(environments), forKey: "environments")
+    }
+
+    // MARK: Session ids
+
+    /// Session ids carry their environment: "<environment>:<the bridge's id>".
+    static func tag(_ env: String, _ id: String) -> String { "\(env):\(id)" }
+
+    static func split(_ id: String) -> (env: String, raw: String)? {
+        guard let colon = id.firstIndex(of: ":") else { return nil }
+        return (String(id[..<colon]), String(id[id.index(after: colon)...]))
+    }
+
+    private func tagged(_ summary: SessionSummary, _ env: String) -> SessionSummary {
+        var summary = summary
+        summary.id = Self.tag(env, summary.id)
+        summary.parentId = summary.parentId.map { Self.tag(env, $0) }
+        return summary
+    }
+
+    /// The environment a session runs in.
+    public func environment(of sessionId: String) -> BridgeEnvironment? {
+        Self.split(sessionId).flatMap { split in environments.first { $0.id == split.env } }
     }
 
     // MARK: Connection
 
     public func start() {
-        #if os(macOS)
-        // On the Mac running the bridge, pick up its token automatically.
-        if token.isEmpty, let local = Self.localBridgeToken() { token = local }
-        #endif
+        guard !started else { return }
+        started = true
         connect()
         Task { [weak self] in
             while !Task.isCancelled {
@@ -73,21 +148,93 @@ public final class SessionStore {
                 self?.clock = .now
             }
         }
-        // `open -a Shed --args -select <session id>` opens a session directly.
+        // `open -a Shed --args -select <session id>` opens a session directly (untagged: in the first environment).
         if let id = UserDefaults.standard.string(forKey: "select") { select(id) }
     }
 
-    /// Where the transcript loads embedded media from.
-    public var media: MediaSource { MediaSource(bridgeURL: bridgeURL, token: token) }
+    /// The selected session's connection; with none selected, the best of them all.
+    public var connection: BridgeClient.State {
+        if let env = selectedId.flatMap(Self.split)?.env { return connection(of: env) }
+        let states = environments.map { connection(of: $0.id) }
+        if states.contains(.connected) { return .connected }
+        if states.contains(.connecting) { return .connecting }
+        return states.first ?? .disconnected("No computers added")
+    }
 
+    public func connection(of env: String) -> BridgeClient.State { connections[env] ?? .disconnected(nil) }
+
+    /// Where a session's transcript loads embedded media from: its own computer.
+    public func media(for sessionId: String) -> MediaSource {
+        guard let env = environment(of: sessionId) else { return MediaSource(bridgeURL: "", token: "") }
+        return MediaSource(bridgeURL: env.url, token: token(of: env))
+    }
+
+    private func token(of env: BridgeEnvironment) -> String {
+        #if os(macOS)
+        // This Mac's own bridge: its token, read from its config, so it never goes stale.
+        if env.token.isEmpty, env.isLocal, let local = Self.localBridgeToken() { return local }
+        #endif
+        return env.token
+    }
+
+    /// Every environment, connected afresh.
     public func connect() {
-        guard var components = URLComponents(string: bridgeURL.trimmingCharacters(in: .whitespaces)) else {
-            connection = .disconnected("Invalid bridge URL")
+        for env in environments { connect(env.id) }
+    }
+
+    public func connect(_ envId: String) {
+        guard let env = environments.first(where: { $0.id == envId }) else { return }
+        let client = clients[env.id] ?? makeClient(env.id)
+        guard var components = URLComponents(string: env.url.trimmingCharacters(in: .whitespaces)), components.host != nil else {
+            connections[env.id] = .disconnected("Invalid bridge URL")
             return
         }
-        components.queryItems = [URLQueryItem(name: "token", value: token)]
+        components.queryItems = [URLQueryItem(name: "token", value: token(of: env))]
         guard let url = components.url else { return }
         client.connect(to: url)
+    }
+
+    private func makeClient(_ env: String) -> BridgeClient {
+        let client = BridgeClient()
+        client.onMessage = { [weak self] in self?.apply($0, from: env) }
+        client.onState = { [weak self] state in self?.connectionChanged(state, env) }
+        clients[env] = client
+        return client
+    }
+
+    // MARK: Environments
+
+    /// Adds an environment, or updates one already there, and (re)connects it.
+    public func save(_ env: BridgeEnvironment) {
+        var env = env
+        env.name = env.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        env.url = env.url.trimmingCharacters(in: .whitespacesAndNewlines)
+        env.token = env.token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if env.name.isEmpty { env.name = BridgeEnvironment.name(for: env.url) }
+        if let index = environments.firstIndex(where: { $0.id == env.id }) {
+            environments[index] = env
+        } else {
+            environments.append(env)
+        }
+        saveEnvironments()
+        connect(env.id)
+    }
+
+    public func remove(_ envId: String) {
+        let client = clients.removeValue(forKey: envId)
+        client?.onState = { _ in }
+        client?.onMessage = { _ in }
+        client?.disconnect()
+        connections[envId] = nil
+        environments.removeAll { $0.id == envId }
+        saveEnvironments()
+        if let selectedId, Self.split(selectedId)?.env == envId { select(nil) }
+        sessions = sessions.filter { Self.split($0.key)?.env != envId }
+    }
+
+    public func moveEnvironments(from source: IndexSet, to destination: Int) {
+        environments.move(fromOffsets: source, toOffset: destination)
+        saveEnvironments()
     }
 
     #if os(macOS)
@@ -100,9 +247,9 @@ public final class SessionStore {
     }
     #endif
 
-    private func connectionChanged(_ state: BridgeClient.State) {
-        connection = state
-        if state == .connected, let selectedId {
+    private func connectionChanged(_ state: BridgeClient.State, _ env: String) {
+        connections[env] = state
+        if state == .connected, let selectedId, Self.split(selectedId)?.env == env {
             Task { await attach(selectedId) }
         }
     }
@@ -111,8 +258,13 @@ public final class SessionStore {
 
     public var selected: SessionSummary? { selectedId.flatMap { sessions[$0] } }
 
-    public var tree: [SessionNode] {
-        let roots = sessions.values.filter { s in s.parentId.map { sessions[$0] == nil } ?? true }
+    public var tree: [SessionNode] { tree(in: nil) }
+
+    /// The session tree of one environment, or of all of them.
+    public func tree(in env: String?) -> [SessionNode] {
+        let roots = sessions.values.filter { s in
+            (env == nil || Self.split(s.id)?.env == env) && (s.parentId.map { sessions[$0] == nil } ?? true)
+        }
         return roots.sorted { $0.createdAt > $1.createdAt }.map(node)
     }
 
@@ -150,8 +302,12 @@ public final class SessionStore {
     }
 
     public func select(_ id: String?) {
+        // An id from before Shed knew several computers (a Live Activity's link): the first one's.
+        let id = id.map { Self.split($0) == nil && !environments.isEmpty ? Self.tag(environments[0].id, $0) : $0 }
         guard id != selectedId else { return }
-        if let old = selectedId { Task { try? await client.call("detach", ["sessionId": old]) } }
+        if let old = selectedId, let (env, raw) = Self.split(old), let client = clients[env] {
+            Task { try? await client.call("detach", ["sessionId": raw]) }
+        }
         selectedId = id
         loadedId = nil
         items = []
@@ -163,7 +319,8 @@ public final class SessionStore {
 
     private func attach(_ id: String) async {
         do {
-            try await call("attach", ["sessionId": id], repeatable: true)
+            guard let (env, raw) = Self.split(id) else { return }
+            try await call(env, "attach", ["sessionId": raw], repeatable: true)
         } catch {
             // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
             if sessions[id] == nil {
@@ -176,18 +333,23 @@ public final class SessionStore {
 
     // MARK: Incoming messages
 
-    private func apply(_ message: ServerMessage) {
+    private func apply(_ message: ServerMessage, from env: String) {
         switch message {
         case .sessions(let list):
-            sessions = Dictionary(uniqueKeysWithValues: list.map { ($0.id, $0) })
+            var all = sessions.filter { Self.split($0.key)?.env != env }
+            for summary in list.map({ tagged($0, env) }) { all[summary.id] = summary }
+            sessions = all
             snapshots += 1
-            if let selectedId, sessions[selectedId] == nil { select(nil) }
+            if let selectedId, sessions[selectedId] == nil, Self.split(selectedId)?.env == env { select(nil) }
         case .session(let summary):
+            let summary = tagged(summary, env)
             sessions[summary.id] = summary
         case .sessionRemoved(let id):
+            let id = Self.tag(env, id)
             sessions[id] = nil
             if selectedId == id { select(nil) }
         case .snapshot(let sessionId, let snapshot, let earlier):
+            let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId else { return }
             loadedId = sessionId
             self.earlier = earlier
@@ -195,12 +357,14 @@ public final class SessionStore {
             itemIndex = Dictionary(uniqueKeysWithValues: snapshot.enumerated().map { ($1.id, $0) })
             for item in snapshot.suffix(20) where item.kind == .user { arrived(item.text, in: sessionId) }
         case .itemAdd(let sessionId, let item):
+            let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId, itemIndex[item.id] == nil else { return }
             // The agent's copy of a message on its way: it takes the sending one's place in the same update.
             if item.kind == .user { arrived(item.text, in: sessionId) }
             itemIndex[item.id] = items.count
             items.append(item)
         case .itemPatch(let sessionId, let itemId, let set, let append):
+            let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId, let index = itemIndex[itemId] else { return }
             var item = items[index]
             set?.apply(to: &item)
@@ -212,11 +376,12 @@ public final class SessionStore {
 
     /// The page of history before the first loaded item.
     public func loadEarlier() async {
-        guard let id = selectedId, let first = items.first, earlier > 0, !loadingEarlier else { return }
+        guard let id = selectedId, let (env, raw) = Self.split(id), let client = clients[env],
+              let first = items.first, earlier > 0, !loadingEarlier else { return }
         loadingEarlier = true
         defer { loadingEarlier = false }
         do {
-            let page = try await client.call("load_earlier", ["sessionId": id, "before": first.id], as: EarlierItems.self)
+            let page = try await client.call("load_earlier", ["sessionId": raw, "before": first.id], as: EarlierItems.self)
             // A snapshot may have replaced the transcript meanwhile.
             guard selectedId == id, items.first?.id == first.id else { return }
             let older = page.items.filter { itemIndex[$0.id] == nil }
@@ -238,13 +403,15 @@ public final class SessionStore {
 
     /// Back from the background: replace a socket iOS killed meanwhile.
     public func resumed() {
-        if case .disconnected = connection { connect() } else { client.checkAlive() }
+        for env in environments {
+            if case .disconnected = connection(of: env.id) { connect(env.id) } else { clients[env.id]?.checkAlive() }
+        }
     }
 
-    /// Waits for the bridge connection to come back, up to `timeout`.
-    private func reconnected(timeout: Duration = .seconds(60)) async -> Bool {
+    /// Waits for an environment's bridge connection to come back, up to `timeout`.
+    private func reconnected(_ env: String, timeout: Duration = .seconds(60)) async -> Bool {
         let deadline = ContinuousClock.now + timeout
-        while connection != .connected {
+        while connection(of: env) != .connected {
             guard ContinuousClock.now < deadline else { return false }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -253,13 +420,24 @@ public final class SessionStore {
 
     /// `op`, sent again once the connection is back if a drop cut it off: when it can't have arrived, or when
     /// doing it twice is harmless.
-    private func call(_ op: String, _ payload: [String: Any], repeatable: Bool) async throws {
+    private func call(_ env: String, _ op: String, _ payload: [String: Any], repeatable: Bool) async throws {
         do {
-            try await client.call(op, payload)
+            try await client(env).call(op, payload)
         } catch let lost as ConnectionLost where !lost.maybeDelivered || repeatable {
-            guard await reconnected() else { throw lost }
-            try await client.call(op, payload)
+            guard await reconnected(env) else { throw lost }
+            try await client(env).call(op, payload)
         }
+    }
+
+    private func client(_ env: String) throws -> BridgeClient {
+        guard let client = clients[env] else { throw BridgeError("That computer is no longer in Shed") }
+        return client
+    }
+
+    /// The client a session's ops go to, and the id its bridge knows it by.
+    private func route(_ sessionId: String) throws -> (client: BridgeClient, env: String, raw: String) {
+        guard let (env, raw) = Self.split(sessionId) else { throw BridgeError("Unknown session") }
+        return (try client(env), env, raw)
     }
 
     private static let repeatable: Set<String> = [
@@ -267,24 +445,26 @@ public final class SessionStore {
     ]
 
     private func perform(_ op: String, _ fields: [String: Any] = [:]) {
-        guard let id = selectedId else { return }
+        guard let id = selectedId, let (env, raw) = Self.split(id) else { return }
         var payload = fields
-        payload["sessionId"] = id
+        payload["sessionId"] = raw
         Task {
-            do { try await call(op, payload, repeatable: Self.repeatable.contains(op)) } catch { report(error) }
+            do { try await call(env, op, payload, repeatable: Self.repeatable.contains(op)) } catch { report(error) }
         }
     }
 
-    public func createSession(agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async -> Bool {
+    public func createSession(in env: String, agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async -> Bool {
         var fields: [String: Any] = ["agent": agent.rawValue, "cwd": cwd]
         if let model, !model.isEmpty { fields["model"] = model }
         if let thinking, !thinking.isEmpty { fields["thinking"] = thinking }
         do {
-            let summary = try await client.call("create_session", fields, as: SessionSummary.self)
+            let client = try client(env)
+            let created = try await client.call("create_session", fields, as: SessionSummary.self)
+            let summary = tagged(created, env)
             sessions[summary.id] = summary
             select(summary.id)
             if let firstMessage, !firstMessage.isEmpty {
-                try await client.call("send", ["sessionId": summary.id, "text": firstMessage])
+                try await client.call("send", ["sessionId": created.id, "text": firstMessage])
             }
             return true
         } catch {
@@ -295,7 +475,7 @@ public final class SessionStore {
 
     /// Prompt when idle; the bridge turns it into a steer while the agent is working.
     public func send(_ text: String) {
-        guard let id = selectedId else { return }
+        guard let id = selectedId, let (env, raw) = Self.split(id) else { return }
         // While it works the message waits in its queue (shown above the composer), not in the conversation.
         let busy = sessions[id]?.status.isBusy ?? false
         let local = Item(id: "sending-\(UUID().uuidString)", kind: .user, text: text, status: .pending, at: Date.now.timeIntervalSince1970 * 1000)
@@ -303,11 +483,11 @@ public final class SessionStore {
         Task {
             do {
                 do {
-                    try await client.call("send", ["sessionId": id, "text": text])
+                    try await client(env).call("send", ["sessionId": raw, "text": text])
                 } catch let lost as ConnectionLost {
                     // Cut off by a dropped connection: send it again once back, unless the session's transcript, sent
                     // afresh on reconnecting, shows it arrived after all.
-                    guard await reconnected() else { throw lost }
+                    guard await reconnected(env) else { throw lost }
                     if lost.maybeDelivered {
                         try? await Task.sleep(for: .seconds(2))
                         let queued = sessions[id]?.queue
@@ -315,7 +495,7 @@ public final class SessionStore {
                                           : sending[id]?.contains { $0.id == local.id } != true
                         if landed { return }
                     }
-                    try await client.call("send", ["sessionId": id, "text": text])
+                    try await client(env).call("send", ["sessionId": raw, "text": text])
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
                 try? await Task.sleep(for: .seconds(60))
@@ -353,7 +533,10 @@ public final class SessionStore {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         Task {
-            do { try await client.call("rename_session", ["sessionId": id, "name": name]) } catch { report(error) }
+            do {
+                let to = try route(id)
+                try await to.client.call("rename_session", ["sessionId": to.raw, "name": name])
+            } catch { report(error) }
         }
     }
     public func setModel(_ model: ModelInfo) { perform("set_model", ["provider": model.provider, "modelId": model.id]) }
@@ -362,31 +545,37 @@ public final class SessionStore {
 
     public func delete(_ id: String) {
         Task {
-            do { try await client.call("delete_session", ["sessionId": id]) } catch { report(error) }
+            do {
+                let to = try route(id)
+                try await to.client.call("delete_session", ["sessionId": to.raw])
+            } catch { report(error) }
         }
     }
 
-    /// Folders on the bridge's machine; nil path means the home folder.
-    public func listDir(_ path: String?, hidden: Bool = false) async throws -> DirListing {
+    /// Folders on an environment's computer; nil path means the home folder.
+    public func listDir(in env: String, _ path: String?, hidden: Bool = false) async throws -> DirListing {
         var fields: [String: Any] = ["hidden": hidden]
         if let path { fields["path"] = path }
-        return try await client.call("list_dir", fields, as: DirListing.self)
+        return try await client(env).call("list_dir", fields, as: DirListing.self)
     }
 
     // MARK: Background commands
 
     public func listJobs(_ sessionId: String) async throws -> [BackgroundJob] {
-        try await client.call("list_jobs", ["sessionId": sessionId], as: [BackgroundJob].self)
+        let to = try route(sessionId)
+        return try await to.client.call("list_jobs", ["sessionId": to.raw], as: [BackgroundJob].self)
     }
 
     public func jobOutput(_ sessionId: String, _ jobId: String, lines: Int = 200) async throws -> String {
         struct Tail: Decodable { let tail: String }
-        return try await client.call("job_output", ["sessionId": sessionId, "jobId": jobId, "lines": lines], as: Tail.self).tail
+        let to = try route(sessionId)
+        return try await to.client.call("job_output", ["sessionId": to.raw, "jobId": jobId, "lines": lines], as: Tail.self).tail
     }
 
     public func killJob(_ sessionId: String, _ jobId: String) async {
         do {
-            _ = try await client.call("kill_job", ["sessionId": sessionId, "jobId": jobId])
+            let to = try route(sessionId)
+            _ = try await to.client.call("kill_job", ["sessionId": to.raw, "jobId": jobId])
         } catch {
             report(error)
         }
@@ -395,7 +584,8 @@ public final class SessionStore {
     public func loadModels() async {
         guard let id = selectedId else { return }
         do {
-            models = try await client.call("list_models", ["sessionId": id], as: [ModelInfo].self)
+            let to = try route(id)
+            models = try await to.client.call("list_models", ["sessionId": to.raw], as: [ModelInfo].self)
         } catch {
             report(error)
         }

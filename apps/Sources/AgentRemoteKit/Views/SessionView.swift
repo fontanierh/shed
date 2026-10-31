@@ -43,8 +43,8 @@ struct SessionView: View {
         guard !store.transcriptLoaded else { return nil }
         switch store.connection {
         case .connected: return "Loading conversation…"
-        case .connecting: return "Connecting to the bridge…"
-        case .disconnected: return "Can't reach the bridge"
+        case .connecting: return "Connecting to \(store.environment(of: session.id)?.name ?? "the bridge")…"
+        case .disconnected: return "Can't reach \(store.environment(of: session.id)?.name ?? "the bridge")"
         }
     }
 
@@ -98,9 +98,9 @@ struct SessionView: View {
             })
             // Under the session's header: inside a session, a dropped connection otherwise just looks like an agent
             // that stopped answering.
-            .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store) }
+            .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store, sessionId: session.id) }
             #endif
-            .environment(\.media, store.media)
+            .environment(\.media, store.media(for: session.id))
             .environment(\.stopTool, stopTool)
             .environment(\.restartKernel, restartKernel)
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
@@ -286,7 +286,6 @@ struct PhoneSessionToolbar: ToolbarContent {
                     Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
                         .disabled(session.status.isBusy)
                     Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
-                    ContextWindowMenu(store: store, session: session)
                 }
                 if session.agent == .prime {
                     Button("Restart Python Kernel…", systemImage: "arrow.clockwise", action: restartKernel)
@@ -540,7 +539,6 @@ struct SessionHeader: View {
                     Button("Compact Now") { store.compact() }
                         .disabled(session.status.isBusy)
                     Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
-                    ContextWindowMenu(store: store, session: session)
                     if session.agent == .prime {
                         Button("Restart Python Kernel…") { restartingKernel = true }
                     }
@@ -866,7 +864,21 @@ struct Composer: View {
 
                 Spacer(minLength: 8)
 
-                if let context = session.context { ContextGauge(context: context) }
+                if let context = session.context {
+                    // The gauge doubles as the context window's controls.
+                    Menu {
+                        ContextWindowMenu(store: store, session: session, inline: true)
+                        Divider()
+                        Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
+                            .disabled(session.status.isBusy)
+                    } label: {
+                        ContextGauge(context: context)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
             }
             .padding(.horizontal, 4)
         }

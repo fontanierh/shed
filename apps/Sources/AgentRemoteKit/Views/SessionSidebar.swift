@@ -4,6 +4,8 @@ import SwiftUI
 struct SessionSidebar: View {
     let store: SessionStore
     var newSession: () -> Void = {}
+    /// The computers Shed controls.
+    var openSettings: () -> Void = {}
     @State private var query = ""
     /// Sessions whose subagents are shown.
     @State private var expanded: Set<String> = []
@@ -20,8 +22,16 @@ struct SessionSidebar: View {
             HStack(spacing: 8) {
                 Sprout(size: 26)
                 Text("Shed").font(.system(size: 26, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
+                Spacer()
+                Button(action: openSettings) {
+                    Image(systemName: "network").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                        .frame(width: 30, height: 30).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(",")
+                .help("Computers")
             }
-            .padding(.horizontal, 18)
+            .padding(.leading, 18).padding(.trailing, 10)
             #if os(macOS)
             // Below the window's traffic lights.
             .padding(.top, 34)
@@ -43,13 +53,29 @@ struct SessionSidebar: View {
                             SectionTitle("At work · \(active.count)")
                             ForEach(active) { sub in
                                 SidebarRow(session: sub, depth: 0, selected: store.selectedId == sub.id, selection: selection,
-                                           detail: [sub.activityText, store.parent(of: sub).map { "in \($0.title)" }].compactMap { $0 }.joined(separator: " · "))
+                                           detail: [sub.activityText, store.parent(of: sub).map { "in \($0.title)" },
+                                                    store.environments.count > 1 ? store.environment(of: sub.id)?.name : nil].compactMap { $0 }.joined(separator: " · "))
                                     .onTapGesture { store.select(sub.id) }
                             }
                             Spacer().frame(height: 10)
                         }
-                        SectionTitle("Sessions")
-                        ForEach(store.tree) { node in tree(node, depth: 0) }
+                        if store.environments.count > 1 {
+                            // A section per computer, in the order they were added.
+                            ForEach(store.environments) { env in
+                                EnvironmentTitle(env: env, state: store.connection(of: env.id))
+                                let roots = store.tree(in: env.id)
+                                if roots.isEmpty {
+                                    Text(store.connection(of: env.id) == .connected ? "No sessions" : "Not connected")
+                                        .font(.system(size: 12)).foregroundStyle(.tertiary)
+                                        .padding(.horizontal, 8).padding(.bottom, 4)
+                                }
+                                ForEach(roots) { node in tree(node, depth: 0) }
+                                Spacer().frame(height: 8)
+                            }
+                        } else {
+                            SectionTitle("Sessions")
+                            ForEach(store.tree) { node in tree(node, depth: 0) }
+                        }
                     }
                 }
                 .padding(.horizontal, 10)
@@ -139,6 +165,27 @@ struct SessionSidebar: View {
         return store.sessions.values
             .filter { [$0.title, $0.name ?? "", $0.cwd].contains { $0.lowercased().contains(q) } }
             .sorted { $0.createdAt > $1.createdAt }
+    }
+}
+
+/// A computer's section in the list: its name, and a dot unless it is connected.
+private struct EnvironmentTitle: View {
+    let env: BridgeEnvironment
+    let state: BridgeClient.State
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: env.isLocal ? "laptopcomputer" : "network").font(.system(size: 10.5, weight: .medium))
+            Text(env.name).font(.system(size: 11.5, weight: .medium))
+            switch state {
+            case .connected: EmptyView()
+            case .connecting: Circle().fill(Palette.amber).frame(width: 6, height: 6)
+            case .disconnected: Circle().fill(Palette.danger).frame(width: 6, height: 6)
+            }
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.top, 4).padding(.bottom, 4)
     }
 }
 

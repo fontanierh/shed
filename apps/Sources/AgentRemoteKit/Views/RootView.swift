@@ -13,7 +13,7 @@ public struct RootView: View {
 
     public var body: some View {
         NavigationSplitView {
-            SessionSidebar(store: store) { showNewSession = true }
+            SessionSidebar(store: store, newSession: { showNewSession = true }, openSettings: { showSettings = true })
                 .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 380)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -37,7 +37,7 @@ public struct RootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(isPresented: $showNewSession) { NewSessionSheet(store: store) }
-        .sheet(isPresented: $showSettings) { ConnectionSettings(store: store) }
+        .sheet(isPresented: $showSettings) { EnvironmentSettings(store: store) }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: {
@@ -123,8 +123,9 @@ struct Unreachable: View {
                     Text("z z").font(.system(size: 16, weight: .semibold, design: .rounded)).foregroundStyle(Palette.periwinkle)
                         .offset(x: 26, y: -18)
                 }
-            Text("Can\u{2019}t reach your Mac").font(.system(size: 24, design: .serif)).foregroundStyle(Palette.moon)
-            Text("Shed couldn\u{2019}t connect to the bridge at \(store.bridgeURL).").font(.system(size: 14)).foregroundStyle(.secondary)
+            Text(store.environments.isEmpty ? "No computers yet" : "Can\u{2019}t reach \(names)").font(.system(size: 24, design: .serif)).foregroundStyle(Palette.moon)
+            Text(store.environments.isEmpty ? "Add a computer running the bridge in Settings." : "Shed couldn\u{2019}t connect to \(store.environments.count == 1 ? "its bridge" : "their bridges").")
+                .font(.system(size: 14)).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Button("Settings…") { showSettings = true }.buttonStyle(QuietButton())
                 Button { store.connect() } label: { Label("Retry", systemImage: "arrow.clockwise") }.buttonStyle(AmberButton())
@@ -133,6 +134,10 @@ struct Unreachable: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background { ZStack { Velvet(); Fireflies(count: 5, warm: 0.2, seed: 11) } }
+    }
+
+    private var names: String {
+        ListFormatter.localizedString(byJoining: store.environments.map(\.name))
     }
 }
 
@@ -167,29 +172,37 @@ struct QuietButton: ButtonStyle {
     }
 }
 
+/// One line per computer not connected, under the window or inside a session (for that session's computer only).
 struct ConnectionBar: View {
     let store: SessionStore
-    /// Opens the connection settings; without it the bar offers only Retry.
+    /// Opens the settings; without it the bar offers only Retry.
     var showSettings: Binding<Bool>? = nil
+    /// Only this session's computer.
+    var sessionId: String? = nil
 
     var body: some View {
-        switch store.connection {
-        case .connected:
-            EmptyView()
-        case .connecting:
-            bar(Text("Connecting to \(store.bridgeURL)…"), color: Palette.amber)
-        case .disconnected(let reason):
-            bar(Text("Disconnected from the bridge") + Text(reason.map { ": \($0)" } ?? ""), color: Palette.danger)
+        let shown = sessionId.flatMap { store.environment(of: $0) }.map { [$0] } ?? store.environments
+        VStack(spacing: 0) {
+            ForEach(shown) { env in
+                switch store.connection(of: env.id) {
+                case .connected:
+                    EmptyView()
+                case .connecting:
+                    bar(env, Text("Connecting to \(env.name)\u{2026}"), color: Palette.amber)
+                case .disconnected(let reason):
+                    bar(env, Text("Can\u{2019}t reach \(env.name)") + Text(reason.map { ": \($0)" } ?? ""), color: Palette.danger)
+                }
+            }
         }
     }
 
-    private func bar(_ text: Text, color: Color) -> some View {
+    private func bar(_ env: BridgeEnvironment, _ text: Text, color: Color) -> some View {
         HStack {
             Circle().fill(color).frame(width: 8, height: 8)
             text.font(.callout).lineLimit(1)
             Spacer()
-            if let showSettings { Button("Settings…") { showSettings.wrappedValue = true } }
-            Button("Retry") { store.connect() }
+            if let showSettings { Button("Settings\u{2026}") { showSettings.wrappedValue = true } }
+            Button("Retry") { store.connect(env.id) }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
@@ -198,26 +211,114 @@ struct ConnectionBar: View {
     }
 }
 
-struct ConnectionSettings: View {
-    @Bindable var store: SessionStore
+/// The computers Shed controls: this Mac, and others running the bridge, reached over Tailscale.
+struct EnvironmentSettings: View {
+    let store: SessionStore
     @Environment(\.dismiss) private var dismiss
+    @State private var editing: BridgeEnvironment?
 
     var body: some View {
         Form {
-            TextField("Bridge URL", text: $store.bridgeURL, prompt: Text("wss://my-mac.tailnet.ts.net/ws"))
-            SecureField("Token", text: $store.token)
-            Text("The token is in ~/.agent-remote/config.json on the computer running the bridge.")
-                .font(.caption).foregroundStyle(.secondary)
+            Section {
+                ForEach(store.environments) { env in
+                    Button { editing = env } label: { row(env) }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Edit\u{2026}") { editing = env }
+                            Button("Reconnect") { store.connect(env.id) }
+                            Button("Remove", role: .destructive) { store.remove(env.id) }
+                        }
+                }
+                .onDelete { offsets in offsets.map { store.environments[$0].id }.forEach(store.remove) }
+                .onMove { store.moveEnvironments(from: $0, to: $1) }
+                Button {
+                    editing = BridgeEnvironment(name: "", url: "", token: "")
+                } label: {
+                    Label("Add Computer\u{2026}", systemImage: "plus")
+                }
+            } footer: {
+                Text("Each computer runs the bridge (setup/install.sh). Its address and token are in ~/.agent-remote/config.json there.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(minWidth: 420)
+        #if os(macOS)
+        .frame(minWidth: 480, minHeight: 320)
+        #endif
+        .navigationTitle("Computers")
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+        }
+        .sheet(item: $editing) { env in
+            #if os(iOS)
+            NavigationStack { EnvironmentEditor(store: store, env: env) }
+            #else
+            EnvironmentEditor(store: store, env: env)
+            #endif
+        }
+    }
+
+    private func row(_ env: BridgeEnvironment) -> some View {
+        let state = store.connection(of: env.id)
+        let (color, status): (Color, String) = switch state {
+        case .connected: (Palette.ice, "Connected")
+        case .connecting: (Palette.amber, "Connecting\u{2026}")
+        case .disconnected(let reason): (Palette.danger, reason ?? "Not connected")
+        }
+        return HStack(spacing: 10) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(env.name).foregroundStyle(Palette.moon)
+                Text(env.url).font(.mono(11.5)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// A computer's name, bridge address and token.
+struct EnvironmentEditor: View {
+    let store: SessionStore
+    @State var env: BridgeEnvironment
+    @Environment(\.dismiss) private var dismiss
+
+    private var isNew: Bool { !store.environments.contains { $0.id == env.id } }
+
+    var body: some View {
+        Form {
+            TextField("Name", text: $env.name, prompt: Text(env.url.isEmpty ? "Jim\u{2019}s MacBook" : BridgeEnvironment.name(for: env.url)))
+            TextField("Bridge URL", text: $env.url, prompt: Text("wss://my-mac.tailnet.ts.net:7878/ws"))
+                .font(.mono(13))
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                #endif
+            SecureField("Token", text: $env.token, prompt: Text(env.isLocal ? "Read from this Mac\u{2019}s config" : "Paste the token"))
+            if !isNew {
+                Section {
+                    Button("Remove This Computer", role: .destructive) {
+                        store.remove(env.id)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        #if os(macOS)
+        .frame(minWidth: 440)
+        #endif
+        .navigationTitle(isNew ? "Add Computer" : env.name)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Connect") {
-                    store.connect()
+                Button(isNew ? "Add" : "Save") {
+                    store.save(env)
                     dismiss()
                 }
+                .disabled(env.url.trimmingCharacters(in: .whitespaces).isEmpty || (env.token.isEmpty && !env.isLocal))
             }
         }
     }

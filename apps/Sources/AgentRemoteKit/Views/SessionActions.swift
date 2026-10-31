@@ -6,6 +6,8 @@ import SwiftUI
 struct ContextWindowMenu: View {
     let store: SessionStore
     let session: SessionSummary
+    /// The choices listed in place, under a title, rather than in a submenu.
+    var inline = false
 
     private static let sizes = [400_000, 600_000, 1_000_000]
 
@@ -20,7 +22,14 @@ struct ContextWindowMenu: View {
         } label: {
             Label("Context Window", systemImage: "gauge.with.dots.needle.33percent")
         }
-        .pickerStyle(.menu)
+        .modifier(PickerShape(inline: inline))
+    }
+
+    private struct PickerShape: ViewModifier {
+        let inline: Bool
+        func body(content: Content) -> some View {
+            if inline { content.pickerStyle(.inline) } else { content.pickerStyle(.menu) }
+        }
     }
 
     /// "272k", "1M", "1.05M".

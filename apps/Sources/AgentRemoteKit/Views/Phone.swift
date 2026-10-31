@@ -16,11 +16,11 @@ public struct PhoneRootView: View {
 
     public var body: some View {
         Group {
-            if store.token.isEmpty {
+            if store.environments.isEmpty {
                 PhoneConnect(store: store)
             } else {
                 NavigationStack(path: $path) {
-                    SessionSidebar(store: store) { showNewSession = true }
+                    SessionSidebar(store: store, newSession: { showNewSession = true }, openSettings: { showSettings = true })
                         .toolbar(.hidden, for: .navigationBar)
                         .navigationDestination(for: String.self) { id in
                             if let session = store.sessions[id] {
@@ -40,7 +40,7 @@ public struct PhoneRootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(isPresented: $showNewSession) { NewSessionSheet(store: store) }
-        .sheet(isPresented: $showSettings) { NavigationStack { ConnectionSettings(store: store) } }
+        .sheet(isPresented: $showSettings) { NavigationStack { EnvironmentSettings(store: store) } }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: {
@@ -56,7 +56,7 @@ public struct PhoneRootView: View {
         }
         .onChange(of: store.sessions, initial: true) { _, sessions in activities.sync(sessions, store: store) }
         .onOpenURL { url in open(url) }
-        .task { if !store.token.isEmpty { store.start() } }
+        .task { if !store.environments.isEmpty { store.start() } }
     }
 
     /// `shed://session/<id>`, optionally `?stop=1`: from the Live Activity and notifications.
@@ -72,6 +72,7 @@ public struct PhoneRootView: View {
 /// First run: where the bridge is and its token. Shed reaches the Mac over Tailscale.
 struct PhoneConnect: View {
     @Bindable var store: SessionStore
+    @State private var name = ""
     @State private var url = ""
     @State private var token = ""
 
@@ -108,13 +109,13 @@ struct PhoneConnect: View {
                 .card(radius: 18, fill: Palette.surface.opacity(0.8))
 
                 VStack(alignment: .leading, spacing: 10) {
+                    field("Name", text: $name, prompt: url.isEmpty ? "My Mac" : BridgeEnvironment.name(for: url))
                     field("Bridge address", text: $url, prompt: "wss://my-mac.tailnet.ts.net:7878/ws")
                     field("Token", text: $token, prompt: "Paste the token", secure: true)
                 }
 
                 Button {
-                    store.bridgeURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
-                    store.token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                    store.save(BridgeEnvironment(name: name, url: url, token: token))
                     store.start()
                 } label: {
                     Label("Connect", systemImage: "arrow.right").frame(maxWidth: .infinity)
@@ -127,7 +128,6 @@ struct PhoneConnect: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .background { ZStack { Velvet(); Fireflies(count: 7, warm: 0.45, seed: 5) }.ignoresSafeArea() }
-        .onAppear { url = store.bridgeURL }
     }
 
     private func step(_ number: Int, _ icon: String, _ title: String, _ detail: String) -> some View {
