@@ -477,14 +477,11 @@ private struct Seal: View {
 
 /// An amber arc chasing its tail.
 struct Spinner: View {
-    @State private var turning = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Circle()
-            .trim(from: 0.15, to: 0.85)
-            .stroke(Palette.amber, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        SpinField(color: Palette.amber, still: reduceMotion)
             .shadow(color: Palette.amber.opacity(0.7), radius: 3)
-            .rotationEffect(.degrees(turning ? 360 : 0))
-            .onAppear { withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) { turning = true } }
+            .allowsHitTesting(false)
     }
 }

@@ -81,11 +81,32 @@ pub struct Transcript {
     changes: Vec<Change>,
     /// While rebuilding from history: the timestamp of the message being added.
     clock: Option<u64>,
+    /// Watches the block streaming now for a generation loop.
+    runaway: crate::runaway::Runaway,
+    /// Why the streaming reply was found looping, until the session takes it to stop the reply.
+    looping: Option<&'static str>,
+    /// The block streaming now was already found looping: its stop is on its way, so it isn't reported again.
+    stopped: bool,
 }
 
 impl Transcript {
     pub fn take_changes(&mut self) -> Vec<Change> {
         std::mem::take(&mut self.changes)
+    }
+
+    /// Why the reply streaming now is a generation loop, once: the session stops it.
+    pub fn take_looping(&mut self) -> Option<&'static str> {
+        self.looping.take()
+    }
+
+    fn watch(&mut self, delta: &str) {
+        if self.stopped {
+            return;
+        }
+        if let Some(reason) = self.runaway.feed(delta) {
+            self.looping = Some(reason);
+            self.stopped = true;
+        }
     }
 
     pub fn reset(&mut self, messages: &[Value]) {
@@ -240,6 +261,14 @@ impl Transcript {
             .unwrap_or(-1);
         let item_id = self.stream.get(&index).cloned();
         let text = || delta["delta"].as_str().unwrap_or("").to_string();
+        match delta["type"].as_str().unwrap_or("") {
+            "text_start" | "thinking_start" | "toolcall_start" => {
+                self.runaway.reset();
+                self.stopped = false;
+            }
+            "text_delta" | "thinking_delta" | "toolcall_delta" => self.watch(delta["delta"].as_str().unwrap_or("")),
+            _ => {}
+        }
         match delta["type"].as_str().unwrap_or("") {
             "text_start" => {
                 let id = self.add(Item::new(ItemKind::Text, ""));
@@ -419,4 +448,29 @@ impl Transcript {
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn delta(kind: &str, text: &str) -> Value {
+        json!({ "type": "message_update", "message": { "role": "assistant", "content": [{ "type": "toolCall" }] },
+                "assistantMessageEvent": { "type": kind, "delta": text } })
+    }
+
+    #[test]
+    fn flags_a_tool_call_streaming_only_whitespace_once() {
+        // What Dev1's model streamed for a quarter of an hour.
+        let mut transcript = Transcript::default();
+        transcript.handle_event(&delta("toolcall_start", ""));
+        transcript.handle_event(&delta("toolcall_delta", "{\"code\":\""));
+        let mut flagged = 0;
+        for _ in 0..1_000 {
+            transcript.handle_event(&delta("toolcall_delta", " \t\t\t\t\t\t\t\t\n      "));
+            flagged += transcript.take_looping().is_some() as usize;
+        }
+        assert_eq!(flagged, 1);
+    }
 }

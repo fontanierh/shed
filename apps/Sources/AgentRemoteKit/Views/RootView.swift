@@ -90,7 +90,6 @@ struct Welcome: View {
 
 /// A little paper lantern with a warm flicker.
 struct Lantern: View {
-    @State private var flicker = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -102,10 +101,11 @@ struct Lantern: View {
                 .overlay(VStack(spacing: 5) { ForEach(0..<3, id: \.self) { _ in Rectangle().fill(Palette.ember.opacity(0.35)).frame(height: 0.8) } })
             Capsule().fill(Palette.lineNumber).frame(width: 10, height: 3)
         }
-        .shadow(color: Palette.amber.opacity(flicker ? 0.9 : 0.6), radius: flicker ? 18 : 12)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 1.3).repeatForever()) { flicker = true }
+        .shadow(color: Palette.amber.opacity(0.6), radius: 12)
+        .background {
+            PulseField(color: Palette.amber, period: 2.6, still: reduceMotion)
+                .frame(width: 70, height: 70)
+                .allowsHitTesting(false)
         }
         .accessibilityHidden(true)
     }

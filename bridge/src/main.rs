@@ -8,6 +8,7 @@ mod media;
 mod prime;
 mod protocol;
 mod rpc;
+mod runaway;
 mod server;
 mod session;
 mod store;

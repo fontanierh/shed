@@ -16,6 +16,24 @@ enum Block: Identifiable, Equatable {
         case .jobsDone(let items): "jobs-" + (items.first?.id ?? "")
         }
     }
+
+    /// The item it starts with, which stays in it as more arrive (an activity group can also grow backward, when an
+    /// earlier page loads).
+    var firstItemId: String? {
+        switch self {
+        case .item(let item): item.id
+        case .activity(let activity): activity.steps.first?.id
+        case .jobsDone(let items): items.first?.id
+        }
+    }
+
+    func contains(_ itemId: String) -> Bool {
+        switch self {
+        case .item(let item): item.id == itemId
+        case .activity(let activity): activity.steps.contains { $0.id == itemId }
+        case .jobsDone(let items): items.contains { $0.id == itemId }
+        }
+    }
 }
 
 struct Activity: Equatable {
@@ -171,6 +189,16 @@ struct TranscriptView: View {
     @State private var metrics = ScrollMetrics()
     /// Idle unless the reader is dragging or the scroll view is still settling.
     @State private var phase = ScrollPhase.idle
+    /// The first item of the first block laid out. Only the end of a long conversation is laid out at first, and more
+    /// as the reader scrolls up: SwiftUI walks every block on each frame anything animates, so a session of hundreds of
+    /// blocks kept the main thread busy even at rest. Fixed once set, so the window only grows: new blocks join at the
+    /// end, and the blocks above what the reader is looking at never shift.
+    @State private var shownFrom: String?
+    /// Where the reader was when blocks were added above them, until the scroll view has measured them.
+    @State private var revealing: (offset: CGFloat, content: CGFloat)?
+
+    /// Blocks laid out when a session opens, and added each time the reader nears the top.
+    private static let window = 40
 
     /// What the follow logic needs from the scroll view's geometry.
     private struct Scroll: Equatable {
@@ -183,7 +211,9 @@ struct TranscriptView: View {
     }
 
     var body: some View {
-        let blocks = Activity.blocks(items, busy: session.status.isBusy)
+        let all = Activity.blocks(items, busy: session.status.isBusy)
+        let start = Self.start(of: all, from: shownFrom)
+        let blocks = all[start...]
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if blocks.isEmpty {
@@ -193,11 +223,11 @@ struct TranscriptView: View {
                         EmptyTranscript(session: session)
                     }
                 }
-                if earlier > 0, loadEarlier != nil {
+                if start > 0 || (earlier > 0 && loadEarlier != nil) {
                     Button { showEarlier() } label: {
                         HStack(spacing: 8) {
                             if loadingEarlier { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.up") }
-                            Text("Earlier conversation · \(earlier) more")
+                            Text("Earlier conversation")
                         }
                         .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Palette.moon)
                         .padding(.horizontal, 14).frame(height: 32)
@@ -235,7 +265,8 @@ struct TranscriptView: View {
                 }
             }
             .frame(maxWidth: Layout.column, alignment: .leading)
-            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: blocks.count)
+            // Only a block arriving at the end springs in: blocks laid out above the reader just appear.
+            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: blocks.last?.id)
             .padding(.horizontal, Layout.gutter)
             .padding(.top, 20)
             .padding(.bottom, 44)
@@ -263,6 +294,12 @@ struct TranscriptView: View {
             // A drag that ended in the empty space past the end, before it could spring back.
             if new == .idle { pullBackToEnd() }
         }
+        .onChange(of: items.isEmpty, initial: true) { _, empty in
+            // Opening: lay out the end of the conversation, and keep to that start from now on.
+            guard shownFrom == nil, !empty else { return }
+            let all = Activity.blocks(items, busy: session.status.isBusy)
+            shownFrom = all[max(0, all.count - Self.window)...].first?.firstItemId
+        }
         .onScrollGeometryChange(for: Scroll.self) { geometry in
             // The container already leaves out the insets (the composer, and on iPhone the navigation bar), but the offset
             // starts above the top one: measure from the top of the content.
@@ -275,8 +312,14 @@ struct TranscriptView: View {
                 metrics.offset = new.offset
                 metrics.moved &+= 1
             }
-            // Reading up toward the top: bring in the page before it.
-            if new.offset < old.offset, new.offset < 800, earlier > 0, !loadingEarlier { showEarlier() }
+            if let revealing, new.content != revealing.content {
+                // Blocks just went in above: keep what the reader was looking at where it was.
+                self.revealing = nil
+                position.scrollTo(y: revealing.offset + new.content - revealing.content)
+                return
+            }
+            // Reading up toward the top: bring in the blocks before it, a couple of screens ahead.
+            if new.offset < old.offset, new.offset < new.container * 2, revealing == nil, !loadingEarlier { showEarlier() }
             // A scroll toward the end that landed short: when the content grows twice in a row, the second request can be
             // dropped while the first is still being applied.
             #if os(iOS)
@@ -357,17 +400,32 @@ struct TranscriptView: View {
         }
     }
 
-    /// Loads the page before the first item, keeping what was at the top in place. An activity group can grow
-    /// backward into the new page and change its id; a message can't.
+    /// Where the window starts: the block holding `shownFrom`, or the last `window` blocks before it is set.
+    private static func start(of blocks: [Block], from item: String?) -> Int {
+        if let item, let index = blocks.firstIndex(where: { $0.contains(item) }) { return index }
+        return max(0, blocks.count - window)
+    }
+
+    /// Lays out the blocks before the first one shown, loading the page before the first item when none are left,
+    /// and keeps what the reader was looking at in place.
     private func showEarlier() {
-        guard let loadEarlier else { return }
-        // The first item standing as a block of its own: anything but a step of an activity group, or a bash-done notice
-        // (which can join a group too).
-        let anchor = items.first { $0.isVisible && $0.kind != .tool && $0.kind != .thinking && !$0.isJobDone }?.id
-        Task {
-            await loadEarlier()
-            if let anchor { position.scrollTo(id: anchor, anchor: .top) }
+        let start = Self.start(of: Activity.blocks(items, busy: session.status.isBusy), from: shownFrom)
+        if start > 0 {
+            reveal()
+        } else if earlier > 0, let loadEarlier {
+            Task {
+                await loadEarlier()
+                reveal()
+            }
         }
+    }
+
+    private func reveal() {
+        let all = Activity.blocks(items, busy: session.status.isBusy)
+        let start = Self.start(of: all, from: shownFrom)
+        guard start > 0, let first = all[max(0, start - Self.window)].firstItemId else { return }
+        revealing = (metrics.offset, metrics.content)
+        shownFrom = first
     }
 
     /// On iPhone a scroll the reader makes has a phase; the scroll view's own adjustments don't. A Mac's mouse wheel
@@ -1142,20 +1200,46 @@ struct NoteView: View {
             ReportCard(name: "Parent", caption: note.tag.hasPrefix("task") ? "sent a task" : "sent a message", date: date, text: note.body,
                        icon: "arrow.turn.right.down", open: openParent)
         case .childExited:
-            HStack(spacing: 6) {
-                Image(systemName: "pause.circle").foregroundStyle(.secondary)
-                Button(note.child ?? "subagent") { openChild(note.child ?? "") }
-                    .buttonStyle(.plain).fontWeight(.medium)
-                Text("ended its turn without replying yet").foregroundStyle(.secondary)
-            }
-            .font(.callout)
-            .help(note.body)
+            PausedChild(name: note.child ?? "subagent", date: date, detail: note.body) { openChild(note.child ?? "") }
         case .jobDone:
             JobDoneView(note: note)
         case .other:
             Label(note.tag.isEmpty ? note.body : "[\(note.tag)] \(note.body)", systemImage: "info.circle")
                 .font(.callout).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// A subagent that stopped without reporting back: one quiet line like a report's, opening the subagent.
+struct PausedChild: View {
+    let name: String
+    let date: Date?
+    let detail: String
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) {
+                Avatar(name: name, size: 22).saturation(0.4).opacity(0.8)
+                (Text(name).fontWeight(.semibold).foregroundStyle(.primary)
+                    + Text(" paused without a reply").foregroundStyle(.secondary))
+                    .font(.system(size: 13))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                if let date {
+                    Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
+                }
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .card(radius: 11, fill: Palette.surface.opacity(0.4), border: Palette.border.opacity(0.6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(detail.isEmpty ? "Open subagent \(name)" : detail)
+        .accessibilityLabel("\(name) paused without a reply")
     }
 }
 
@@ -1196,7 +1280,7 @@ struct ReportCard: View {
                     }
                     Spacer(minLength: 8)
                     if let date {
-                        Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                        Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
                     }
                     Chevron(open: expanded)
                 }

@@ -323,22 +323,18 @@ struct ActivityIcon: View {
 struct Ember: View {
     var color: Color = Palette.amber
     var size: CGFloat = 7
-    @State private var ripple = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            Circle().stroke(color.opacity(ripple ? 0 : 0.7), lineWidth: 1)
-                .frame(width: size, height: size)
-                .scaleEffect(ripple ? 2.6 : 1)
-            Circle().fill(color).frame(width: size, height: size).shadow(color: color.opacity(0.9), radius: 4)
-        }
-        .frame(width: 12, height: 12)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { ripple = true }
-        }
-        .accessibilityLabel("Working")
+        Circle().fill(color).frame(width: size, height: size).shadow(color: color.opacity(0.9), radius: 4)
+            .background {
+                // The ripple runs in Core Animation: no redraw per frame for as long as the agent works.
+                RippleField(color: color, diameter: size, still: reduceMotion)
+                    .frame(width: size * 3, height: size * 3)
+                    .allowsHitTesting(false)
+            }
+            .frame(width: 12, height: 12)
+            .accessibilityLabel("Working")
     }
 }
 

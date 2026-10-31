@@ -799,6 +799,7 @@ impl App {
             _ => {}
         }
         st.transcript.handle_event(event);
+        let looping = st.transcript.take_looping();
         self.flush_changes(&session.id, &mut st);
         if !st.named && session.backend == Backend::Pi {
             if let Some(first) = st.transcript.first_user_text() {
@@ -826,6 +827,30 @@ impl App {
                 let _ = app.resnapshot(&session).await;
             });
         }
+        if let Some(reason) = looping {
+            let (app, session) = (self.clone(), session.clone());
+            tokio::spawn(async move { app.stop_looping_reply(&session, reason).await });
+        }
+    }
+
+    /// A reply stuck in a generation loop streams until the model's output limit, a quarter of an hour or more, with
+    /// nothing to show. Stop it, and tell the agent why so it tries again rather than repeating itself.
+    async fn stop_looping_reply(self: &Arc<Self>, session: &Arc<Session>, reason: &str) {
+        eprintln!("session {}: stopping a looping reply ({reason})", session.id);
+        let note = format!(
+            "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
+             Carry on from where you were; if you were writing a tool call, write it again."
+        );
+        if session.backend == Backend::Prime {
+            // Queued as a steer first, so stopping the reply delivers it straight away.
+            let _ = self.command(session, "prompt", json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true })).await;
+            let _ = self.command(session, "abort_and_send_queued", json!({})).await;
+        } else {
+            let _ = self.command(session, "abort", json!({})).await;
+            let _ = self.command(session, "prompt", json!({ "message": note })).await;
+        }
+        let mut st = session.state.lock().await;
+        self.schedule_refresh(session, &mut st);
     }
 
     /// Mirror the children of a Pi `subagent` tool call as read-only sessions.

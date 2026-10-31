@@ -166,14 +166,14 @@ struct SproutShape: Shape {
     }
 }
 
-/// An agent as a little round spirit: a soft glowing body and two dot eyes. It glows amber and bobs while it works.
+/// An agent as a little round spirit: a soft glowing body and two dot eyes. While it works, an amber glow breathes
+/// behind it, drawn by Core Animation so a working agent never redraws the window frame by frame.
 struct Spirit: View {
     var color: Color
     var size: CGFloat = 22
     var working = false
     /// Asleep: eyes closed, for empty and disconnected states.
     var asleep = false
-    @State private var bob = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -187,11 +187,15 @@ struct Spirit: View {
             eyes
         }
         .frame(width: size, height: size)
-        .shadow(color: (working ? Palette.amber : color).opacity(working ? 0.75 : 0.35), radius: working ? size * 0.4 : size * 0.18)
-        .offset(y: working && bob && !reduceMotion ? -size * 0.08 : 0)
-        .animation(working ? .easeInOut(duration: 0.9).repeatForever() : .default, value: bob)
-        .onAppear { bob = working }
-        .onChange(of: working) { _, now in bob = now }
+        .shadow(color: color.opacity(0.35), radius: size * 0.18)
+        .background {
+            if working {
+                PulseField(color: Palette.amber, still: reduceMotion)
+                    .frame(width: size * 2.1, height: size * 2.1)
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
         .accessibilityHidden(true)
     }
 
@@ -262,28 +266,19 @@ extension View {
     }
 }
 
-/// Light sweeping across text, like a firefly passing: for things in progress.
+/// Light sweeping across text, like a firefly passing: for things in progress. The sweep runs in Core Animation.
 struct Shimmer: ViewModifier {
     var active: Bool
-    @State private var phase: CGFloat = -1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         if active && !reduceMotion {
             content
                 .overlay {
-                    GeometryReader { geometry in
-                        LinearGradient(colors: [.clear, Palette.moon.opacity(0.85), .clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: max(30, geometry.size.width * 0.45))
-                            .offset(x: phase * geometry.size.width * 1.4)
-                            .blendMode(.plusLighter)
-                    }
-                    .mask(content)
-                    .allowsHitTesting(false)
-                }
-                .onAppear {
-                    phase = -0.5
-                    withAnimation(.linear(duration: 1.8).repeatForever(autoreverses: false)) { phase = 1 }
+                    SweepField(color: Palette.moon)
+                        .blendMode(.plusLighter)
+                        .mask(content)
+                        .allowsHitTesting(false)
                 }
         } else {
             content

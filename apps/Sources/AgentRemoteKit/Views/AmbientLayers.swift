@@ -188,6 +188,116 @@ struct TrailField: AmbientLayers {
     }
 }
 
+/// A soft glow breathing behind something at work: a working spirit, a lit lantern.
+struct PulseField: AmbientLayers {
+    let color: Color
+    /// Seconds per breath.
+    var period = 1.8
+    var still = false
+
+    func install(on host: CALayer, size: CGSize, scale: CGFloat) {
+        let glow = glowLayer(color.resolve(in: EnvironmentValues()).cgColor, alpha: 0.55, diameter: min(size.width, size.height), scale: scale)
+        glow.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        glow.opacity = 0.7
+        host.addSublayer(glow)
+        guard !still else { return }
+        glow.add(loop("opacity", period: period) { t in 0.45 + 0.55 * (0.5 - 0.5 * cos(t / period * 2 * .pi)) }, forKey: "breath")
+        glow.add(loop("transform.scale", period: period) { t in 0.86 + 0.14 * (0.5 - 0.5 * cos(t / period * 2 * .pi)) }, forKey: "swell")
+    }
+}
+
+/// A ring rippling out from a point and fading, again and again: an ember at work.
+struct RippleField: AmbientLayers {
+    let color: Color
+    /// The ember's diameter; the ring starts there.
+    let diameter: CGFloat
+    var still = false
+
+    func install(on host: CALayer, size: CGSize, scale: CGFloat) {
+        guard !still else { return }
+        let ring = CAShapeLayer()
+        ring.path = CGPath(ellipseIn: CGRect(x: 0, y: 0, width: diameter, height: diameter), transform: nil)
+        ring.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+        ring.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        ring.fillColor = nil
+        ring.strokeColor = color.resolve(in: EnvironmentValues()).cgColor
+        ring.lineWidth = 1
+        ring.contentsScale = scale
+        host.addSublayer(ring)
+        let grow = CABasicAnimation(keyPath: "transform.scale")
+        grow.fromValue = 1
+        grow.toValue = 2.6
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0.7
+        fade.toValue = 0
+        let group = CAAnimationGroup()
+        group.animations = [grow, fade]
+        group.duration = 1.4
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        group.repeatCount = .infinity
+        group.isRemovedOnCompletion = false
+        ring.add(group, forKey: "ripple")
+    }
+}
+
+/// An arc chasing its tail.
+struct SpinField: AmbientLayers {
+    let color: Color
+    var lineWidth: CGFloat = 2
+    var still = false
+
+    func install(on host: CALayer, size: CGSize, scale: CGFloat) {
+        let side = min(size.width, size.height) - lineWidth
+        let arc = CAShapeLayer()
+        arc.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+        arc.position = CGPoint(x: size.width / 2, y: size.height / 2)
+        arc.path = CGPath(ellipseIn: arc.bounds, transform: nil)
+        arc.strokeStart = 0.15
+        arc.strokeEnd = 0.85
+        arc.fillColor = nil
+        arc.lineCap = .round
+        arc.lineWidth = lineWidth
+        arc.strokeColor = color.resolve(in: EnvironmentValues()).cgColor
+        arc.contentsScale = scale
+        host.addSublayer(arc)
+        guard !still else { return }
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = 2 * Double.pi
+        turn.duration = 0.9
+        turn.repeatCount = .infinity
+        turn.isRemovedOnCompletion = false
+        arc.add(turn, forKey: "turn")
+    }
+}
+
+/// A band of light sweeping across, left to right. Masked to text, it is the shimmer of something in progress.
+struct SweepField: AmbientLayers {
+    let color: Color
+    var period = 1.8
+    var still = false
+
+    func install(on host: CALayer, size: CGSize, scale: CGFloat) {
+        guard !still else { return }
+        let cg = color.resolve(in: EnvironmentValues()).cgColor
+        let band = CAGradientLayer()
+        band.colors = [cg.copy(alpha: 0) ?? cg, cg.copy(alpha: 0.85) ?? cg, cg.copy(alpha: 0) ?? cg]
+        band.startPoint = CGPoint(x: 0, y: 0.5)
+        band.endPoint = CGPoint(x: 1, y: 0.5)
+        let width = max(30, size.width * 0.45)
+        band.bounds = CGRect(x: 0, y: 0, width: width, height: size.height)
+        band.position = CGPoint(x: -width, y: size.height / 2)
+        host.addSublayer(band)
+        let move = CABasicAnimation(keyPath: "position.x")
+        move.fromValue = -width / 2 - size.width * 0.2
+        move.toValue = size.width * 1.2 + width / 2
+        move.duration = period
+        move.repeatCount = .infinity
+        move.isRemovedOnCompletion = false
+        band.add(move, forKey: "sweep")
+    }
+}
+
 #if os(macOS)
 extension FireflyField: NSViewRepresentable {
     func makeNSView(context: Context) -> AmbientView { AmbientView() }
@@ -198,6 +308,26 @@ extension TrailField: NSViewRepresentable {
     func makeNSView(context: Context) -> AmbientView { AmbientView() }
     func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
 }
+
+extension PulseField: NSViewRepresentable {
+    func makeNSView(context: Context) -> AmbientView { AmbientView() }
+    func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension RippleField: NSViewRepresentable {
+    func makeNSView(context: Context) -> AmbientView { AmbientView() }
+    func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension SpinField: NSViewRepresentable {
+    func makeNSView(context: Context) -> AmbientView { AmbientView() }
+    func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension SweepField: NSViewRepresentable {
+    func makeNSView(context: Context) -> AmbientView { AmbientView() }
+    func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
+}
 #else
 extension FireflyField: UIViewRepresentable {
     func makeUIView(context: Context) -> AmbientView { AmbientView() }
@@ -205,6 +335,26 @@ extension FireflyField: UIViewRepresentable {
 }
 
 extension TrailField: UIViewRepresentable {
+    func makeUIView(context: Context) -> AmbientView { AmbientView() }
+    func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension PulseField: UIViewRepresentable {
+    func makeUIView(context: Context) -> AmbientView { AmbientView() }
+    func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension RippleField: UIViewRepresentable {
+    func makeUIView(context: Context) -> AmbientView { AmbientView() }
+    func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension SpinField: UIViewRepresentable {
+    func makeUIView(context: Context) -> AmbientView { AmbientView() }
+    func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
+}
+
+extension SweepField: UIViewRepresentable {
     func makeUIView(context: Context) -> AmbientView { AmbientView() }
     func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
 }

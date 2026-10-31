@@ -743,8 +743,8 @@ struct Composer: View {
                 GoalCard(goal: goal, cancel: store.clearGoal)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if !session.queue.isEmpty {
-                QueuedMessages(queue: session.queue)
+            if !session.queue.forReader.isEmpty {
+                QueuedMessages(queue: session.queue.forReader)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
             if busy {
@@ -875,7 +875,7 @@ struct Composer: View {
         .onAppear { focused = true }
         #endif
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: busy)
-        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.queue.steering.count + session.queue.followUp.count)
+        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.queue.forReader.steering.count + session.queue.forReader.followUp.count)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.goal?.objective)
     }
 
@@ -1077,6 +1077,19 @@ struct GoalCard: View {
         } message: {
             Text("The agent stops pursuing it after its current step.")
         }
+    }
+}
+
+extension Queue {
+    /// What the reader would recognize as waiting: Prime also queues its own notices (a subagent that exited or was
+    /// cancelled, a message from another agent, a goal's continuation) for the end of the turn, and an agent pursuing a
+    /// goal rarely ends one, so they would sit in the bar for good. They show in the transcript once delivered.
+    var forReader: Queue {
+        Queue(steering: steering.filter { !Self.isNotice($0) }, followUp: followUp.filter { !Self.isNotice($0) })
+    }
+
+    private static func isNotice(_ text: String) -> Bool {
+        text.hasPrefix("Agent message received:") || text.hasPrefix("[goal") || Note(text).kind != .other
     }
 }
 

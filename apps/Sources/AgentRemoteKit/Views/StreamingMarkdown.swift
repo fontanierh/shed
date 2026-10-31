@@ -225,7 +225,8 @@ struct StreamingMarkdown: View {
 }
 
 /// Draws text so that characters surface in reading order as `progress` goes from 0 to 1: a soft front a few
-/// characters wide moves through, each character rising out of a slight blur as it passes.
+/// characters wide moves through, each character fading up into place as it passes. No blur: a filter per glyph
+/// costs the GPU an offscreen pass for every character in flight, every frame.
 private struct Sweep: TextRenderer {
     var progress: Double
     /// For a block that grew: the rendered length of its last text, and where the new characters start in it.
@@ -266,7 +267,6 @@ private struct Sweep: TextRenderer {
                 var glyph = context
                 glyph.opacity = shown
                 glyph.translateBy(x: 0, y: (1 - shown) * 3)
-                glyph.addFilter(.blur(radius: (1 - shown) * 2.5))
                 glyph.draw(slice)
             }
         }
