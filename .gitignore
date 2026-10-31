@@ -1,0 +1,8 @@
+node_modules/
+.build/
+*.xcodeproj/xcuserdata/
+DerivedData/
+.DS_Store
+apps/build/
+target/
+/media-demo.*

@@ -1,0 +1,391 @@
+// The session tree: root sessions with their subagents folded below, plus every subagent at work at a glance.
+import SwiftUI
+
+struct SessionSidebar: View {
+    let store: SessionStore
+    var newSession: () -> Void = {}
+    @State private var query = ""
+    /// Sessions whose subagents are shown.
+    @State private var expanded: Set<String> = []
+    @State private var renaming: SessionSummary?
+    @FocusState private var searching: Bool
+    @Namespace private var selection
+
+    var body: some View {
+        list.renameSession($renaming, store: store)
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Sprout(size: 26)
+                Text("Shed").font(.system(size: 26, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
+            }
+            .padding(.horizontal, 18)
+            #if os(macOS)
+            // Below the window's traffic lights.
+            .padding(.top, 34)
+            #else
+            .padding(.top, 8)
+            #endif
+            .padding(.bottom, 14)
+
+            searchField.padding(.horizontal, 12).padding(.bottom, 12)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    if !query.isEmpty {
+                        SectionTitle("Results")
+                        ForEach(matches) { session in row(session, depth: 0) }
+                    } else {
+                        let active = store.activeSubagents
+                        if !active.isEmpty {
+                            SectionTitle("At work · \(active.count)")
+                            ForEach(active) { sub in
+                                SidebarRow(session: sub, depth: 0, selected: store.selectedId == sub.id, selection: selection,
+                                           detail: [sub.activityText, store.parent(of: sub).map { "in \($0.title)" }].compactMap { $0 }.joined(separator: " · "))
+                                    .onTapGesture { store.select(sub.id) }
+                            }
+                            Spacer().frame(height: 10)
+                        }
+                        SectionTitle("Sessions")
+                        ForEach(store.tree) { node in tree(node, depth: 0) }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 12)
+                .animation(.spring(response: 0.38, dampingFraction: 0.82), value: store.tree.map(\.id))
+                .animation(.spring(response: 0.38, dampingFraction: 0.82), value: expanded)
+                .animation(.spring(response: 0.34, dampingFraction: 0.8), value: store.selectedId)
+            }
+            .scrollIndicators(.never)
+            .overlay {
+                if store.sessions.isEmpty && store.connection == .connected { EmptySidebar() }
+            }
+
+            NewSessionButton(action: newSession)
+                .disabled(store.connection != .connected)
+                .padding(12)
+        }
+        .background {
+            ZStack(alignment: .bottomLeading) {
+                Velvet(base: Palette.sidebar, light: .top)
+                Sprig()
+                    .fill(Palette.ice.opacity(0.07))
+                    .frame(width: 110, height: 170)
+                    .offset(x: -8, y: -64)
+                Fireflies(count: 4, warm: 0.5, seed: 7)
+            }
+            .ignoresSafeArea()
+        }
+        #if os(macOS)
+        .overlay(alignment: .trailing) { Rectangle().fill(Palette.border.opacity(0.7)).frame(width: 1).ignoresSafeArea() }
+        #endif
+        .background {
+            // ⌘K focuses search.
+            Button("") { searching = true }.keyboardShortcut("k").hidden()
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+            TextField("Search sessions", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .focused($searching)
+                .onKeyPress(.escape) { query = ""; searching = false; return .handled }
+            if !query.isEmpty {
+                Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                    .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .card(radius: 9, fill: Palette.sunken.opacity(0.7), border: searching ? Palette.ice.opacity(0.45) : Palette.border)
+        .animation(.easeOut(duration: 0.15), value: searching)
+    }
+
+    private func tree(_ node: SessionNode, depth: Int) -> AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 2) {
+            row(node.session, depth: depth, children: node.children?.count ?? 0)
+            if let children = node.children, expanded.contains(node.id) {
+                ForEach(children) { child in tree(child, depth: depth + 1) }
+            }
+        })
+    }
+
+    private func row(_ session: SessionSummary, depth: Int, children: Int = 0) -> some View {
+        SidebarRow(session: session, depth: depth, selected: store.selectedId == session.id, selection: selection,
+                   activeBelow: store.activeDescendants(of: session.id), children: children,
+                   open: Binding(get: { expanded.contains(session.id) }, set: { if $0 { expanded.insert(session.id) } else { expanded.remove(session.id) } }))
+            .onTapGesture { store.select(session.id) }
+            .contextMenu {
+                if !session.isSubagent && !session.readOnly {
+                    Button("Rename…") { renaming = session }
+                }
+                Button("Copy Path") { Clipboard.copy(session.cwd) }
+                if !session.isSubagent {
+                    Divider()
+                    Button("Delete", role: .destructive) { store.delete(session.id) }
+                }
+            }
+            .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity).combined(with: .scale(scale: 0.96, anchor: .top)),
+                                    removal: .opacity.combined(with: .scale(scale: 0.96))))
+    }
+
+    private var matches: [SessionSummary] {
+        let q = query.lowercased()
+        return store.sessions.values
+            .filter { [$0.title, $0.name ?? "", $0.cwd].contains { $0.lowercased().contains(q) } }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+}
+
+private struct SectionTitle: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.top, 4).padding(.bottom, 4)
+    }
+}
+
+/// A session: its spirit, title, what it's doing, and its state. The selected row carries the lantern.
+struct SidebarRow: View {
+    let session: SessionSummary
+    let depth: Int
+    let selected: Bool
+    let selection: Namespace.ID
+    var activeBelow = 0
+    var children = 0
+    var open: Binding<Bool>? = nil
+    var detail: String? = nil
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if children > 0, let open {
+                Button { open.wrappedValue.toggle() } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(open.wrappedValue ? 90 : 0))
+                        .frame(width: 10, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(open.wrappedValue ? "Hide subagents" : "Show subagents")
+            } else {
+                Spacer().frame(width: 10)
+            }
+            Spirit(color: session.isSubagent ? Palette.avatar(session.name ?? "s") : Palette.agent(session.agent),
+                   size: depth > 0 ? 22 : 28, working: session.status.isBusy)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(session.isSubagent ? (session.name ?? "subagent") : session.title)
+                        .font(.system(size: 13, weight: selected ? .medium : .regular))
+                        .foregroundStyle(Palette.moon)
+                        .lineLimit(1)
+                    // Subagents often run on other models than their parent: say which.
+                    if session.isSubagent, let model = session.model { ModelTag(model: model, size: 10) }
+                }
+                Text(detail ?? secondary)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.amber.opacity(0.9)) : AnyShapeStyle(.secondary))
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+            }
+            Spacer(minLength: 4)
+            if activeBelow > 0 {
+                Text("\(activeBelow)")
+                    .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
+                    .frame(minWidth: 18, minHeight: 18)
+                    .background(Palette.amber.opacity(0.16), in: Circle())
+                    .foregroundStyle(Palette.amber)
+                    .contentTransition(.numericText())
+                    .help("\(activeBelow) subagent(s) at work")
+            }
+            ActivityIcon(session: session)
+        }
+        .padding(.leading, 2 + CGFloat(depth) * 16)
+        .padding(.trailing, 10)
+        .padding(.vertical, depth > 0 ? 5 : 7)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Palette.raised)
+                    .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [Palette.amber.opacity(0.75), Palette.amber.opacity(0.35)],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
+                    .shadow(color: Palette.amber.opacity(0.18), radius: 10)
+                    .matchedGeometryEffect(id: "lantern", in: selection)
+            } else if hovering {
+                RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Palette.raised.opacity(0.55))
+            }
+        }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+    }
+
+    private var secondary: String {
+        if let activity = session.activityText { return activity.prefix(1).uppercased() + activity.dropFirst() }
+        if session.isSubagent { return session.title }
+        return "\(session.agent.displayName) · \(session.folderName)"
+    }
+}
+
+struct NewSessionButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var enabled
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Palette.canvas)
+                    .frame(width: 24, height: 24)
+                    .background(Palette.amber.gradient, in: Circle())
+                    .glow(radius: hovering ? 10 : 5)
+                    .rotationEffect(.degrees(hovering ? 90 : 0))
+                Text("New Session").font(.system(size: 13.5, weight: .medium)).foregroundStyle(Palette.moon)
+                Spacer()
+                #if os(macOS)
+                Text("⌘N").font(.system(size: 11)).foregroundStyle(.tertiary)
+                #endif
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .card(radius: 12, fill: hovering ? Palette.raised : Palette.surface)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .keyboardShortcut("n")
+        .opacity(enabled ? 1 : 0.5)
+        .onHover { hovering = $0 }
+        .animation(.spring(response: 0.35, dampingFraction: 0.6), value: hovering)
+    }
+}
+
+/// Buttons sink a little when pressed.
+struct PressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+private struct EmptySidebar: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Spirit(color: Palette.ice, size: 48, asleep: true)
+                .overlay(alignment: .topTrailing) {
+                    Text("z").font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Palette.periwinkle)
+                        .offset(x: 12, y: -14)
+                }
+            Text("No sessions yet").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.moon)
+            Text("Start one with New Session.").font(.callout).foregroundStyle(.secondary)
+        }
+        .padding(.bottom, 60)
+    }
+}
+
+/// An ember that breathes while working, an hourglass while waiting on background commands, otherwise a status dot.
+struct ActivityIcon: View {
+    let session: SessionSummary
+
+    var body: some View {
+        if session.status.isBusy {
+            Ember(color: session.status == .compacting ? Palette.lilac : Palette.amber)
+        } else if session.backgroundJobs > 0 {
+            Image(systemName: "hourglass")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Palette.amber)
+                .frame(width: 12)
+                .help("\(session.backgroundJobs) background command(s) running; it wakes when they finish")
+        } else {
+            StatusDot(status: session.status)
+        }
+    }
+}
+
+/// A live dot: a warm core with a ring that keeps rippling out.
+struct Ember: View {
+    var color: Color = Palette.amber
+    var size: CGFloat = 7
+    @State private var ripple = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(color.opacity(ripple ? 0 : 0.7), lineWidth: 1)
+                .frame(width: size, height: size)
+                .scaleEffect(ripple ? 2.6 : 1)
+            Circle().fill(color).frame(width: size, height: size).shadow(color: color.opacity(0.9), radius: 4)
+        }
+        .frame(width: 12, height: 12)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { ripple = true }
+        }
+        .accessibilityLabel("Working")
+    }
+}
+
+extension SessionSummary {
+    /// "working", "2 background jobs", or nil when finished.
+    var activityText: String? {
+        if status.isBusy { return status == .compacting ? "compacting" : "working" }
+        if backgroundJobs > 0 { return backgroundJobs == 1 ? "1 background command" : "\(backgroundJobs) background commands" }
+        return nil
+    }
+}
+
+struct StatusDot: View {
+    let status: SessionStatus
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .shadow(color: color.opacity(0.6), radius: 3)
+            .frame(width: 12)
+            .help(status.rawValue.capitalized)
+    }
+
+    private var color: Color {
+        switch status {
+        case .running, .starting: Palette.amber
+        case .compacting: Palette.lilac
+        case .idle: Palette.ice
+        case .done: Palette.periwinkle.opacity(0.6)
+        case .stopped: Color.secondary.opacity(0.6)
+        case .error: Palette.danger
+        }
+    }
+}
+
+struct AgentBadge: View {
+    let agent: AgentKind
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Spirit(color: Palette.agent(agent), size: 16)
+            Text(agent.displayName).font(.system(size: 12.5, weight: .medium))
+        }
+        .padding(.leading, 4).padding(.trailing, 11).frame(height: 26)
+        .background(Palette.agent(agent).opacity(0.12), in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.agent(agent).opacity(0.32)))
+        .foregroundStyle(Palette.agent(agent))
+    }
+}

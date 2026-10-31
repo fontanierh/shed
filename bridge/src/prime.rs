@@ -1,0 +1,295 @@
+//! Client for the Prime Agent supervisor socket (see PRIME-DAEMON.md). One connection carries
+//! every Prime session, including subagents and sessions started from Prime's own TUI.
+
+use std::collections::HashMap;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Result};
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::unix::OwnedWriteHalf;
+use tokio::net::UnixStream;
+use tokio::sync::{mpsc, oneshot};
+
+const PROTOCOL_VERSION: u64 = 7;
+
+pub enum DaemonEvent {
+    /// (Re)connected; carries the full roster from `roster_subscribe`.
+    Roster(Vec<Value>),
+    RosterUpdate(Vec<Value>),
+    SessionEvent { active_session_id: String, event: Value },
+    SessionClosed(String),
+    /// A session stopped. Its last roster row has no activeSessionId, only its transcript file.
+    Inactive { session_file: String },
+    Disconnected(String),
+}
+
+type Pending = oneshot::Sender<Result<Value, String>>;
+
+pub struct PrimeDaemon {
+    client_id: String,
+    writer: tokio::sync::Mutex<Option<OwnedWriteHalf>>,
+    pending: Mutex<HashMap<String, Pending>>,
+    next_id: AtomicU64,
+}
+
+/// Where the daemon may listen: newer Prime builds use `prime-agent-rust-<uid>`, older ones `prime-agent-<uid>`.
+pub fn socket_paths() -> Vec<String> {
+    if let Ok(path) = std::env::var("PRIME_AGENT_DAEMON_SOCKET") {
+        return vec![path];
+    }
+    let tmp = std::process::Command::new("getconf")
+        .arg("DARWIN_USER_TEMP_DIR")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| std::env::var("TMPDIR").ok())
+        .unwrap_or_else(|| "/tmp/".into());
+    let uid = unsafe { libc_getuid() };
+    let tmp = tmp.trim_end_matches('/');
+    vec![format!("{tmp}/prime-agent-rust-{uid}/daemon.sock"), format!("{tmp}/prime-agent-{uid}/daemon.sock")]
+}
+
+async fn connect_any(paths: &[String]) -> Option<UnixStream> {
+    for path in paths {
+        if let Ok(stream) = UnixStream::connect(path).await {
+            return Some(stream);
+        }
+    }
+    None
+}
+
+extern "C" {
+    #[link_name = "getuid"]
+    fn libc_getuid() -> u32;
+}
+
+/// The environment Prime workers get for sessions the bridge creates. Prime's TUI forwards its
+/// whole environment; the bridge forwards only what tools need.
+fn launch_env() -> Value {
+    let keys = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM", "TMPDIR"];
+    let mut env = serde_json::Map::new();
+    for key in keys {
+        if let Ok(value) = std::env::var(key) {
+            env.insert(key.into(), Value::String(value));
+        }
+    }
+    env.entry("TERM").or_insert_with(|| Value::String("xterm-256color".into()));
+    Value::Object(env)
+}
+
+impl PrimeDaemon {
+    /// Connects in the background and keeps reconnecting; events flow through the returned channel.
+    pub fn start(client_id: String) -> (Arc<PrimeDaemon>, mpsc::UnboundedReceiver<DaemonEvent>) {
+        let daemon = Arc::new(PrimeDaemon {
+            client_id,
+            writer: tokio::sync::Mutex::new(None),
+            pending: Mutex::new(HashMap::new()),
+            next_id: AtomicU64::new(0),
+        });
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(daemon.clone().run(tx));
+        (daemon, rx)
+    }
+
+    async fn run(self: Arc<Self>, tx: mpsc::UnboundedSender<DaemonEvent>) {
+        let mut delay = Duration::from_secs(1);
+        loop {
+            match self.connect_once(&tx).await {
+                Ok(()) => delay = Duration::from_secs(1),
+                Err(e) => {
+                    let _ = tx.send(DaemonEvent::Disconnected(e.to_string()));
+                }
+            }
+            *self.writer.lock().await = None;
+            for (_, waiter) in self.pending.lock().unwrap().drain() {
+                let _ = waiter.send(Err("Prime daemon disconnected".into()));
+            }
+            tokio::time::sleep(delay).await;
+            delay = (delay * 2).min(Duration::from_secs(30));
+        }
+    }
+
+    async fn connect_once(self: &Arc<Self>, tx: &mpsc::UnboundedSender<DaemonEvent>) -> Result<()> {
+        let paths = socket_paths();
+        let stream = match connect_any(&paths).await {
+            Some(s) => s,
+            None => {
+                start_daemon()?;
+                let mut connected = None;
+                for _ in 0..40 {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    connected = connect_any(&paths).await;
+                    if connected.is_some() {
+                        break;
+                    }
+                }
+                connected.ok_or_else(|| anyhow!("Prime daemon did not start (socket {})", paths.join(" or ")))?
+            }
+        };
+        let (read, write) = stream.into_split();
+        let mut lines = BufReader::new(read);
+        let mut buf = Vec::new();
+
+        // The server greets first; refuse a protocol we haven't verified.
+        lines.read_until(b'\n', &mut buf).await?;
+        let hello: Value = serde_json::from_slice(&buf)?;
+        let version = hello["protocol"]["version"].as_u64().unwrap_or(0);
+        if hello["type"] != "daemon_hello" || version != PROTOCOL_VERSION {
+            bail!(
+                "unsupported Prime daemon protocol {version} (app {}); the bridge supports {PROTOCOL_VERSION}",
+                hello["appVersion"].as_str().unwrap_or("?")
+            );
+        }
+        *self.writer.lock().await = Some(write);
+
+        let reader = {
+            let daemon = self.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                loop {
+                    buf.clear();
+                    match lines.read_until(b'\n', &mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                    let Ok(message) = serde_json::from_slice::<Value>(&buf) else { continue };
+                    daemon.dispatch(message, &tx);
+                }
+            })
+        };
+
+        let roster = self.supervisor("roster_subscribe", json!({})).await?;
+        let rows = roster["roster"].as_array().map(|rows| rows.iter().map(|r| r["summary"].clone()).collect()).unwrap_or_default();
+        let _ = tx.send(DaemonEvent::Roster(rows));
+        let _ = reader.await;
+        bail!("Prime daemon connection closed")
+    }
+
+    fn dispatch(&self, message: Value, tx: &mpsc::UnboundedSender<DaemonEvent>) {
+        match message["type"].as_str().unwrap_or("") {
+            "response" => {
+                let Some(id) = message["id"].as_str() else { return };
+                let Some(waiter) = self.pending.lock().unwrap().remove(id) else { return };
+                let result = if message["success"] == true {
+                    Ok(message.get("data").cloned().unwrap_or(Value::Null))
+                } else {
+                    Err(message["error"].as_str().unwrap_or("command failed").to_string())
+                };
+                let _ = waiter.send(result);
+            }
+            "session_event" => {
+                if let Some(id) = message["activeSessionId"].as_str() {
+                    let _ = tx.send(DaemonEvent::SessionEvent { active_session_id: id.into(), event: message["event"].clone() });
+                }
+            }
+            "roster_update" => {
+                let mut rows = Vec::new();
+                for row in message["changed"].as_array().into_iter().flatten() {
+                    if row["status"] == "inactive" {
+                        if let Some(file) = row["summary"]["sessionFile"].as_str() {
+                            let _ = tx.send(DaemonEvent::Inactive { session_file: file.into() });
+                        }
+                    } else {
+                        rows.push(row["summary"].clone());
+                    }
+                }
+                let _ = tx.send(DaemonEvent::RosterUpdate(rows));
+            }
+            "session_closed" => {
+                let id = message["activeSessionId"].as_str().or_else(|| message["summary"]["activeSessionId"].as_str());
+                if let Some(id) = id {
+                    let _ = tx.send(DaemonEvent::SessionClosed(id.into()));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A supervisor-level command.
+    pub async fn supervisor(&self, kind: &str, fields: Value) -> Result<Value> {
+        let id = format!("ar_{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
+        let mut command = json!({ "type": kind, "id": id });
+        if let (Some(obj), Value::Object(extra)) = (command.as_object_mut(), fields) {
+            obj.extend(extra);
+        }
+        let envelope = json!({
+            "type": "command",
+            "id": id,
+            "protocol": { "name": "prime-agent.daemon", "version": PROTOCOL_VERSION },
+            "clientId": self.client_id,
+            "command": command,
+        });
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().unwrap().insert(id.clone(), tx);
+        let mut line = serde_json::to_vec(&envelope)?;
+        line.push(b'\n');
+        {
+            let mut writer = self.writer.lock().await;
+            let Some(writer) = writer.as_mut() else {
+                self.pending.lock().unwrap().remove(&id);
+                bail!("Prime daemon is not connected");
+            };
+            if let Err(e) = writer.write_all(&line).await {
+                self.pending.lock().unwrap().remove(&id);
+                bail!("Prime daemon write failed: {e}");
+            }
+        }
+        match rx.await {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(anyhow!(e)),
+            Err(_) => Err(anyhow!("Prime daemon disconnected")),
+        }
+    }
+
+    /// An RPC-style command addressed to one session.
+    pub async fn session(&self, active_session_id: &str, kind: &str, mut fields: Value) -> Result<Value> {
+        if let Value::Object(obj) = &mut fields {
+            obj.insert("activeSessionId".into(), Value::String(active_session_id.into()));
+        } else {
+            fields = json!({ "activeSessionId": active_session_id });
+        }
+        self.supervisor(kind, fields).await
+    }
+
+    pub async fn create(&self, cwd: &str, model: Option<&str>, thinking: Option<&str>) -> Result<Value> {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let mut config = json!({
+            "cwd": cwd,
+            "executionMode": "interactive",
+            "sessionDir": format!("{home}/.prime/agent/sessions"),
+            "appendSystemPrompt": [crate::media::GUIDE],
+        });
+        if let Some(model) = model {
+            config["model"] = json!(model);
+        }
+        if let Some(thinking) = thinking {
+            config["thinking"] = json!(thinking);
+        }
+        self.supervisor("create", json!({ "config": config, "launchEnv": launch_env() })).await
+    }
+
+    pub async fn attach(&self, active_session_id: &str) -> Result<Value> {
+        let fields = json!({ "capabilities": ["attach_snapshot", "event_sequence"] });
+        self.session(active_session_id, "attach", fields).await
+    }
+}
+
+/// Start the supervisor detached from the bridge so it outlives it (a running one makes this a no-op).
+fn start_daemon() -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    std::process::Command::new("prime-agent")
+        .args(["--mode", "daemon"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map_err(|e| anyhow!("failed to start prime-agent daemon: {e}"))?;
+    Ok(())
+}

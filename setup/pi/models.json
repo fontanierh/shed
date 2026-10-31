@@ -1,0 +1,11 @@
+{
+  "providers": {
+    "openai": {
+      "modelOverrides": {
+        "gpt-6.1-terra": {
+          "contextWindow": 1000000
+        }
+      }
+    }
+  }
+}

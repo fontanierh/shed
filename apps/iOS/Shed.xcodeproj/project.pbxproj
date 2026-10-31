@@ -1,0 +1,505 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		2291D40CCD8103C8F5049E8D /* AgentRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = 1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */; };
+		32C28BDA5D313AF7E7D9CA45 /* ShedLive.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2524201A2CA96490408E8DF /* ShedLive.swift */; };
+		3450DBDA772A5FC7093ADEA4 /* AgentRemoteKit in Frameworks */ = {isa = PBXBuildFile; productRef = C4A52723F453412993503A87 /* AgentRemoteKit */; };
+		381B1CC5DD0A1E290EDD2F51 /* ShedLive.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AE62A22BEA2C59500BFE30CA /* ShedLive.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		72156B4FAFD811F82B887E04 /* ShedApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D8EEA2BF488D58C8E05550E /* ShedApp.swift */; };
+		AAEF0377BC4B1CAC17DBEDD9 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FBBA36BE61BFCF4C8776E24D /* Assets.xcassets */; };
+		BE51C7A2C6ACEE2F9D3D14D4 /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = 1E887C4A1A915D3977D7634E /* Fonts */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		121738E6E5A5785B28206B96 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 831A0BD653DE8AECCAFDACA1 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 302792D1C30DA5E4A5995F95;
+			remoteInfo = ShedLive;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		00B5555AE44264F4B00684C6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				381B1CC5DD0A1E290EDD2F51 /* ShedLive.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		1384469BD8CE7DBDDCD1E536 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		1D8EEA2BF488D58C8E05550E /* ShedApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShedApp.swift; sourceTree = "<group>"; };
+		1E887C4A1A915D3977D7634E /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Fonts; path = ../Resources/Fonts; sourceTree = SOURCE_ROOT; };
+		4BDB7A9E426D2F3D928FFBA6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		6EBDF634760DFD326912AF6E /* apps */ = {isa = PBXFileReference; lastKnownFileType = folder; name = apps; path = ..; sourceTree = SOURCE_ROOT; };
+		9337968E55E83A4F3E83E282 /* Shed.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Shed.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AE62A22BEA2C59500BFE30CA /* ShedLive.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = ShedLive.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B2524201A2CA96490408E8DF /* ShedLive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShedLive.swift; sourceTree = "<group>"; };
+		FBBA36BE61BFCF4C8776E24D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		2866DAEAECB59887C118943C /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				3450DBDA772A5FC7093ADEA4 /* AgentRemoteKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		399C3AC9A7F85B110FE6DEAE /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2291D40CCD8103C8F5049E8D /* AgentRemoteKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		071EA00475F798C3B4E18072 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				1E887C4A1A915D3977D7634E /* Fonts */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		134FFD0E3B57F18432179914 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				6EBDF634760DFD326912AF6E /* apps */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		56D2E30E118C922D9616BA47 /* Shed */ = {
+			isa = PBXGroup;
+			children = (
+				FBBA36BE61BFCF4C8776E24D /* Assets.xcassets */,
+				1384469BD8CE7DBDDCD1E536 /* Info.plist */,
+				1D8EEA2BF488D58C8E05550E /* ShedApp.swift */,
+			);
+			path = Shed;
+			sourceTree = "<group>";
+		};
+		606F8B892D9EFF1B00BC84AE /* ShedLive */ = {
+			isa = PBXGroup;
+			children = (
+				4BDB7A9E426D2F3D928FFBA6 /* Info.plist */,
+				B2524201A2CA96490408E8DF /* ShedLive.swift */,
+			);
+			path = ShedLive;
+			sourceTree = "<group>";
+		};
+		782BB424D440C12D73787508 /* apps */ = {
+			isa = PBXGroup;
+			children = (
+				071EA00475F798C3B4E18072 /* Resources */,
+			);
+			name = apps;
+			path = ..;
+			sourceTree = "<group>";
+		};
+		CCE04106BE9C593B3F83BFB2 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9337968E55E83A4F3E83E282 /* Shed.app */,
+				AE62A22BEA2C59500BFE30CA /* ShedLive.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		FBD5C157B4475C4C59C3C3EE = {
+			isa = PBXGroup;
+			children = (
+				782BB424D440C12D73787508 /* apps */,
+				134FFD0E3B57F18432179914 /* Packages */,
+				56D2E30E118C922D9616BA47 /* Shed */,
+				606F8B892D9EFF1B00BC84AE /* ShedLive */,
+				CCE04106BE9C593B3F83BFB2 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		141317845F0372ED275902D7 /* Shed */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5E538F384B98E501E3FAD7D6 /* Build configuration list for PBXNativeTarget "Shed" */;
+			buildPhases = (
+				B594883AFA17BB8B34D31790 /* Sources */,
+				7074DFD63AF1C93F1772F3FA /* Resources */,
+				399C3AC9A7F85B110FE6DEAE /* Frameworks */,
+				00B5555AE44264F4B00684C6 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				1BFCA98188DC19CB7BEBDA1F /* PBXTargetDependency */,
+			);
+			name = Shed;
+			packageProductDependencies = (
+				1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */,
+			);
+			productName = Shed;
+			productReference = 9337968E55E83A4F3E83E282 /* Shed.app */;
+			productType = "com.apple.product-type.application";
+		};
+		302792D1C30DA5E4A5995F95 /* ShedLive */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 73E3CE7ACB4B6D4B95492CA5 /* Build configuration list for PBXNativeTarget "ShedLive" */;
+			buildPhases = (
+				A6F8762469DD029DB7ADB205 /* Sources */,
+				2866DAEAECB59887C118943C /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ShedLive;
+			packageProductDependencies = (
+				C4A52723F453412993503A87 /* AgentRemoteKit */,
+			);
+			productName = ShedLive;
+			productReference = AE62A22BEA2C59500BFE30CA /* ShedLive.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		831A0BD653DE8AECCAFDACA1 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					141317845F0372ED275902D7 = {
+						DevelopmentTeam = XQ8P3CLCKV;
+						ProvisioningStyle = Automatic;
+					};
+					302792D1C30DA5E4A5995F95 = {
+						DevelopmentTeam = XQ8P3CLCKV;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = C762DAEB5459196C6414412C /* Build configuration list for PBXProject "Shed" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = FBD5C157B4475C4C59C3C3EE;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FD3FE3DD27DB066B4F176037 /* XCLocalSwiftPackageReference ".." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = CCE04106BE9C593B3F83BFB2 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				141317845F0372ED275902D7 /* Shed */,
+				302792D1C30DA5E4A5995F95 /* ShedLive */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		7074DFD63AF1C93F1772F3FA /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AAEF0377BC4B1CAC17DBEDD9 /* Assets.xcassets in Resources */,
+				BE51C7A2C6ACEE2F9D3D14D4 /* Fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A6F8762469DD029DB7ADB205 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				32C28BDA5D313AF7E7D9CA45 /* ShedLive.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B594883AFA17BB8B34D31790 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				72156B4FAFD811F82B887E04 /* ShedApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		1BFCA98188DC19CB7BEBDA1F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 302792D1C30DA5E4A5995F95 /* ShedLive */;
+			targetProxy = 121738E6E5A5785B28206B96 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		039D66DFA642FC29047EB84C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = XQ8P3CLCKV;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		1F2DC5C554FA919A5C9B72A4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = ShedLive/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed.live;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		434DCDAF8889E5E5624C07C4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Shed/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Shed;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		52C8F7AC2DFB45BEDAF97056 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = ShedLive/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed.live;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		CDCF300426B04F1585AA37CA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = XQ8P3CLCKV;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		E9BFD929ED6F1BF3849FBB98 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Shed/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Shed;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.agentremote.shed;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5E538F384B98E501E3FAD7D6 /* Build configuration list for PBXNativeTarget "Shed" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				434DCDAF8889E5E5624C07C4 /* Debug */,
+				E9BFD929ED6F1BF3849FBB98 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		73E3CE7ACB4B6D4B95492CA5 /* Build configuration list for PBXNativeTarget "ShedLive" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1F2DC5C554FA919A5C9B72A4 /* Debug */,
+				52C8F7AC2DFB45BEDAF97056 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		C762DAEB5459196C6414412C /* Build configuration list for PBXProject "Shed" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CDCF300426B04F1585AA37CA /* Debug */,
+				039D66DFA642FC29047EB84C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		FD3FE3DD27DB066B4F176037 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		1CBD8EE8F879EF446E90A2C4 /* AgentRemoteKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AgentRemoteKit;
+		};
+		C4A52723F453412993503A87 /* AgentRemoteKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AgentRemoteKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 831A0BD653DE8AECCAFDACA1 /* Project object */;
+}
