@@ -1,4 +1,5 @@
 // The normalized transcript in a centered reading column: messages, grouped agent activity, compactions and notes.
+import CoreText
 @preconcurrency import MarkdownUI
 import SwiftUI
 
@@ -1046,12 +1047,27 @@ struct CodePanel: View {
     var tint: Color? = nil
     @State private var showAll = false
     @State private var top = BlockTop()
+    @State private var width: CGFloat = 0
+    /// Python laid out to fit the panel rather than as the agent wrote it.
+    @AppStorage("code.readablePython") private var readable = true
     @Environment(\.keepInView) private var keepInView
 
     private static let cap = 14
+    private static let fontSize: CGFloat = 12
+    private static let charWidth: CGFloat = {
+        let font = CTFontCreateWithName(Font.monoFamily as CFString, fontSize, nil)
+        var glyph = CGGlyph()
+        var zero = UniChar(48)
+        CTFontGetGlyphsForCharacters(font, &zero, &glyph, 1)
+        let advance = CTFontGetAdvancesForGlyphs(font, .horizontal, &glyph, nil, 1)
+        return advance > 0 ? advance : fontSize * 0.6
+    }()
+
+    private var reflows: Bool { language == "python" && readable }
 
     var body: some View {
-        let lines = text.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
+        let shownText = reflows && width > 0 ? PythonLayout.readable(text, width: Int((width - 24) / Self.charWidth)) : text
+        let lines = shownText.trimmingCharacters(in: .newlines).components(separatedBy: "\n")
         let shown = showAll ? lines : Array(lines.prefix(Self.cap))
         let clipped = lines.count > Self.cap && !showAll
         VStack(alignment: .leading, spacing: 0) {
@@ -1059,6 +1075,17 @@ struct CodePanel: View {
                 Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(tint ?? .primary)
                 Text(lines.count == 1 ? "1 line" : "\(lines.count) lines").font(.caption).foregroundStyle(.tertiary)
                 Spacer()
+                if language == "python" {
+                    Button { readable.toggle() } label: {
+                        Label(readable ? "Readable" : "As written", systemImage: readable ? "text.alignleft" : "chevron.left.forwardslash.chevron.right")
+                            .font(.caption)
+                            .padding(.horizontal, 8).frame(height: 22)
+                            .background(Palette.surface, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Palette.border))
+                    }
+                    .buttonStyle(.plain)
+                    .help(readable ? "Laid out to fit: show the code as the agent wrote it" : "Show the code laid out to fit the screen")
+                }
                 CopyButton(text: text, label: "Copy")
                     .padding(.horizontal, 8).frame(height: 22)
                     .background(Palette.surface, in: RoundedRectangle(cornerRadius: 6))
@@ -1066,23 +1093,27 @@ struct CodePanel: View {
             }
             .padding(.horizontal, 12).frame(height: 36)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
-                    if lineNumbers {
-                        Text(shown.indices.map { String($0 + 1) }.joined(separator: "\n"))
-                            .foregroundStyle(Palette.lineNumber)
-                            .multilineTextAlignment(.trailing)
-                    }
-                    Text(Syntax.highlight(shown.joined(separator: "\n"), language: language))
-                        .foregroundStyle(tint ?? .primary)
-                        .fixedSize(horizontal: true, vertical: false)
+            let code = HStack(alignment: .top, spacing: 14) {
+                // Line numbers would count the laid-out lines, not the agent's.
+                if lineNumbers && !reflows {
+                    Text(shown.indices.map { String($0 + 1) }.joined(separator: "\n"))
+                        .foregroundStyle(Palette.lineNumber)
+                        .multilineTextAlignment(.trailing)
                 }
-                .font(.mono(12))
-                .lineSpacing(3)
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .padding(.bottom, clipped ? 26 : 0)
+                Text(Syntax.highlight(shown.joined(separator: "\n"), language: language))
+                    .foregroundStyle(tint ?? .primary)
+                    .fixedSize(horizontal: !reflows, vertical: false)
+            }
+            .font(.mono(Self.fontSize))
+            .lineSpacing(3)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .padding(.bottom, clipped ? 26 : 0)
+            Group {
+                // Laid out to fit, what's still too long (a long string) wraps rather than scrolling sideways.
+                if reflows { code } else { ScrollView(.horizontal, showsIndicators: false) { code } }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .background(Palette.sunken, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Palette.border.opacity(0.7)))
             .overlay(alignment: .bottom) {
@@ -1123,30 +1154,47 @@ struct CodePanel: View {
     }
 }
 
-/// Light syntax colouring for code in tool inputs: keywords, strings, comments and numbers.
+/// Light syntax colouring for code in tool inputs and shared files: keywords, strings, comments and numbers.
 enum Syntax {
     private static let keywords: [String: Set<String>] = [
         "python": ["def", "return", "await", "async", "import", "from", "as", "for", "in", "if", "elif", "else", "while", "with",
                    "try", "except", "finally", "class", "lambda", "not", "and", "or", "is", "None", "True", "False", "print", "pass", "raise", "yield"],
         "bash": ["if", "then", "else", "fi", "for", "do", "done", "while", "case", "esac", "function", "in", "echo", "cd", "export", "sudo"],
         "json": ["true", "false", "null"],
+        "swift": ["func", "let", "var", "if", "else", "guard", "return", "struct", "class", "enum", "case", "switch", "for", "in",
+                  "while", "import", "extension", "protocol", "static", "private", "public", "self", "nil", "true", "false", "try",
+                  "await", "async", "throws", "some", "where", "init"],
+        "rust": ["fn", "let", "mut", "if", "else", "match", "return", "struct", "enum", "impl", "trait", "for", "in", "while", "loop",
+                 "use", "mod", "pub", "self", "Self", "true", "false", "async", "await", "move", "ref", "where", "const", "static", "Some", "None", "Ok", "Err"],
+        "javascript": ["function", "const", "let", "var", "if", "else", "return", "for", "of", "in", "while", "class", "new", "import",
+                       "export", "from", "default", "async", "await", "true", "false", "null", "undefined", "this", "type", "interface"],
+        "go": ["func", "var", "const", "if", "else", "return", "for", "range", "struct", "type", "interface", "package", "import",
+               "go", "defer", "chan", "map", "switch", "case", "nil", "true", "false"],
     ]
 
-    static func highlight(_ code: String, language: String?) -> AttributedString {
+    static func highlight(_ code: String, language: String?, limit: Int = 20_000) -> AttributedString {
         var result = AttributedString(code)
-        guard let language, let words = keywords[language], code.utf16.count < 20_000 else { return result }
-        let comment = language == "json" ? nil : #"#[^\n]*"#
+        guard let language, let words = keywords[language], code.utf16.count < limit else { return result }
+        let comment: String? = switch language {
+        case "json": nil
+        case "python", "bash": #"#[^\n]*"#
+        default: #"//[^\n]*|/\*[\s\S]*?\*/"#
+        }
+        let strings = #"("""[\s\S]*?"""|'''[\s\S]*?'''|"(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*')"#
         let patterns: [(String, Color)] = [
             (#"\b\d+(\.\d+)?\b"#, Palette.amber),
             (#"\b(\#(words.joined(separator: "|")))\b"#, Palette.lilac),
-            (#"("""[\s\S]*?"""|'''[\s\S]*?'''|"(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*')"#, Palette.rose),
-        ] + (comment.map { [($0, Color.secondary)] } ?? [])
+            // Strings and comments in one pass, so whichever starts first wins: `"https://…"` stays a string, `# it's`
+            // stays a comment.
+            (comment.map { "(?<comment>\($0))|\(strings)" } ?? strings, Palette.rose),
+        ]
         // Later patterns win, so strings and comments override keywords inside them.
         for (pattern, color) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             for match in regex.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
                 guard let range = Range(match.range, in: code), let attributed = Range(range, in: result) else { continue }
-                result[attributed].foregroundColor = color
+                let isComment = comment != nil && match.range(withName: "comment").location != NSNotFound
+                result[attributed].foregroundColor = isComment ? .secondary : color
             }
         }
         return result

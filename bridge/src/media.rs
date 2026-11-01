@@ -1,4 +1,5 @@
-//! Media the agents show the user: local images, videos and audio, served to the apps over HTTP.
+//! Files the agents show the user: local images, videos and audio, and documents to open or download, served to the
+//! apps over HTTP.
 
 use std::collections::HashMap;
 use std::io::SeekFrom;
@@ -13,27 +14,37 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use crate::server::authorized;
 use crate::session::App;
 
-/// Appended to every session's system prompt, so the agents know how to show media in the apps.
+/// Appended to every session's system prompt, so the agents know how to show media and files in the apps.
 pub const GUIDE: &str = "\
-## Showing media to the user
+## Showing media and files to the user
 
-The user follows this session in Shed, an app that renders your replies as Markdown. \
-To show them an image, a video or an audio clip, embed the file in your reply with Markdown image syntax and its \
-absolute path on this machine, whatever its type, on a line of its own:
+The user follows this session in Shed, an app that renders your replies as Markdown, often on their phone. \
+To show them an image, a video, an audio clip or any other file, embed it in your reply with Markdown image syntax and \
+its absolute path on this machine, whatever its type, on a line of its own:
 
 ![Short caption](/absolute/path/to/chart.png)
 ![Screen recording of the bug](/absolute/path/to/repro.mp4)
 ![Voice memo](/absolute/path/to/memo.m4a)
+![Design notes](/absolute/path/to/notes.md)
+![The fixed parser](/absolute/path/to/parser.py)
 
-Shed shows images inline, and videos and audio as players. https URLs work as well. \
-Save anything you generate or download to a file first (in the working directory, or /tmp for throwaway files); \
-never paste base64 into a reply. Images: png, jpg, gif, webp, heic, tiff. Video: mp4, mov, m4v. \
-Audio: mp3, m4a, aac, wav, aiff, flac.";
+Shed shows images inline, and videos and audio as players. Any other file (Markdown, code, text, CSV, PDF, a zip) \
+shows as a file card: the user taps it to read it in a viewer (Markdown rendered, code highlighted) and can download it. \
+A plain link with an absolute path, like [the notes](/absolute/path/to/notes.md), opens the same viewer, so you can \
+also point at a file mid-sentence. Embed a file instead of pasting its contents when it is long; quote just the part \
+that matters in the reply. https URLs work as well. Paths with spaces go in angle brackets: \
+![Report](</absolute/path/with spaces/report.md>). Save anything you generate or download to a file first (in the \
+working directory, or /tmp for throwaway files); never paste base64 into a reply. Images: png, jpg, gif, webp, heic, \
+tiff. Video: mp4, mov, m4v. Audio: mp3, m4a, aac, wav, aiff, flac.";
 
-/// The content type for a file the apps may fetch, by extension. Anything else is refused.
-fn content_type(path: &str) -> Option<&'static str> {
-    let ext = path.rsplit('.').next()?.to_ascii_lowercase();
-    Some(match ext.as_str() {
+/// The content type for a file the apps fetch, by extension: media the players need typed, the rest as bytes the apps
+/// view or download.
+fn content_type(path: &str) -> &'static str {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let ext = name
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase());
+    match ext.as_deref().unwrap_or("") {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -50,8 +61,11 @@ fn content_type(path: &str) -> Option<&'static str> {
         "wav" => "audio/wav",
         "aif" | "aiff" => "audio/aiff",
         "flac" => "audio/flac",
-        _ => return None,
-    })
+        "pdf" => "application/pdf",
+        "md" | "markdown" => "text/markdown; charset=utf-8",
+        "txt" | "log" | "csv" | "tsv" => "text/plain; charset=utf-8",
+        _ => "application/octet-stream",
+    }
 }
 
 /// `GET /media?path=/absolute/file.png`, authorized like the WebSocket. Honors `Range`, which video and audio players rely on.
@@ -66,12 +80,9 @@ pub async fn media_handler(
     let Some(path) = query.get("path").filter(|p| p.starts_with('/')) else {
         return (StatusCode::BAD_REQUEST, "path must be absolute").into_response();
     };
-    let Some(kind) = content_type(path) else {
-        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, "not a media file").into_response();
-    };
     match serve(
         path,
-        kind,
+        content_type(path),
         headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
     )
     .await
@@ -84,7 +95,12 @@ pub async fn media_handler(
 
 async fn serve(path: &str, kind: &'static str, range: Option<&str>) -> std::io::Result<Response> {
     let mut file = tokio::fs::File::open(path).await?;
-    let len = file.metadata().await?.len();
+    let metadata = file.metadata().await?;
+    // A directory opens fine and then fails mid-stream.
+    if !metadata.is_file() {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    let len = metadata.len();
     let common = |builder: axum::http::response::Builder| {
         builder
             .header(header::CONTENT_TYPE, kind)
@@ -161,7 +177,23 @@ mod tests {
         assert_eq!(parse_range("bytes=-3", 10), Some((7, 9)));
         assert_eq!(parse_range("bytes=8-100", 10), Some((8, 9)));
         assert_eq!(parse_range("bytes=10-", 10), None);
-        assert_eq!(content_type("/a/B.PNG"), Some("image/png"));
-        assert_eq!(content_type("/etc/passwd"), None);
+        assert_eq!(content_type("/a/B.PNG"), "image/png");
+        assert_eq!(content_type("/a/notes.md"), "text/markdown; charset=utf-8");
+        assert_eq!(content_type("/a.b/Makefile"), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn files_but_not_folders() {
+        let dir = std::env::temp_dir().join(format!("shed-media-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = dir.join("notes.md");
+        std::fs::write(&notes, "# Notes\n").unwrap();
+        let path = notes.to_str().unwrap();
+        let response = serve(path, content_type(path), None).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_LENGTH], "8");
+        let folder = serve(dir.to_str().unwrap(), "application/octet-stream", None).await;
+        assert_eq!(folder.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

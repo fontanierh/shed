@@ -89,6 +89,7 @@ struct SessionView: View {
             // that stopped answering.
             .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store, sessionId: session.id) }
             #endif
+            .fileLinks()
             .environment(\.media, store.media(for: session.id))
             .environment(\.stopTool, stopTool)
             .environment(\.restartKernel, restartKernel)

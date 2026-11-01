@@ -1,4 +1,5 @@
-// Images, videos and audio the agents embed in their replies (`![caption](/path/on/the/mac.mp4)`), fetched through the bridge.
+// Images, videos, audio and other files the agents embed in their replies (`![caption](/path/on/the/mac.mp4)`), fetched
+// through the bridge.
 import AVKit
 import ImageIO
 @preconcurrency import MarkdownUI
@@ -35,7 +36,7 @@ extension EnvironmentValues {
     @Entry var lightbox: Lightbox? = nil
 }
 
-/// The image shown over the whole window, if any.
+/// The image shown over the whole window, or the file open in the viewer, if any.
 @MainActor @Observable
 public final class Lightbox {
     struct Shown {
@@ -45,11 +46,12 @@ public final class Lightbox {
     }
 
     var shown: Shown?
+    var file: ShownFile?
 
     public init() {}
 }
 
-/// Saves a media file where the user picks, named as on the Mac. Fetched again rather than kept, so large clips aren't held in memory.
+/// Saves a media file where the user picks (on the iPhone, through the share sheet), named as on the Mac. Fetched again rather than kept, so large clips aren't held in memory.
 @MainActor
 func saveMedia(_ request: URLRequest, name: String) {
     #if os(macOS)
@@ -68,6 +70,9 @@ func saveMedia(_ request: URLRequest, name: String) {
             NSAlert(error: error).runModal()
         }
     }
+    #else
+    // The share sheet, with Save to Files and Save Image.
+    Task { if let local = try? await downloadFile(request, name: name) { shareFile(local) } }
     #endif
 }
 
@@ -103,13 +108,16 @@ extension ImageProvider where Self == MediaImageProvider {
 }
 
 enum MediaKind {
-    case image, video, audio
+    case image, video, audio, file
 
     init(_ url: URL) {
         switch url.pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "svg": self = .image
         case "mp4", "m4v", "mov": self = .video
         case "mp3", "m4a", "aac", "wav", "aif", "aiff", "flac": self = .audio
-        default: self = .image
+        // An https image link often has no extension at all.
+        case "" where url.scheme == "https" || url.scheme == "http": self = .image
+        default: self = .file
         }
     }
 }
@@ -124,6 +132,7 @@ struct MediaView: View {
             case .image: MediaImage(request: request, name: url.lastPathComponent)
             case .video: MediaVideo(request: request)
             case .audio: MediaAudio(request: request, name: url.lastPathComponent)
+            case .file: FileCard(url: url, request: request)
             }
         } else {
             MediaMissing(text: url?.absoluteString ?? "No media")
@@ -248,6 +257,13 @@ public struct LightboxView: View {
     }
 
     public var body: some View {
+        @Bindable var lightbox = lightbox
+        ZStack { image }
+            .sheet(item: $lightbox.file) { file in FileViewer(file: file) }
+    }
+
+    @ViewBuilder
+    private var image: some View {
         if let shown = lightbox.shown {
             ZStack {
                 Rectangle().fill(.black.opacity(0.78)).background(.ultraThinMaterial)
