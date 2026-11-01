@@ -162,25 +162,49 @@ extension Theme {
             .markdownMargin(top: 4, bottom: 16)
         }
         .table { configuration in
-            configuration.label
-                .fixedSize(horizontal: false, vertical: true)
-                .markdownTableBorderStyle(.init(.horizontalBorders, color: Palette.border))
-                .markdownTableBackgroundStyle(.alternatingRows(Color.clear, Palette.surface))
-                .markdownMargin(top: 4, bottom: 16)
+            // As wide as its columns want, scrolling sideways when that's wider than the screen, rather than squeezed
+            // until every word breaks.
+            ScrollView(.horizontal, showsIndicators: false) {
+                configuration.label
+                    .fixedSize(horizontal: true, vertical: true)
+                    .markdownTableBorderStyle(.init(.horizontalBorders, color: Palette.border))
+                    .markdownTableBackgroundStyle(.alternatingRows(Color.clear, Palette.surface))
+            }
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .markdownMargin(top: 4, bottom: 16)
         }
         .tableCell { configuration in
-            configuration.label
-                .markdownTextStyle {
-                    if configuration.row == 0 { FontWeight(.semibold) }
-                    FontSize(.em(0.93))
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.vertical, 6)
+            // A column fits its content up to 240 pt, then wraps: long cells stay readable without one column taking
+            // the whole table.
+            CappedWidth(cap: 240) {
+                configuration.label
+                    .markdownTextStyle {
+                        if configuration.row == 0 { FontWeight(.semibold) }
+                        FontSize(.em(0.93))
+                    }
+            }
+            .padding(.vertical, 6)
                 .padding(.horizontal, 10)
         }
         .thematicBreak {
             Divider().markdownMargin(top: 16, bottom: 16)
         }
+}
+
+/// Its content at its natural width up to `cap`, wrapping past it, and measured that way too: a frame with a maximum
+/// width would let a table size its rows for the unwrapped text.
+struct CappedWidth: SwiftUI.Layout {
+    let cap: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let content = subviews.first else { return .zero }
+        let width = min(content.sizeThatFits(.unspecified).width, cap, proposal.width ?? .infinity)
+        return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: nil))
+    }
 }
 
 /// A fenced code block: language label, copy button, horizontal scrolling.
