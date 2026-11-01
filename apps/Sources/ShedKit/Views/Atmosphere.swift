@@ -174,6 +174,8 @@ struct Spirit: View {
     var working = false
     /// Asleep: eyes closed, for empty and disconnected states.
     var asleep = false
+    /// Off where the view is clipped to its own frame (the Dynamic Island), which would cut the glow off square.
+    var glow = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -187,7 +189,7 @@ struct Spirit: View {
             eyes
         }
         .frame(width: size, height: size)
-        .shadow(color: color.opacity(0.35), radius: size * 0.18)
+        .shadow(color: color.opacity(glow ? 0.35 : 0), radius: size * 0.18)
         .background {
             if working {
                 PulseField(color: Palette.amber, still: reduceMotion)

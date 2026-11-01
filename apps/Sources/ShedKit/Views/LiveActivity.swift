@@ -203,7 +203,7 @@ public struct ShedLiveActivityWidget: Widget {
                     }
                 }
             } compactLeading: {
-                IslandSpirit(phase: state.phase, size: 22)
+                IslandSpirit(phase: state.phase, size: 22, glow: false)
             } compactTrailing: {
                 if live {
                     Spend(state: state).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.amber)
@@ -212,7 +212,7 @@ public struct ShedLiveActivityWidget: Widget {
                     Image(systemName: state.phase == "error" ? "exclamationmark" : "checkmark").foregroundStyle(state.phase == "error" ? Palette.danger : Palette.ice)
                 }
             } minimal: {
-                IslandSpirit(phase: state.phase, size: 22)
+                IslandSpirit(phase: state.phase, size: 22, glow: false)
             }
             .widgetURL(URL(string: "shed://session/\(context.attributes.sessionId)"))
             .keylineTint(Palette.amber)
@@ -220,10 +220,12 @@ public struct ShedLiveActivityWidget: Widget {
     }
 }
 
-/// A still spirit: amber while it works, ice once done, rose on an error.
+/// A still spirit: amber while it works, ice once done, rose on an error. Without a glow in the compact island, which
+/// clips each side to its frame.
 struct IslandSpirit: View {
     let phase: String
     var size: CGFloat
+    var glow = true
 
     var body: some View {
         let color = switch phase {
@@ -231,8 +233,8 @@ struct IslandSpirit: View {
         case "error": Palette.danger
         default: Palette.amber
         }
-        Spirit(color: color, size: size, working: false)
-            .shadow(color: color.opacity(0.6), radius: size / 4)
+        Spirit(color: color, size: size, working: false, glow: glow)
+            .shadow(color: color.opacity(glow ? 0.6 : 0), radius: size / 4)
     }
 }
 
@@ -264,8 +266,9 @@ struct Spend: View {
         return "$\(digits)/min"
     }
 
+    /// "$1.23" whatever the region, like the rate: "1,23 US$" is too wide for the compact island.
     static func dollars(_ amount: Double) -> String {
-        amount.formatted(.currency(code: "USD").precision(.fractionLength(2)))
+        amount.formatted(.currency(code: "USD").precision(.fractionLength(2)).locale(Locale(identifier: "en_US")))
     }
 }
 
