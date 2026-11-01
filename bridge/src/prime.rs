@@ -1,7 +1,8 @@
 //! Client for the Prime Agent supervisor socket (see docs/prime-daemon-protocol.md). One connection carries
 //! every Prime session, including subagents and sessions started from Prime's own TUI.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -39,6 +40,36 @@ pub struct PrimeDaemon {
     writer: tokio::sync::Mutex<Option<OwnedWriteHalf>>,
     pending: Mutex<HashMap<String, Pending>>,
     next_id: AtomicU64,
+    /// The top-level sessions this bridge has listed, by `sessionId`, so it can reopen them after a reboot.
+    shown: Mutex<HashSet<String>>,
+}
+
+/// Where the bridge keeps the sessions it has listed, across restarts.
+fn shown_path() -> PathBuf {
+    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".agent-remote/prime-sessions.json")
+}
+
+fn load_shown() -> Option<HashSet<String>> {
+    serde_json::from_str(&std::fs::read_to_string(shown_path()).ok()?).ok()
+}
+
+fn save_shown(shown: &HashSet<String>) {
+    let mut ids: Vec<&String> = shown.iter().collect();
+    ids.sort();
+    if let Ok(json) = serde_json::to_vec_pretty(&ids) {
+        if let Err(e) = std::fs::write(shown_path(), json) {
+            eprintln!("failed to save the Prime session list: {e}");
+        }
+    }
+}
+
+/// A roster row's stable key: `sessionId` (a running session's `activeSessionId` differs from a stopped one's).
+fn shown_key(summary: &Value) -> Option<String> {
+    summary["sessionId"]
+        .as_str()
+        .or_else(|| summary["id"].as_str())
+        .map(String::from)
 }
 
 /// Where the daemon may listen: newer Prime builds use `prime-agent-rust-<uid>`, older ones `prime-agent-<uid>`.
@@ -101,6 +132,7 @@ impl PrimeDaemon {
             writer: tokio::sync::Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(0),
+            shown: Mutex::new(HashSet::new()),
         });
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(daemon.clone().run(tx));
@@ -180,11 +212,17 @@ impl PrimeDaemon {
         };
 
         let roster = self.supervisor("roster_subscribe", json!({})).await?;
-        let rows = roster["roster"]
+        let rows: Vec<Value> = roster["roster"]
             .as_array()
             .map(|rows| rows.iter().map(|r| r["summary"].clone()).collect())
             .unwrap_or_default();
+        let running: HashSet<String> = rows
+            .iter()
+            .filter(|r| r["runtimeKind"] != "subagent" && r["activeSessionId"].is_string())
+            .filter_map(shown_key)
+            .collect();
         let _ = tx.send(DaemonEvent::Roster(rows));
+        tokio::spawn(self.clone().wake_open_sessions(running));
         let _ = reader.await;
         bail!("Prime daemon connection closed")
     }
@@ -229,6 +267,7 @@ impl PrimeDaemon {
                         rows.push(row["summary"].clone());
                     }
                 }
+                self.note_shown(&rows);
                 let _ = tx.send(DaemonEvent::RosterUpdate(rows));
             }
             "session_closed" => {
@@ -321,6 +360,61 @@ impl PrimeDaemon {
             json!({ "config": config, "launchEnv": launch_env() }),
         )
         .await
+    }
+
+    /// Remembers top-level sessions that start while connected, so a reboot doesn't lose them either.
+    fn note_shown(&self, rows: &[Value]) {
+        let mut shown = self.shown.lock().unwrap();
+        let before = shown.len();
+        for row in rows {
+            if row["runtimeKind"] != "subagent" && row["activeSessionId"].is_string() {
+                shown.extend(shown_key(row));
+            }
+        }
+        if shown.len() != before {
+            save_shown(&shown);
+        }
+    }
+
+    /// After a reboot the daemon still counts its open sessions as live but runs no worker for them, so they are
+    /// missing from the roster until a client opens one. Attaching starts the worker, as resuming in Prime's TUI
+    /// does, and the roster then reports the session like any other. Only sessions this bridge listed before are
+    /// reopened: Prime also keeps sessions live that nobody has opened since an older reboot. Archived ones are
+    /// dropped from the list.
+    async fn wake_open_sessions(self: Arc<Self>, running: HashSet<String>) {
+        let Ok(list) = self.supervisor("list", json!({ "all": true })).await else {
+            return;
+        };
+        let live: HashMap<String, String> = list["sessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|s| s["lifecycle"] == "live" && s["runtimeKind"] != "subagent")
+            .filter_map(|s| Some((shown_key(s)?, s["activeSessionId"].as_str()?.to_string())))
+            .collect();
+        // The first run has no list yet: start it from what is running.
+        let before = load_shown().unwrap_or_default();
+        let asleep: Vec<&String> = before
+            .iter()
+            .filter(|id| !running.contains(*id))
+            .filter_map(|id| live.get(id))
+            .collect();
+        {
+            let mut shown = self.shown.lock().unwrap();
+            shown.extend(before.iter().filter(|id| live.contains_key(*id)).cloned());
+            shown.extend(running.iter().cloned());
+            shown.retain(|id| live.contains_key(id) || running.contains(id));
+            save_shown(&shown);
+        }
+        for id in asleep {
+            match self.attach(id).await {
+                Ok(_) => {
+                    let _ = self.session(id, "detach", json!({})).await;
+                    eprintln!("reopened Prime session {id} the daemon had left without a worker");
+                }
+                Err(e) => eprintln!("could not reopen Prime session {id}: {e}"),
+            }
+        }
     }
 
     pub async fn attach(&self, active_session_id: &str) -> Result<Value> {

@@ -34,6 +34,7 @@ Supervisor commands:
 |---|---|---|
 | `list` | `all` (bool) | Session summaries |
 | `roster_subscribe` | — | Returns `{roster:[{agentId, summary}]}` and then pushes `roster_update` |
+| `list` rows | — | `{sessions:[…]}`, each with `lifecycle` (`live`/`archived`), `runtimeKind` (null on a top-level session without a worker), `activeSessionId`, `workerPid`. After a reboot, open sessions stay `live` but run no worker and are missing from the roster; attaching one starts its worker. The bridge does this for every `live` top-level session when it connects. |
 | `create` | `config:{cwd, executionMode:"interactive", sessionDir, model:"provider/id", thinking}`, `launchEnv:{…}` | Returns a summary with `activeSessionId`. `thinking` here doesn't change the saved default. The TUI sends its whole environment as `launchEnv`; the bridge sends a curated one. |
 | `attach` | `activeSessionId`, `capabilities:["attach_snapshot","event_sequence"]` | `data.snapshot = {summary, state, messages, lastEventSequence, lastEventCursor, children}` |
 | `get_direct_worker_transport` | `activeSessionId` | Optional fast path straight to the worker socket. The bridge doesn't use it; everything also routes through the supervisor. |
