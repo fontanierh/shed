@@ -67,7 +67,11 @@ public final class SessionStore {
     public private(set) var drafts: [String: String] = UserDefaults.standard.dictionary(forKey: "drafts") as? [String: String] ?? [:]
 
     public func setDraft(_ text: String, for id: String) {
-        drafts[id] = text.isEmpty ? nil : text
+        // The Mac's text field writes its text back on every update. Writing the same draft would still count as a
+        // change, redraw the composer, and get written back again, every frame.
+        let draft = text.isEmpty ? nil : text
+        guard drafts[id] != draft else { return }
+        drafts[id] = draft
         UserDefaults.standard.set(drafts, forKey: "drafts")
     }
 

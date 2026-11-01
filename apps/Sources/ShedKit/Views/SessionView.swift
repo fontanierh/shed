@@ -76,6 +76,7 @@ struct SessionView: View {
                 loadingEarlier: store.loadingEarlier,
                 loadEarlier: { await store.loadEarlier() }
             )
+            .equatable()
             // Each session opens at its end, following new output.
             .id(session.id)
             #if os(iOS)

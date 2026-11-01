@@ -56,6 +56,7 @@ struct SessionSidebar: View {
                                            detail: [sub.activityText(), store.parent(of: sub).map { "in \($0.title)" },
                                                     store.environments.count > 1 ? store.environment(of: sub.id)?.name : nil].compactMap { $0 }.joined(separator: " · "))
                                     .onTapGesture { store.select(sub.id) }
+                                    .accessibilityAction { store.select(sub.id) }
                             }
                             Spacer().frame(height: 10)
                         }
@@ -146,6 +147,8 @@ struct SessionSidebar: View {
                    activeBelow: store.activeDescendants(of: session.id), children: children,
                    open: Binding(get: { expanded.contains(session.id) }, set: { if $0 { expanded.insert(session.id) } else { expanded.remove(session.id) } }))
             .onTapGesture { store.select(session.id) }
+            // The row says it is a button: VoiceOver and other assistive apps press it rather than tap it.
+            .accessibilityAction { store.select(session.id) }
             .contextMenu {
                 if !session.isSubagent && !session.readOnly {
                     Button("Rename…") { renaming = session }

@@ -120,7 +120,8 @@ extension Item {
 
     var isVisible: Bool {
         switch kind {
-        case .thinking, .text: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Stops at the first visible character: trimming copied every message's whole text on each render.
+        case .thinking, .text: text.contains { !$0.isWhitespace }
         default: true
         }
     }
@@ -134,10 +135,14 @@ final class BlockTop {
 
 /// Collapsing a block that starts above the top of the screen would leave the reader somewhere further down: this
 /// brings its header back to the top instead. Called inside the collapse's animation.
-struct KeepInView {
+struct KeepInView: Equatable {
     var action: @MainActor (CGFloat) -> Void = { _ in }
 
     @MainActor func callAsFunction(_ top: BlockTop) { action(top.y) }
+
+    /// The transcript passes a fresh closure each time it updates. Unequal, that would invalidate every block that reads
+    /// it, so the whole conversation re-rendered whenever anything changed.
+    static func == (_: KeepInView, _: KeepInView) -> Bool { true }
 }
 
 extension EnvironmentValues {
@@ -174,7 +179,18 @@ extension View {
     }
 }
 
-struct TranscriptView: View {
+/// Equatable on what it shows: the session's summary changes with every event of the session and its subagents (its
+/// cost, what it is doing), and the callbacks are new closures each time, so otherwise every such change laid out the
+/// whole conversation again. The callbacks only route to the store, so they don't count.
+struct TranscriptView: View, Equatable {
+    nonisolated static func == (a: TranscriptView, b: TranscriptView) -> Bool {
+        a.items == b.items && a.session.id == b.session.id && a.session.agent == b.session.agent
+            && a.session.status.isBusy == b.session.status.isBusy && a.session.isSubagent == b.session.isSubagent
+            && a.session.cwd == b.session.cwd && a.pending == b.pending && a.idle == b.idle && a.earlier == b.earlier
+            && a.loadingEarlier == b.loadingEarlier && (a.openParent == nil) == (b.openParent == nil)
+            && (a.loadEarlier == nil) == (b.loadEarlier == nil)
+    }
+
     nonisolated static let content = "transcript"
 
     let items: [Item]
@@ -204,6 +220,8 @@ struct TranscriptView: View {
     @State private var shownFrom: String?
     /// Where the reader was when blocks were added above them, until the scroll view has measured them.
     @State private var revealing: (offset: CGFloat, content: CGFloat)?
+    /// Set once the transcript has first appeared: blocks arriving after that spring in, the ones it opens with don't.
+    @State private var opened = false
 
     /// Blocks laid out when a session opens, and added each time the reader nears the top.
     private static let window = 40
@@ -249,8 +267,8 @@ struct TranscriptView: View {
                     BlockView(block: block, agent: session.agent, openChild: openChild, openParent: openParent,
                               streaming: session.status.isBusy && block.id == blocks.last?.id)
                         .equatable()
+                        .modifier(Arrival(animate: opened && block.id == blocks.last?.id))
                         .id(block.id)
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 14)), removal: .opacity))
                 }
                 if !idle.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -273,8 +291,6 @@ struct TranscriptView: View {
                 }
             }
             .frame(maxWidth: Layout.column, alignment: .leading)
-            // Only a block arriving at the end springs in: blocks laid out above the reader just appear.
-            .animation(.spring(response: 0.45, dampingFraction: 0.85), value: blocks.last?.id)
             .padding(.horizontal, Layout.gutter)
             .padding(.top, 20)
             .padding(.bottom, 44)
@@ -307,6 +323,7 @@ struct TranscriptView: View {
             guard shownFrom == nil, !empty else { return }
             let all = Activity.blocks(items, busy: session.status.isBusy)
             shownFrom = all[max(0, all.count - Self.window)...].first?.firstItemId
+            opened = true
         }
         .onScrollGeometryChange(for: Scroll.self) { geometry in
             // The container already leaves out the insets (the composer, and on iPhone the navigation bar), but the offset
@@ -497,12 +514,16 @@ struct PendingTranscript: View {
 }
 
 /// One line of where an idle session stands, e.g. "Waiting on `cargo build`", opening the list it summarizes.
-struct IdleLine: Identifiable {
+struct IdleLine: Identifiable, Equatable {
     let id: String
     let text: String
     let systemImage: String
     let tint: Color
     var action: (() -> Void)? = nil
+
+    static func == (a: IdleLine, b: IdleLine) -> Bool {
+        a.id == b.id && a.text == b.text && a.systemImage == b.systemImage && a.tint == b.tint && (a.action == nil) == (b.action == nil)
+    }
 }
 
 struct WorkingIndicator: View {
@@ -521,6 +542,24 @@ struct WorkingIndicator: View {
             Text(text).font(.system(size: 13.5)).foregroundStyle(tint).shimmer(live)
         }
         .padding(.leading, 4)
+    }
+}
+
+/// A block arriving at the end springs in. Only the block itself animates: an animation on the whole transcript moved
+/// every block's frame on every frame until it settled, which in a long conversation kept the main thread busy.
+private struct Arrival: ViewModifier {
+    @State private var shown: Bool
+
+    init(animate: Bool) { _shown = State(initialValue: !animate) }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 14)
+            .onAppear {
+                guard !shown else { return }
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { shown = true }
+            }
     }
 }
 
@@ -1328,7 +1367,8 @@ struct ReportCard: View {
                         .font(.system(size: 13))
                         .layoutPriority(1)
                     if !expanded {
-                        Text(ToolDescription.oneLine(text))
+                        // One line shows: the start of a long report is enough.
+                        Text(ToolDescription.oneLine(String(text.prefix(300))))
                             .font(.system(size: 13))
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
