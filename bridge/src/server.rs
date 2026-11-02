@@ -318,6 +318,20 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let session = app.find(&session_id).await?;
             json!({ "killed": app.kill_job(&session, &job_id).await? })
         }
+        ClientOp::AnswerQuestion {
+            session_id,
+            question_id,
+            answers,
+        } => {
+            let session = app.find(&session_id).await?;
+            app.command(
+                &session,
+                "dsh_answer",
+                json!({ "questionId": question_id, "answers": answers }),
+            )
+            .await?;
+            Value::Null
+        }
         ClientOp::LoadEarlier { session_id, before } => {
             let session = app.find(&session_id).await?;
             let (items, earlier) = session.state.lock().await.earlier_page(&before);

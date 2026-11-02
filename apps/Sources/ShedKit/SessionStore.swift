@@ -576,6 +576,17 @@ public final class SessionStore {
         return try await to.client.call("job_output", ["sessionId": to.raw, "jobId": jobId, "lines": lines], as: Tail.self).tail
     }
 
+    /// Labels picked per question id; no answers dismisses the question.
+    public func answerQuestion(_ sessionId: String, _ questionId: String, picked: [String: [String]]) async {
+        do {
+            let to = try route(sessionId)
+            let answers = picked.map { ["id": $0.key, "selected": $0.value] as [String: Any] }
+            _ = try await to.client.call("answer_question", ["sessionId": to.raw, "questionId": questionId, "answers": answers])
+        } catch {
+            report(error)
+        }
+    }
+
     public func killJob(_ sessionId: String, _ jobId: String) async {
         do {
             let to = try route(sessionId)

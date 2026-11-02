@@ -2,8 +2,9 @@
 //! plugin (`bridge/dsh/shed.mjs`, written into the profile on each start) forwards dsh's own events: durable session
 //! events for the session and every subagent under it, live assistant stream frames, and agent status. This answers
 //! the Pi commands the bridge sends and turns that feed into Pi's events, so the rest of the bridge runs a DeepSeek
-//! session as it runs a Pi one. Two events are dsh's own: `dsh_subagent` (one child's transcript and state, mirrored
-//! as a read-only session) and `dsh_jobs` (how many background commands are running).
+//! session as it runs a Pi one. Three events are dsh's own: `dsh_subagent` (one child's transcript and state, mirrored
+//! as a read-only session), `dsh_jobs` (how many background commands are running) and `dsh_question` (what the agent
+//! asks the user, or null once nothing is left to answer).
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -36,7 +37,9 @@ pub struct Dsh {
 }
 
 /// Write the `shed` profile: the bundles it composes, the plugin, and the layer that swaps the SDK's JSON-RPC server
-/// for it. The profile's own `cordis.patch.yml` is the user's and is created only when missing. Returns the layer.
+/// for it. The layer also gives the agent ask_user_question, which only dsh's own apps mount, in its timed mode:
+/// a question nobody answers within two minutes lets the agent carry on, and the answer still reaches it later. The
+/// profile's own `cordis.patch.yml` is the user's and is created only when missing. Returns the layer.
 pub fn install_profile() -> Result<PathBuf> {
     let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".dsh/profiles")
@@ -72,7 +75,7 @@ pub fn install_profile() -> Result<PathBuf> {
         crate::media::GUIDE
     );
     let layer = format!(
-        "- id: sdk-jsonrpc-server\n  disabled: true\n- id: system-prompt\n  config:\n    personaPrefix: {}\n- insert:\n    - id: shed\n      name: {}\n      inject: [sdkAppStartup]\n",
+        "- id: sdk-jsonrpc-server\n  disabled: true\n- id: system-prompt\n  config:\n    personaPrefix: {}\n- insert:\n    - id: tool-ask-user\n      name: '@deepseek-ai/dsh-tool-ask-user'\n      config:\n        mode: timed\n    - id: shed\n      name: {}\n      inject: [sdkAppStartup]\n",
         json!(persona),
         json!(plugin.to_string_lossy()),
     );
@@ -123,8 +126,12 @@ impl Dsh {
                 let Some(dsh) = reader.upgrade() else { break };
                 dsh.receive(message);
             }
-            let reason = exited.await;
+            let mut reason = exited.await;
             if let Some(dsh) = reader.upgrade() {
+                // Exited because the session couldn't open: that's the reason to show.
+                if let Some(Err(e)) = dsh.ready.borrow().as_ref() {
+                    reason = e.clone();
+                }
                 for (_, waiter) in dsh.pending.lock().unwrap().drain() {
                     let _ = waiter.send(Err(reason.clone()));
                 }
@@ -143,7 +150,12 @@ impl Dsh {
                 Ok(()) => opener.open(&cwd, resume, model, thinking).await,
                 Err(_) => Err(anyhow!("dsh exited before it started")),
             };
+            let failed = opened.is_err();
             let _ = ready_tx.send(Some(opened.map_err(|e| e.to_string())));
+            // No session, so no reason to keep dsh running: it exits once its stdin closes.
+            if failed {
+                let _ = opener.stdin.lock().await.shutdown().await;
+            }
         });
         dsh
     }
@@ -184,6 +196,21 @@ impl Dsh {
         feed.models = models["models"].as_array().cloned().unwrap_or_default();
         if let Some(events) = opened["events"].as_array() {
             feed.replay(events);
+        }
+        // A resumed session's subagents, read back from their own events: they show again as they did.
+        let mut subagents = Vec::new();
+        for child in opened["children"].as_array().into_iter().flatten() {
+            let Some(child_id) = child["sessionId"].as_str() else {
+                continue;
+            };
+            let parent = child["parent"].as_str().map(str::to_string);
+            let events = child["events"].as_array().map(Vec::as_slice).unwrap_or_default();
+            feed.replay_subagent(child_id, parent, events);
+            subagents.push(feed.subagent(child_id));
+        }
+        drop(feed);
+        for event in subagents {
+            self.emit(event);
         }
         Ok(id)
     }
@@ -247,6 +274,19 @@ impl Dsh {
             }
             "prompt" | "steer" | "follow_up" => {
                 let text = fields["message"].as_str().unwrap_or("").to_string();
+                // While the agent waits on a question, what's typed is the answer to it.
+                let waiting = self.feed.lock().unwrap().question.clone();
+                if let Some(question) = waiting.filter(|_| !text.trim().is_empty()) {
+                    let answers: Vec<Value> = question["questions"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|q| json!({ "id": q["id"], "selected": [], "custom": text }))
+                        .collect();
+                    self.call("answer", json!({ "id": question["id"], "answers": answers }))
+                        .await?;
+                    return Ok(Value::Null);
+                }
                 let images: Vec<Value> = fields["images"]
                     .as_array()
                     .map(|images| {
@@ -314,6 +354,11 @@ impl Dsh {
                     .await
             }
             "dsh_kill_job" => self.call("kill_job", json!({ "jobId": fields["jobId"] })).await,
+            "dsh_answer" => {
+                let answers = fields["answers"].as_array().filter(|a| !a.is_empty()).cloned();
+                self.call("answer", json!({ "id": fields["questionId"], "answers": answers }))
+                    .await
+            }
             other => bail!("DeepSeek Harness has no {other} command"),
         }
     }
@@ -417,6 +462,9 @@ struct Feed {
     jobs: HashMap<String, bool>,
     /// Subagent names, from the parent's catalog.
     labels: HashMap<String, String>,
+    /// What the agent asks the user: its tool call's id, dsh's questions, and whether the agent carried on without
+    /// the answer (it still takes it).
+    question: Option<Value>,
 }
 
 #[derive(Default)]
@@ -431,6 +479,9 @@ struct Conversation {
     status: &'static str,
     error: Option<String>,
     model: Option<String>,
+    /// Its first and latest event (epoch ms).
+    started: Option<u64>,
+    active: Option<u64>,
 }
 
 impl Feed {
@@ -520,6 +571,18 @@ impl Feed {
         }
     }
 
+    /// A subagent of a resumed session, from its durable events. Nothing under a resumed session is still running.
+    fn replay_subagent(&mut self, id: &str, parent: Option<String>, events: &[Value]) {
+        for event in events {
+            self.session_event(id, parent.clone(), event);
+        }
+        if let Some(c) = self.sessions.get_mut(id) {
+            c.tools.clear();
+            c.blocks.clear();
+            c.status = if c.error.is_some() { "error" } else { "done" };
+        }
+    }
+
     /// One line from the plugin as the Pi events it makes.
     fn receive(&mut self, line: &Value) -> Vec<Value> {
         let id = line["sessionId"].as_str().unwrap_or("").to_string();
@@ -569,6 +632,21 @@ impl Feed {
                 }
                 vec![self.subagent(&id)]
             }
+            // The questions dsh holds open, oldest first: Shed asks the first.
+            "questions" => {
+                let first = line["active"].as_array().and_then(|a| a.first()).map(|q| {
+                    json!({
+                        "id": q["callId"],
+                        "questions": q["questions"],
+                        "continued": q["state"] == "continued",
+                    })
+                });
+                if first == self.question {
+                    return Vec::new();
+                }
+                self.question = first;
+                vec![json!({ "type": "dsh_question", "question": self.question })]
+            }
             "error" if id == self.root => {
                 let text = line["message"].as_str().unwrap_or("DeepSeek Harness failed");
                 vec![json!({ "type": "message_end", "message": {
@@ -593,6 +671,18 @@ impl Feed {
                 status: "running",
                 ..Default::default()
             });
+        let time = event["time"].as_u64();
+        if let Some(time) = time {
+            c.started.get_or_insert(time);
+            c.active = Some(time);
+        }
+        // Messages read back keep the time they were written.
+        let stamp = |mut message: Value| {
+            if let Some(time) = time {
+                message["timestamp"] = json!(time);
+            }
+            message
+        };
         let mut out = Vec::new();
         match kind {
             "turn/start" if root => {
@@ -607,7 +697,7 @@ impl Feed {
                 out.push(json!({ "type": "agent_end" }));
             }
             "user/message" => {
-                if let Some(message) = user_message(data) {
+                if let Some(message) = user_message(data).map(stamp) {
                     c.messages.push(message.clone());
                     // A compaction's summary shows when the session reads its history back afterwards.
                     if root && message["role"] == "user" {
@@ -619,7 +709,7 @@ impl Feed {
                 }
             }
             "assistant/message" => {
-                let message = assistant_message(&data["message"]);
+                let message = stamp(assistant_message(&data["message"]));
                 c.messages.push(message.clone());
                 c.blocks.clear();
                 if root {
@@ -804,6 +894,8 @@ impl Feed {
             "status": c.status,
             "error": c.error,
             "model": c.model,
+            "createdAt": c.started,
+            "lastActiveAt": c.active,
             "messages": c.messages,
         })
     }
@@ -840,6 +932,12 @@ fn user_message(data: &Value) -> Option<Value> {
         let text: Vec<&str> = content.iter().filter_map(|b| b["text"].as_str()).collect();
         return Some(json!({ "role": "compactionSummary", "summary": text.join("\n"), "timestamp": now_ms() }));
     }
+    // A late answer to a question the agent stopped waiting on: what the user answered, as they'd have typed it.
+    if source == "user-question-reply" {
+        if let Some(text) = content[0]["text"].as_str().and_then(question_reply) {
+            return Some(json!({ "role": "user", "content": [{ "type": "text", "text": text }], "timestamp": now_ms() }));
+        }
+    }
     // What another agent sent, or a subagent's closing notice, reads as one message rather than separate lines.
     let content = if source == "user" {
         content
@@ -848,6 +946,31 @@ fn user_message(data: &Value) -> Option<Value> {
         vec![json!({ "type": "text", "text": text.join("\n") })]
     };
     Some(json!({ "role": "user", "content": content, "timestamp": now_ms() }))
+}
+
+/// The answers in dsh's reply to a pending question, one line each: "Which pet? A hamster", or "Skipped".
+fn question_reply(text: &str) -> Option<String> {
+    let reply: Value = serde_json::from_str(text).ok()?;
+    let questions = reply["questions"].as_array()?;
+    let lines: Vec<String> = reply["answers"]
+        .as_array()?
+        .iter()
+        .map(|answer| {
+            let mut picked: Vec<String> = answer["selected"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l.as_str().map(str::to_string))
+                .collect();
+            picked.extend(answer["custom"].as_str().map(str::to_string));
+            let said = if picked.is_empty() { "Skipped".to_string() } else { picked.join(", ") };
+            match questions.iter().find(|q| q["id"] == answer["id"]).and_then(|q| q["question"].as_str()) {
+                Some(question) if questions.len() > 1 => format!("{question} {said}"),
+                _ => said,
+            }
+        })
+        .collect();
+    Some(lines.join("\n"))
 }
 
 /// dsh's assistant message as Pi's. Blocks keep their order, empty reasoning included, so they line up with the
@@ -1069,6 +1192,61 @@ mod tests {
         resumed.replay(&history);
         assert!(!resumed.running);
         assert_eq!(resumed.root_messages().len(), feed.root_messages().len());
+    }
+
+    #[test]
+    fn a_resumed_sessions_subagent_reads_back_as_it_ran() {
+        let (feed, events) = replay();
+        let live = events.iter().filter(|e| e["type"] == "dsh_subagent").last().unwrap().clone();
+        let lines: Vec<Value> = FEED.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let history = |id: &str| -> Vec<Value> {
+            lines
+                .iter()
+                .filter(|l| l["event"] == "session" && l["sessionId"] == id)
+                .map(|l| l["data"].clone())
+                .collect()
+        };
+        let child = live["id"].as_str().unwrap();
+        let mut resumed = Feed { root: feed.root.clone(), ..Default::default() };
+        resumed.replay(&history(&feed.root));
+        resumed.replay_subagent(child, None, &history(child));
+        let read_back = resumed.subagent(child);
+        for field in ["title", "status", "parent", "messages"] {
+            assert_eq!(read_back[field], live[field], "{field}");
+        }
+        assert!(read_back["createdAt"].as_u64() < read_back["lastActiveAt"].as_u64());
+    }
+
+    #[test]
+    fn a_question_shows_until_answered() {
+        let mut feed = Feed { root: "root".into(), ..Default::default() };
+        let question = json!({ "callId": "call_1", "state": "open",
+            "questions": [{ "id": "mode", "question": "Which mode?", "options": [{ "label": "Fast" }] }] });
+        let events = feed.receive(&json!({ "event": "questions", "active": [question] }));
+        assert_eq!(events[0]["type"], "dsh_question");
+        assert_eq!(events[0]["question"]["id"], "call_1");
+        assert_eq!(events[0]["question"]["continued"], false);
+        assert_eq!(events[0]["question"]["questions"][0]["options"][0]["label"], "Fast");
+        // Unchanged: nothing to tell.
+        assert!(feed.receive(&json!({ "event": "questions", "active": [question] })).is_empty());
+        // The agent carried on without the answer; it can still be given.
+        let mut continued = question.clone();
+        continued["state"] = json!("continued");
+        let events = feed.receive(&json!({ "event": "questions", "active": [continued] }));
+        assert_eq!(events[0]["question"]["continued"], true);
+        let events = feed.receive(&json!({ "event": "questions", "active": [] }));
+        assert_eq!(events[0]["question"], Value::Null);
+    }
+
+    #[test]
+    fn a_late_answer_reads_as_what_the_user_said() {
+        let reply = json!({ "kind": "answer_to_pending_question", "callId": "c",
+            "questions": [{ "id": "pet", "question": "Which pet?" }, { "id": "size", "question": "Sizes?" }],
+            "answers": [{ "id": "pet", "selected": [], "custom": "A hamster" }, { "id": "size", "selected": [] }] });
+        let message = user_message(&json!({ "source": { "kind": "user-question-reply" },
+            "content": [{ "type": "text", "text": reply.to_string() }] }))
+        .unwrap();
+        assert_eq!(message["content"][0]["text"], "Which pet? A hamster\nSizes? Skipped");
     }
 
     #[test]

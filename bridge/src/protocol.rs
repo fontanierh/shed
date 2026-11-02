@@ -278,6 +278,11 @@ pub struct SessionSummary {
     pub last_active_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<Goal>,
+    /// What the agent asks the user (DeepSeek's ask_user_question and plan review): `{id, continued, questions:
+    /// [{id, question, header?, detail?, options?: [{label, description?}], multiSelect?}]}`. `continued`: the agent
+    /// stopped waiting and carried on, but still takes the answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<Value>,
 }
 
 /// A background command a session is waiting on.
@@ -457,6 +462,15 @@ pub enum ClientOp {
         session_id: String,
         #[serde(rename = "jobId")]
         job_id: String,
+    },
+    /// Answers to the question the session waits on, `[{id, selected, custom?}]`; none dismisses it.
+    AnswerQuestion {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "questionId")]
+        question_id: String,
+        #[serde(default)]
+        answers: Vec<Value>,
     },
     /// The items before `before`, the first one the client has.
     LoadEarlier {

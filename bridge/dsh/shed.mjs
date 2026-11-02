@@ -3,10 +3,12 @@
 //
 //   bridge → dsh   {"id": 1, "method": "open", "params": {...}}
 //   dsh → bridge   {"id": 1, "result": ...} or {"id": 1, "error": "..."}
-//   dsh → bridge   {"event": "session" | "stream" | "status" | "subagent_end" | "error", ...}
+//   dsh → bridge   {"event": "session" | "stream" | "status" | "subagent_end" | "error" | "questions", ...}
 //
 // Events are dsh's own, forwarded nearly raw: durable session events for the session and every subagent under
-// it, live assistant stream frames, and agent status. The bridge turns them into Shed's events.
+// it, live assistant stream frames, and agent status. The bridge turns them into Shed's events. Shed is also where
+// the agent's questions to the user go (ask_user_question, plan review), as `questions` events: each waits for an
+// `answer`.
 
 import { randomUUID } from "node:crypto";
 import { admitEncodedImages } from "@deepseek-ai/dsh-attachment";
@@ -15,7 +17,7 @@ import { brandString } from "@deepseek-ai/dsh-brand";
 import { ReasoningEffortId, createUserMessage, errorChain } from "@deepseek-ai/dsh-llm";
 
 export const name = "shed";
-export const inject = ["agents", "llm", "sdkAppStartup"];
+export const inject = ["agents", "llm", "sdkAppStartup", "userQuestions"];
 
 export function apply(ctx) {
   const write = (message) => process.stdout.write(JSON.stringify(message) + "\n");
@@ -41,6 +43,57 @@ export function apply(ctx) {
   // Shed runs its agents without asking, as it does Pi and Prime.
   ctx.on("approval/request", () => "allowed-once");
 
+  // The agent's questions to the user. dsh keeps them in the session's projection: "open" while the tool call waits
+  // (two minutes by default), "continued" once the agent carried on without the answer, which it still takes. Shed
+  // is told the whole list whenever it may have changed; an open one's answer settles the waiting call.
+  const waiting = new Map(); // callId → resolve
+  const active = () => {
+    const session = root?.agent.session;
+    const state = session && ctx.get("sessionProjections")?.stateOf(session, "userQuestions");
+    return state?.questions.active ?? [];
+  };
+  let told = "[]";
+  const tell = () =>
+    setImmediate(() => {
+      const list = active().map((q) => ({
+        callId: String(q.callId),
+        questions: q.questions,
+        state: q.state,
+      }));
+      const text = JSON.stringify(list);
+      if (text === told) return;
+      told = text;
+      send("questions", { active: list });
+    });
+  ctx.on(
+    "user-questions/request",
+    function (request, next) {
+      if (!root || request.agent !== root.agent) return next();
+      // A call that waits for good (timeout -1) carries no id: it's the open one nothing waits on yet.
+      const open = active().filter((q) => q.state === "open" && !waiting.has(String(q.callId)));
+      const callId = String(request.wait?.callId ?? open.at(-1)?.callId ?? randomUUID());
+      return new Promise((resolve, reject) => {
+        const aborted = () => {
+          waiting.delete(callId);
+          reject(request.signal.reason);
+          tell();
+        };
+        waiting.set(callId, (answer) => {
+          request.signal?.removeEventListener("abort", aborted);
+          waiting.delete(callId);
+          resolve(answer);
+          tell();
+        });
+        request.signal?.addEventListener("abort", aborted, { once: true });
+        tell();
+      });
+    },
+    { global: true },
+  );
+  ctx.on("session/event", (session) => {
+    if (session === root?.agent.session) tell();
+  });
+
   const live = () => {
     if (!root) throw new Error("no session is open");
     return root;
@@ -55,6 +108,37 @@ export function apply(ctx) {
       if (event !== undefined) events.push(event);
     }
     return events;
+  };
+
+  // A stored session's events, read without taking it over.
+  const read = async (persistence, id) => {
+    const handle = await persistence.open(id, "read");
+    try {
+      return [...(await handle.read()).events];
+    } finally {
+      await handle.close();
+    }
+  };
+
+  // Every subagent under the session, nested ones included, with its durable events: what a resumed session's
+  // subagents read back from.
+  const children = async (events) => {
+    const persistence = ctx.get("sessionPersistence");
+    if (!persistence) return [];
+    const found = [];
+    const walk = async (parent, events) => {
+      for (const event of events) {
+        if (event.type !== "subagent/catalog" || !event.data?.childId) continue;
+        const id = String(event.data.childId);
+        if (found.some((c) => c.sessionId === id)) continue;
+        const events = await read(persistence, brandString(id)).catch(() => undefined);
+        if (!events) continue;
+        found.push({ sessionId: id, ...(parent ? { parent } : {}), events });
+        await walk(id, events);
+      }
+    };
+    await walk(undefined, events);
+    return found;
   };
 
   const selected = async (want) => {
@@ -106,7 +190,9 @@ export function apply(ctx) {
             setup: (agentCtx) => setup(agentCtx, undefined),
           });
       root = { handle, agent: handle.agent, selection };
-      return { ...(await describe()), events: history() };
+      tell();
+      const events = history();
+      return { ...(await describe()), events, children: resume ? await children(events) : [] };
     },
 
     async history() {
@@ -151,6 +237,26 @@ export function apply(ctx) {
         ...(effort === undefined ? (current?.reasoningEffort ? { reasoningEffort: current.reasoningEffort } : {}) : effort ? { reasoningEffort: effort } : {}),
       });
       return describe();
+    },
+
+    // `answers` as dsh takes them ({id, selected, custom?} per question). None skips every question, as dsh's own
+    // answer UI does.
+    async answer({ id, answers }) {
+      const { agent } = live();
+      const question = active().find((q) => String(q.callId) === id);
+      if (!question) throw new Error("that question is no longer waiting for an answer");
+      const batch = {
+        answers: question.questions.map(
+          (q) => answers?.find((a) => a.id === q.id) ?? { id: q.id, selected: [] },
+        ),
+      };
+      const resolve = waiting.get(id);
+      if (resolve) resolve(batch);
+      else if (!ctx.get("userQuestions").answer(agent, question.callId, batch)) {
+        throw new Error("that question is no longer waiting for an answer");
+      }
+      tell();
+      return {};
     },
 
     async models() {
@@ -235,10 +341,16 @@ export function apply(ctx) {
         );
     }
   };
+  // The bridge gone (its end of stdin closed): close the session as `close` does, rather than outlive it.
+  const onEnd = () => methods.close().catch(() => process.exit(0));
   ctx.effect(() => {
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", onData);
+    process.stdin.on("end", onEnd);
     write({ event: "ready" });
-    return () => process.stdin.off("data", onData);
+    return () => {
+      process.stdin.off("data", onData);
+      process.stdin.off("end", onEnd);
+    };
   }, "shed.serve");
 }

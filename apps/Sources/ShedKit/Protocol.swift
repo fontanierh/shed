@@ -142,6 +142,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// When a subagent last did anything or was sent anything (epoch ms).
     public let lastActiveAt: Double?
     public let goal: Goal?
+    /// What the agent asks the user and waits on (DeepSeek's questions and plan review).
+    public let question: AgentQuestion?
 
     public var isSubagent: Bool { kind == .subagent }
     /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
@@ -158,6 +160,29 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// Working, or idle with background jobs that will wake it: not finished either way.
     public var isActive: Bool { status.isBusy || backgroundJobs > 0 }
     public var folderName: String { (cwd as NSString).lastPathComponent }
+}
+
+/// Questions the agent asks the user. Each is answered with the labels picked, or with typed text.
+public struct AgentQuestion: Codable, Equatable, Sendable {
+    public let id: String
+    public let questions: [Item]
+    /// The agent stopped waiting and carried on, but still takes the answer.
+    public let continued: Bool?
+
+    public struct Item: Codable, Equatable, Sendable {
+        public let id: String
+        public let question: String
+        public let header: String?
+        /// What it asks about at length: a plan to review.
+        public let detail: String?
+        public let options: [Option]?
+        public let multiSelect: Bool?
+    }
+
+    public struct Option: Codable, Equatable, Sendable {
+        public let label: String
+        public let description: String?
+    }
 }
 
 /// The background command a session is waiting on.

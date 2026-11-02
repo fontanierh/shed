@@ -50,7 +50,7 @@ PLIST
 esac
 
 # What the bridge is built from, plus Pi's extensions it relies on. Unchanged since the last sync: nothing to do.
-hash="$(cd "$ROOT" && find bridge/src bridge/Cargo.toml bridge/Cargo.lock setup/pi setup/prime setup/lib setup/bridge-defaults.json -type f -print0 | sort -z | xargs -0 shasum | shasum | cut -c1-40)"
+hash="$(cd "$ROOT" && find bridge/src bridge/dsh bridge/Cargo.toml bridge/Cargo.lock setup/pi setup/prime setup/lib setup/bridge-defaults.json -type f -print0 | sort -z | xargs -0 shasum | shasum | cut -c1-40)"
 [ "$hash" = "$(cat "$STATE" 2>/dev/null)" ] && exit 0
 
 echo "$(date '+%F %T') syncing $TARGET"

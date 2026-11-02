@@ -272,6 +272,7 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         standard_window: None,
         last_active_at: None,
         goal: None,
+        question: None,
     }
 }
 
@@ -697,6 +698,7 @@ impl App {
                     let mut st = session.state.lock().await;
                     if st.child.as_ref().is_some_and(|c| Arc::ptr_eq(c, &child)) {
                         st.child = None;
+                        st.summary.question = None;
                         if st.stopping {
                             st.summary.status = SessionStatus::Stopped;
                         } else {
@@ -1241,6 +1243,10 @@ impl App {
                 summary_changed = true;
             }
             "dsh_subagent" => dsh_subagent = Some(event.clone()),
+            "dsh_question" => {
+                st.summary.question = Some(event["question"].clone()).filter(|q| q.is_object());
+                summary_changed = true;
+            }
             "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
                 if session.backend == Backend::Pi && event["toolName"] == "subagent" =>
             {
@@ -1505,7 +1511,10 @@ impl App {
         };
         {
             let mut st = session.state.lock().await;
-            st.summary.last_active_at = Some(now_ms());
+            st.summary.last_active_at = Some(child["lastActiveAt"].as_u64().unwrap_or_else(now_ms));
+            if let Some(created) = child["createdAt"].as_u64() {
+                st.summary.created_at = created;
+            }
             st.summary.name = Some("subagent".into());
             st.summary.title = first_line(child["title"].as_str().unwrap_or("subagent"), 60);
             st.summary.status = status;
