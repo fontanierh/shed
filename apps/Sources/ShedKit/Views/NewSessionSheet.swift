@@ -49,8 +49,19 @@ struct NewSessionSheet: View {
             #endif
         }
     }
+    /// DeepSeek Harness runs only DeepSeek's models, and the other agents none of them: a model left from the other
+    /// kind of agent would fail to start.
+    private func fitModel() {
+        if !model.isEmpty, model.hasPrefix("deepseek") != (agent == .deepseek) { model = "" }
+    }
+
     private var models: [String] {
         let saved = recentModels.split(separator: "\n").map(String.init)
+        // DeepSeek Harness only runs the providers set up in it.
+        if agent == .deepseek {
+            let deepseek = ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"]
+            return saved.filter { $0.hasPrefix("deepseek") } + deepseek.filter { !saved.contains($0) }
+        }
         return saved + ["openai/gpt-6.1-terra"].filter { !saved.contains($0) }
     }
 
@@ -62,8 +73,9 @@ struct NewSessionSheet: View {
             mac
             #endif
         }
-        .onAppear(perform: restoreFolder)
+        .onAppear { restoreFolder(); fitModel() }
         .onChange(of: env) { restoreFolder() }
+        .onChange(of: agent) { fitModel() }
     }
 
     private var mac: some View {
@@ -87,6 +99,8 @@ struct NewSessionSheet: View {
                               detail: "Python REPL agent. Asynchronous subagents keep working in the background.") { agent = .prime }
                     AgentCard(kind: .pi, selected: agent == .pi,
                               detail: "Minimal coding agent with file and shell tools. Subagents run in sequence.") { agent = .pi }
+                    AgentCard(kind: .deepseek, selected: agent == .deepseek,
+                              detail: "DeepSeek Harness. Subagents and background commands on DeepSeek's models.") { agent = .deepseek }
                 }
 
                 section("Folder", note: "Double-click or › to open a folder") {
@@ -196,6 +210,8 @@ struct NewSessionSheet: View {
                                   detail: "Python REPL agent. Asynchronous subagents keep working in the background.") { agent = .prime }
                         AgentCard(kind: .pi, selected: agent == .pi,
                                   detail: "Minimal coding agent with file and shell tools. Subagents run in sequence.") { agent = .pi }
+                        AgentCard(kind: .deepseek, selected: agent == .deepseek,
+                                  detail: "DeepSeek Harness. Subagents and background commands on DeepSeek's models.") { agent = .deepseek }
                     }
 
                     section("Folder") {
@@ -294,7 +310,7 @@ struct AgentCard: View {
                 Spirit(color: Palette.agent(kind), size: 52)
                     .offset(y: hop ? -8 : 0)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(kind == .prime ? "Prime Agent" : "Pi").font(.system(size: 16, weight: .medium)).foregroundStyle(Palette.moon)
+                    Text(kind == .prime ? "Prime Agent" : kind.displayName).font(.system(size: 16, weight: .medium)).foregroundStyle(Palette.moon)
                     Text(detail).font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)

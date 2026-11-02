@@ -88,6 +88,9 @@ pub struct SessionState {
     roster_mark: (String, u64),
     /// Pi subagents: transcript length last sent, to avoid resending unchanged snapshots.
     sent_messages: usize,
+    /// Prime: the conversation's `sessionId`, which outlives the `activeSessionId` the bridge knows it by (a reopened
+    /// session gets a new one). What its chosen context window is saved under.
+    prime_session: Option<String>,
     /// Prime: the worker process running this session, for counting its background jobs.
     pub(crate) worker_pid: Option<u32>,
     /// Prime: running a tool call, which one (Prime's count of calls so far) and since when.
@@ -288,6 +291,7 @@ impl SessionState {
             levels_for: None,
             roster_mark: (String::new(), 0),
             sent_messages: usize::MAX,
+            prime_session: None,
             worker_pid: None,
             tools: None,
             stall: Default::default(),
@@ -646,7 +650,8 @@ impl App {
     }
 
     pub async fn delete_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
-        self.forget_limit(&session.id);
+        let key = limit_key(session, &*session.state.lock().await).to_string();
+        self.forget_limit(&key);
         match session.backend {
             Backend::Prime => return self.close_session(session).await,
             Backend::Pi => self.close_session(session).await?,
@@ -729,6 +734,10 @@ impl App {
             // Also tells a command stuck on macOS's permission prompt, Pi's included.
             let tree = crate::jobs::ProcessTree::snapshot().await;
             for session in sessions {
+                // DeepSeek reports its own background commands as events.
+                if session.agent == AgentKind::Deepseek {
+                    continue;
+                }
                 let (jobs, waiting) = match session.backend {
                     Backend::Pi => crate::jobs::pi_running(&session.id, tree.as_ref()),
                     _ => {
@@ -1111,6 +1120,12 @@ impl App {
             };
         }
         st.session_file = row["sessionFile"].as_str().map(str::to_string);
+        if st.prime_session.is_none() {
+            st.prime_session = row["sessionId"].as_str().map(str::to_string);
+            if let Some(key) = &st.prime_session {
+                self.rekey_limit(&session.id, key);
+            }
+        }
         if let Some(own) = reported {
             st.summary.cost = self.prime_cost(st.session_file.as_deref(), own, st.summary.cost);
         }
@@ -1183,6 +1198,7 @@ impl App {
         let mut refresh = false;
         let mut resnapshot = false;
         let mut pi_subagents: Option<(String, Value, bool)> = None;
+        let mut dsh_subagent: Option<Value> = None;
         let kind = event["type"].as_str().unwrap_or("");
         match kind {
             "agent_start" => st.summary.status = SessionStatus::Running,
@@ -1220,6 +1236,11 @@ impl App {
                 st.summary.goal = Goal::from_value(&event["goal"]);
                 summary_changed = true;
             }
+            "dsh_jobs" => {
+                st.summary.background_jobs = event["running"].as_u64().unwrap_or(0) as u32;
+                summary_changed = true;
+            }
+            "dsh_subagent" => dsh_subagent = Some(event.clone()),
             "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
                 if session.backend == Backend::Pi && event["toolName"] == "subagent" =>
             {
@@ -1261,6 +1282,9 @@ impl App {
         if let Some((call_id, details, finished)) = pi_subagents {
             self.update_pi_subagents(session, &call_id, &details, finished)
                 .await;
+        }
+        if let Some(child) = dsh_subagent {
+            self.update_dsh_subagent(session, &child).await;
         }
         if resnapshot {
             let (app, session) = (self.clone(), session.clone());
@@ -1441,6 +1465,86 @@ impl App {
         }
     }
 
+    /// Mirror one of a DeepSeek session's subagents as a read-only session. dsh runs them in the session's own
+    /// process, each with its own conversation, and can nest them; the feed gives one child's whole state at a time.
+    async fn update_dsh_subagent(self: &Arc<Self>, root: &Arc<Session>, child: &Value) {
+        let short = |dsh_id: &str| dsh_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect::<String>();
+        let Some(dsh_id) = child["id"].as_str() else {
+            return;
+        };
+        let id = format!("{}.{}", root.id, short(dsh_id));
+        let (parent_id, depth) = match child["parent"].as_str() {
+            Some(parent) => (format!("{}.{}", root.id, short(parent)), 2),
+            None => (root.id.clone(), 1),
+        };
+        let session = match self.find(&id).await {
+            Ok(s) => s,
+            Err(_) => {
+                let mut summary =
+                    new_summary(&id, AgentKind::Deepseek, SessionKind::Subagent, &root.cwd);
+                summary.parent_id = Some(parent_id);
+                summary.depth = depth;
+                summary.read_only = true;
+                let session = Arc::new(Session {
+                    id: id.clone(),
+                    agent: AgentKind::Deepseek,
+                    backend: Backend::PiSubagent,
+                    cwd: root.cwd.clone(),
+                    state: Mutex::new(SessionState::new(summary, None)),
+                });
+                self.sessions.write().await.push(session.clone());
+                session
+            }
+        };
+        let root_model = root.state.lock().await.summary.model.clone();
+        let messages: Vec<Value> = child["messages"].as_array().cloned().unwrap_or_default();
+        let status = match child["status"].as_str() {
+            Some("running") => SessionStatus::Running,
+            Some("error") => SessionStatus::Error,
+            _ => SessionStatus::Done,
+        };
+        {
+            let mut st = session.state.lock().await;
+            st.summary.last_active_at = Some(now_ms());
+            st.summary.name = Some("subagent".into());
+            st.summary.title = first_line(child["title"].as_str().unwrap_or("subagent"), 60);
+            st.summary.status = status;
+            st.summary.error = child["error"].as_str().map(|e| first_line(e, 200));
+            st.summary.model = match child["model"].as_str().and_then(|m| m.split_once('/')) {
+                Some((provider, model)) => Some(ModelInfo {
+                    provider: provider.into(),
+                    id: model.into(),
+                    name: model.into(),
+                    context_window: root_model.as_ref().and_then(|m| m.context_window),
+                    reasoning: true,
+                }),
+                None => root_model,
+            };
+            if messages.len() != st.sent_messages || status != SessionStatus::Running {
+                st.transcript.reset(&messages);
+                st.sent_messages = messages.len();
+                self.send_snapshot(&session.id, &mut st);
+            }
+            self.publish_summary(&st);
+        }
+        // The parent shows subagents at work while any of its children is.
+        let prefix = format!("{}.", root.id);
+        let mut running = false;
+        let all = self.sessions.read().await.clone();
+        for s in all.iter().filter(|s| s.id.starts_with(&prefix)) {
+            if s.backend == Backend::PiSubagent
+                && s.state.lock().await.summary.status == SessionStatus::Running
+            {
+                running = true;
+            }
+        }
+        let mut st = root.state.lock().await;
+        if st.summary.running_subagents != running {
+            st.summary.running_subagents = running;
+            self.publish_summary(&st);
+        }
+    }
+
     fn schedule_refresh(self: &Arc<Self>, session: &Arc<Session>, st: &mut SessionState) {
         if st.refresh_scheduled || session.backend == Backend::PiSubagent {
             return;
@@ -1540,7 +1644,12 @@ impl App {
         }
         // A chosen window, else the model's standard one: report against it, and compact once the session settles
         // near it.
-        let chosen = self.limits.lock().unwrap().get(&session.id).copied();
+        let chosen = self
+            .limits
+            .lock()
+            .unwrap()
+            .get(limit_key(session, &st))
+            .copied();
         let model_key = st
             .summary
             .model
@@ -1611,6 +1720,22 @@ impl App {
         });
     }
 
+    /// A window chosen before the session's `sessionId` was known (or by a bridge that saved it under the
+    /// `activeSessionId`) moves to it, so it survives the session reopening.
+    fn rekey_limit(&self, id: &str, key: &str) {
+        let limits = {
+            let mut limits = self.limits.lock().unwrap();
+            let Some(limit) = limits.remove(id) else {
+                return;
+            };
+            limits.entry(key.to_string()).or_insert(limit);
+            limits.clone()
+        };
+        if let Err(e) = self.store.save_limits(&limits) {
+            eprintln!("failed to save context windows: {e}");
+        }
+    }
+
     fn forget_limit(&self, id: &str) {
         let limits = {
             let mut limits = self.limits.lock().unwrap();
@@ -1634,11 +1759,12 @@ impl App {
         if limit.is_some_and(|l| l < 32_000) {
             bail!("a context window needs at least 32k tokens");
         }
+        let key = limit_key(session, &*session.state.lock().await).to_string();
         let limits = {
             let mut limits = self.limits.lock().unwrap();
             match limit {
-                Some(limit) => limits.insert(session.id.clone(), limit),
-                None => limits.remove(&session.id),
+                Some(limit) => limits.insert(key, limit),
+                None => limits.remove(&key),
             };
             limits.clone()
         };
@@ -1970,4 +2096,9 @@ pub fn expand_dir(path: &str) -> Result<String> {
         bail!("{path} is not a directory");
     }
     Ok(canonical.to_string_lossy().into_owned())
+}
+
+/// What a session's chosen context window is saved under: a Prime conversation's `sessionId`, else the session's id.
+fn limit_key<'a>(session: &'a Session, st: &'a SessionState) -> &'a str {
+    st.prime_session.as_deref().unwrap_or(&session.id)
 }

@@ -41,8 +41,15 @@ enum Palette {
 
     static let prime = ice
     static let pi = lilac
+    static let deepseek = periwinkle
 
-    static func agent(_ kind: AgentKind) -> Color { kind == .pi ? pi : prime }
+    static func agent(_ kind: AgentKind) -> Color {
+        switch kind {
+        case .pi: pi
+        case .prime: prime
+        case .deepseek: deepseek
+        }
+    }
 
     /// A stable spirit color per subagent name.
     static func avatar(_ name: String) -> Color {

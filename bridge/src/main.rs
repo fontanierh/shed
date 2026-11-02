@@ -1,5 +1,6 @@
 //! agent-remote: control Pi and Prime Agent sessions on this Mac from the macOS and iOS apps.
 
+mod dsh;
 mod cost;
 mod files;
 mod history;

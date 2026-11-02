@@ -2,9 +2,15 @@
 import Foundation
 
 public enum AgentKind: String, Codable, CaseIterable, Identifiable, Sendable {
-    case pi, prime
+    case pi, prime, deepseek
     public var id: String { rawValue }
-    public var displayName: String { self == .pi ? "Pi" : "Prime" }
+    public var displayName: String {
+        switch self {
+        case .pi: "Pi"
+        case .prime: "Prime"
+        case .deepseek: "DeepSeek"
+        }
+    }
 }
 
 public enum ItemKind: String, Codable, Sendable {
@@ -138,6 +144,11 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let goal: Goal?
 
     public var isSubagent: Bool { kind == .subagent }
+    /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
+    /// process, so their commands are the parent's.
+    public var hasBackgroundCommands: Bool { !(agent != .prime && isSubagent) }
+    /// DeepSeek Harness compacts on its own: it can compact now, but has no switch to stop it.
+    public var controlsAutoCompaction: Bool { agent != .deepseek }
     /// A subagent left fully idle for five minutes, nothing waiting for it: taken to be gone, since Prime keeps
     /// finished subagents alive. It shows again as soon as it does anything.
     public func isDormant(at now: Date) -> Bool {

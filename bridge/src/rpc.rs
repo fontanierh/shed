@@ -17,6 +17,8 @@ use tokio::sync::{mpsc, oneshot};
 pub enum AgentKind {
     Pi,
     Prime,
+    /// DeepSeek Harness, driven through Shed's dsh plugin by `crate::dsh`.
+    Deepseek,
 }
 
 pub struct SpawnOptions {
@@ -37,7 +39,9 @@ pub enum ChildOutput {
 type Pending = oneshot::Sender<Result<Value, String>>;
 
 pub struct RpcChild {
-    stdin: tokio::sync::Mutex<ChildStdin>,
+    /// Pi and Prime: commands go straight to stdin. DeepSeek: `dsh` owns stdin and answers them.
+    stdin: tokio::sync::Mutex<Option<ChildStdin>>,
+    dsh: Option<Arc<crate::dsh::Dsh>>,
     pending: Arc<Mutex<HashMap<String, Pending>>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     next_id: AtomicU64,
@@ -45,6 +49,14 @@ pub struct RpcChild {
 }
 
 fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {
+    if opts.agent == AgentKind::Deepseek {
+        // The session's model, reasoning effort and resumption go to the plugin once it starts.
+        let layer = crate::dsh::install_profile()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let args = ["--profile", crate::dsh::PROFILE, "--patch", &layer];
+        return ("dsh".into(), args.iter().map(|a| a.to_string()).collect());
+    }
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
     let program = match opts.agent {
         AgentKind::Pi => "pi",
@@ -52,6 +64,7 @@ fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {
             args.extend(["--cwd".into(), opts.cwd.clone()]);
             "prime-agent"
         }
+        AgentKind::Deepseek => unreachable!(),
     };
     if let Some(model) = &opts.model {
         args.extend(["--model".into(), model.clone()]);
@@ -80,6 +93,11 @@ impl RpcChild {
             .args(&args)
             .current_dir(&opts.cwd)
             .envs(opts.env.iter().cloned())
+            // Shed runs its agents without asking or a sandbox, as it does Pi and Prime.
+            .envs(
+                (opts.agent == AgentKind::Deepseek)
+                    .then_some(("DSH_PERMISSION_MODE", "danger-full-access")),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -88,15 +106,41 @@ impl RpcChild {
             .map_err(|e| anyhow!("failed to start {program}: {e}"))?;
 
         let stdin = child.stdin.take().expect("piped stdin");
-        let stdout = child.stdout.take().expect("piped stdout");
+        let mut stdout = child.stdout.take();
         let stderr = child.stderr.take().expect("piped stderr");
         let (tx, rx) = mpsc::unbounded_channel();
-        let rpc = Arc::new(RpcChild {
-            stdin: tokio::sync::Mutex::new(stdin),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
-            next_id: AtomicU64::new(0),
-            child: Mutex::new(Some(child)),
+        let deepseek = opts.agent == AgentKind::Deepseek;
+        let rpc = Arc::new_cyclic(|me: &std::sync::Weak<RpcChild>| {
+            let me = me.clone();
+            let exited = async move {
+                match me.upgrade() {
+                    Some(rpc) => rpc.wait_exit().await,
+                    None => "agent exited".into(),
+                }
+            };
+            let (stdin, dsh) = if deepseek {
+                let stdout = stdout.take().expect("piped stdout");
+                (
+                    None,
+                    Some(crate::dsh::Dsh::start(
+                        opts,
+                        stdin,
+                        stdout,
+                        tx.clone(),
+                        exited,
+                    )),
+                )
+            } else {
+                (Some(stdin), None)
+            };
+            RpcChild {
+                stdin: tokio::sync::Mutex::new(stdin),
+                dsh,
+                pending: Arc::new(Mutex::new(HashMap::new())),
+                stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
+                next_id: AtomicU64::new(0),
+                child: Mutex::new(Some(child)),
+            }
         });
 
         let tail = rpc.stderr_tail.clone();
@@ -114,6 +158,9 @@ impl RpcChild {
             }
         });
 
+        let Some(stdout) = stdout else {
+            return Ok((rpc, rx));
+        };
         // Read stdout continuously (a stalled reader stalls the agent) and split strictly on LF:
         // U+2028/U+2029 are valid inside JSON strings.
         let pending = rpc.pending.clone();
@@ -166,6 +213,9 @@ impl RpcChild {
     }
 
     pub async fn send(&self, kind: &str, fields: Value) -> Result<Value> {
+        if let Some(dsh) = &self.dsh {
+            return dsh.send(kind, fields).await;
+        }
         let id = format!("b{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let mut command = json!({ "id": id, "type": kind });
         if let (Some(obj), Value::Object(extra)) = (command.as_object_mut(), fields) {
@@ -176,7 +226,11 @@ impl RpcChild {
         let mut line = serde_json::to_vec(&command)?;
         line.push(b'\n');
         {
-            let mut stdin = self.stdin.lock().await;
+            let mut guard = self.stdin.lock().await;
+            let Some(stdin) = guard.as_mut() else {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(anyhow!("agent is not running"));
+            };
             if let Err(e) = async {
                 stdin.write_all(&line).await?;
                 stdin.flush().await
@@ -196,7 +250,14 @@ impl RpcChild {
 
     /// Close stdin for an orderly shutdown; kill if the agent hasn't exited after 3 seconds.
     pub async fn close(&self) {
-        let _ = self.stdin.lock().await.shutdown().await;
+        match &self.dsh {
+            Some(dsh) => dsh.close().await,
+            None => {
+                if let Some(stdin) = self.stdin.lock().await.as_mut() {
+                    let _ = stdin.shutdown().await;
+                }
+            }
+        }
         let child = self.child.lock().unwrap().take();
         if let Some(mut child) = child {
             tokio::spawn(async move {

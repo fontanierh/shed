@@ -58,7 +58,7 @@ struct SessionView: View {
         return ReaderAction { store.restartKernel() }
     }
 
-    private var hasJobs: Bool { !(session.agent == .pi && session.isSubagent) }
+    private var hasJobs: Bool { session.hasBackgroundCommands }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -277,12 +277,14 @@ struct PhoneSessionToolbar: ToolbarContent {
                 Section {
                     Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
                         .disabled(session.status.isBusy)
-                    Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                    if session.controlsAutoCompaction {
+                        Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                    }
                 }
                 if session.agent == .prime {
                     Button("Restart Python Kernel…", systemImage: "arrow.clockwise", action: restartKernel)
                 }
-                if !(session.agent == .pi && session.isSubagent) {
+                if session.hasBackgroundCommands {
                     Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
                 }
                 Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(session.cwd) }
@@ -516,8 +518,7 @@ struct SessionHeader: View {
 
             // The composer shows the context gauge; read-only sessions have none.
             if session.readOnly || session.status == .stopped, let context = session.context { ContextGauge(context: context) }
-            // Pi subagents run in the parent's process; their commands are the parent's.
-            if !(session.agent == .pi && session.isSubagent) { BackgroundCommandsButton(store: store, session: session) }
+            if session.hasBackgroundCommands { BackgroundCommandsButton(store: store, session: session) }
             Text(session.cost, format: .currency(code: "USD").precision(.fractionLength(2)))
                 .font(.system(size: 12.5).monospacedDigit())
                 .contentTransition(.numericText(value: session.cost))
@@ -533,7 +534,9 @@ struct SessionHeader: View {
                     }
                     Button("Compact Now") { store.compact() }
                         .disabled(session.status.isBusy)
-                    Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                    if session.controlsAutoCompaction {
+                        Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                    }
                     if session.agent == .prime {
                         Button("Restart Python Kernel…") { restartingKernel = true }
                     }

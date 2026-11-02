@@ -4,6 +4,7 @@
 //! - Prime: the daemon's kernel bash activity (`bash()` from the REPL) and persistent shells.
 //! - Pi: the `background-jobs` extension, which keeps a JSON record and a log per job in a folder the bridge
 //!   chooses for each session (`AGENT_REMOTE_JOBS_DIR`).
+//! - DeepSeek: dsh's own job registry, through Shed's dsh plugin.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
 use crate::protocol::{BackgroundJob, WaitingOn};
+use crate::rpc::AgentKind;
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
@@ -305,6 +307,15 @@ fn wrapped_command(wrapper: &str) -> String {
 impl App {
     /// Newest first.
     pub async fn list_jobs(&self, session: &Session) -> Result<Vec<BackgroundJob>> {
+        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+            let data = self.command(session, "dsh_jobs", json!({})).await?;
+            let mut jobs: Vec<BackgroundJob> = data["jobs"]
+                .as_array()
+                .map(|jobs| jobs.iter().map(dsh_job).collect())
+                .unwrap_or_default();
+            jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
+            return Ok(jobs);
+        }
         let mut jobs = match session.backend {
             Backend::Prime => {
                 let bash = self.command(session, "list_kernel_bash", json!({})).await?;
@@ -357,6 +368,14 @@ impl App {
     /// The last `lines` lines of a job's output.
     pub async fn job_output(&self, session: &Session, job_id: &str, lines: u32) -> Result<String> {
         let lines = lines.clamp(1, 200);
+        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+            let data = self
+                .command(session, "dsh_job_output", json!({ "jobId": job_id }))
+                .await?;
+            let text = data["text"].as_str().unwrap_or_default();
+            let all: Vec<&str> = text.lines().collect();
+            return Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"));
+        }
         match session.backend {
             Backend::Prime if job_id.starts_with(PROCESS) => {
                 Ok("Prime no longer lists this command, so its output can't be shown.".into())
@@ -403,6 +422,11 @@ impl App {
     /// Terminates a running job (its whole process group). The agent then gets its `[bash-done]` notice, as when it
     /// stops the job itself.
     pub async fn kill_job(&self, session: &Session, job_id: &str) -> Result<bool> {
+        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+            self.command(session, "dsh_kill_job", json!({ "jobId": job_id }))
+                .await?;
+            return Ok(true);
+        }
         if let Some(pid) = job_id.strip_prefix(PROCESS) {
             // Only a command still running under this session's kernel, never an arbitrary pid.
             let pid: u32 = pid.parse().map_err(|_| anyhow!("invalid job id"))?;
@@ -471,6 +495,32 @@ impl App {
             }
             Backend::PiSubagent => bail!("Pi subagents have no background commands"),
         }
+    }
+}
+
+/// One of dsh's jobs (its registry's view) as a background command.
+fn dsh_job(job: &Value) -> BackgroundJob {
+    let started = job["startedAt"].as_u64();
+    let finished = job["finishedAt"].as_u64();
+    let running = matches!(job["status"].as_str(), Some("running" | "stopping"));
+    // dsh words a shell job's exit as "exit code: N".
+    let exit_code = job["detail"]
+        .as_str()
+        .and_then(|d| d.strip_prefix("exit code: "))
+        .and_then(|code| code.trim().parse().ok());
+    BackgroundJob {
+        id: job["id"].as_str().unwrap_or_default().to_string(),
+        command: job["label"].as_str().unwrap_or_default().to_string(),
+        pid: None,
+        started_at: started,
+        duration_ms: match (started, finished) {
+            (Some(s), Some(f)) => Some(f.saturating_sub(s)),
+            _ => None,
+        },
+        status: if running { "running" } else { "finished" }.into(),
+        exit_code,
+        persistent: false,
+        stuck: None,
     }
 }
 

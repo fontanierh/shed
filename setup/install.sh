@@ -43,6 +43,16 @@ fi
 pi update --models
 note "pi $(pi --version)"
 
+step "DeepSeek Harness"
+# The bridge runs dsh with its own plugin, in a `shed` profile it writes on each start. The provider key is set
+# once in `dsh web` (Models), which keeps it in ~/.dsh.
+if command -v npm >/dev/null; then
+  npm install --global --silent @deepseek-ai/dsh@latest
+  note "dsh $(npm ls --global --depth 0 @deepseek-ai/dsh 2>/dev/null | sed -n 's/.*@deepseek-ai\/dsh@//p')"
+else
+  note "skipped: needs Node (npm)"
+fi
+
 step "Prime Agent"
 before="$(command -v prime-agent >/dev/null && prime-agent --version 2>/dev/null || true)"
 if [ -n "$before" ]; then prime-agent update; else curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh; fi
