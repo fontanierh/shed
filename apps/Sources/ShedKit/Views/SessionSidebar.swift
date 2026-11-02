@@ -35,6 +35,8 @@ struct SessionSidebar: View {
             #if os(macOS)
             // Below the window's traffic lights.
             .padding(.top, 34)
+            // With them, where the title bar would be: drag it to move the window.
+            .background { WindowDragArea().ignoresSafeArea(edges: .top) }
             #else
             .padding(.top, 8)
             #endif

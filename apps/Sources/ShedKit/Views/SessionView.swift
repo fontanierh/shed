@@ -564,6 +564,10 @@ struct SessionHeader: View {
         .padding(.leading, 20)
         .padding(.trailing, 12)
         .frame(height: 52)
+        #if os(macOS)
+        // Stands in for the title bar: drag it to move the window.
+        .background { WindowDragArea().ignoresSafeArea(edges: .top) }
+        #endif
         .background {
             LinearGradient(colors: [Palette.surface.opacity(0.9), Palette.surface.opacity(0.75)], startPoint: .top, endPoint: .bottom)
                 .overlay(alignment: .bottom) {
@@ -573,10 +577,6 @@ struct SessionHeader: View {
                 .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
                 .ignoresSafeArea(edges: .top)
         }
-        #if os(macOS)
-        // Stands in for the title bar: drag it to move the window.
-        .gesture(WindowDragGesture())
-        #endif
     }
 }
 
