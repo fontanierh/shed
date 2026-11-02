@@ -324,26 +324,19 @@ impl Dsh {
                 self.call("cancel", json!({ "keepInbox": keep })).await?;
                 Ok(Value::Null)
             }
+            // dsh's own compaction events (as for one it starts itself) tell how it goes once it has begun; a request
+            // it turns down before then (nothing to compact) ends here.
             "compact" => {
                 self.emit(json!({ "type": "compaction_start", "reason": "manual" }));
+                let before = self.feed.lock().unwrap().compactions;
                 let result = self.call("command", json!({ "line": "/compact" })).await;
-                let end = match &result {
-                    Ok(r) if r["kind"] == "success" => json!({ "type": "compaction_end" }),
-                    Ok(r) => json!({ "type": "compaction_end", "errorMessage": r["text"] }),
-                    Err(e) => json!({ "type": "compaction_end", "errorMessage": e.to_string() }),
-                };
-                // The compacted history is what dsh's session now reads.
-                if result.as_ref().is_ok_and(|r| r["kind"] == "success") {
-                    if let Ok(opened) = self.call("history", json!({})).await {
-                        let mut feed = self.feed.lock().unwrap();
-                        let root = feed.root.clone();
-                        feed.sessions.remove(&root);
-                        if let Some(events) = opened["events"].as_array() {
-                            feed.replay(events);
-                        }
-                    }
+                let ended = self.feed.lock().unwrap().compactions != before;
+                match &result {
+                    _ if ended => {}
+                    Ok(r) if r["kind"] == "success" => self.emit(json!({ "type": "compaction_end" })),
+                    Ok(r) => self.emit(json!({ "type": "compaction_end", "errorMessage": r["text"] })),
+                    Err(e) => self.emit(json!({ "type": "compaction_end", "errorMessage": e.to_string() })),
                 }
-                self.emit(end);
                 result.map(|_| Value::Null)
             }
             "set_auto_compaction" => bail!("DeepSeek Harness compacts on its own"),
@@ -462,6 +455,8 @@ struct Feed {
     jobs: HashMap<String, bool>,
     /// Subagent names, from the parent's catalog.
     labels: HashMap<String, String>,
+    /// Compactions of the root that have ended.
+    compactions: u64,
     /// What the agent asks the user: its tool call's id, dsh's questions, and whether the agent carried on without
     /// the answer (it still takes it).
     question: Option<Value>,
@@ -773,6 +768,18 @@ impl Feed {
                         "durationMs": started.elapsed().as_millis() as u64,
                     }));
                 }
+            }
+            // The summary the compaction writes shows once the session reads its history back, at the end.
+            "compaction/start" if root => {
+                let reason = if data["sourceCommandId"].is_string() { "manual" } else { "threshold" };
+                out.push(json!({ "type": "compaction_start", "reason": reason }));
+            }
+            "compaction/end" if root => {
+                self.compactions += 1;
+                out.push(match data["error"].as_str() {
+                    Some(error) => json!({ "type": "compaction_end", "errorMessage": error }),
+                    None => json!({ "type": "compaction_end" }),
+                });
             }
             "request/context" => {
                 if root {
@@ -1247,6 +1254,18 @@ mod tests {
             "content": [{ "type": "text", "text": reply.to_string() }] }))
         .unwrap();
         assert_eq!(message["content"][0]["text"], "Which pet? A hamster\nSizes? Skipped");
+    }
+
+    #[test]
+    fn a_compaction_shows_while_it_runs() {
+        let mut feed = Feed { root: "root".into(), ..Default::default() };
+        let event = |kind: &str, data: Value| json!({ "event": "session", "sessionId": "root", "data": { "type": kind, "data": data } });
+        let started = feed.receive(&event("compaction/start", json!({ "compactionId": "c1", "turn": null })));
+        assert_eq!(started[0], json!({ "type": "compaction_start", "reason": "threshold" }));
+        let ended = feed.receive(&event("compaction/end", json!({ "compactionId": "c1", "turn": null, "error": "summary failed" })));
+        assert_eq!(ended[0]["type"], "compaction_end");
+        assert_eq!(ended[0]["errorMessage"], "summary failed");
+        assert_eq!(feed.compactions, 1);
     }
 
     #[test]

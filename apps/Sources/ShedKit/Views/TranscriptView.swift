@@ -186,6 +186,7 @@ struct TranscriptView: View, Equatable {
     nonisolated static func == (a: TranscriptView, b: TranscriptView) -> Bool {
         a.items == b.items && a.session.id == b.session.id && a.session.agent == b.session.agent
             && a.session.status.isBusy == b.session.status.isBusy && a.session.isSubagent == b.session.isSubagent
+            && (a.session.status == .compacting) == (b.session.status == .compacting)
             && a.session.cwd == b.session.cwd && a.pending == b.pending && a.idle == b.idle && a.earlier == b.earlier
             && a.loadingEarlier == b.loadingEarlier && (a.openParent == nil) == (b.openParent == nil)
             && (a.loadEarlier == nil) == (b.loadEarlier == nil)
@@ -269,6 +270,10 @@ struct TranscriptView: View, Equatable {
                         .equatable()
                         .modifier(Arrival(animate: opened && block.id == blocks.last?.id))
                         .id(block.id)
+                }
+                if session.status == .compacting {
+                    CompactingMarker()
+                        .transition(.opacity)
                 }
                 if !idle.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
@@ -906,6 +911,32 @@ struct CompactionMarker: View {
                     .transition(.opacity)
             }
         }
+    }
+}
+
+/// Where the compacted marker will go, while the agent condenses the conversation: it can take a minute or two.
+struct CompactingMarker: View {
+    @State private var start = Date.now
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack { Divider() }
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.mini).tint(Palette.lilac)
+                Text("Compacting context").shimmer(true)
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(Format.duration(ms: max(0, context.date.timeIntervalSince(start)) * 1000))
+                        .monospacedDigit().foregroundStyle(Palette.lilac.opacity(0.6))
+                        .contentTransition(.numericText())
+                }
+            }
+            .font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.lilac)
+            .lineLimit(1)
+            .padding(.horizontal, 12).frame(height: 26)
+            .card(radius: 13, fill: Palette.lilac.opacity(0.08), border: Palette.lilac.opacity(0.3))
+            VStack { Divider() }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
