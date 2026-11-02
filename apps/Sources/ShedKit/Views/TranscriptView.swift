@@ -133,6 +133,58 @@ final class BlockTop {
     var y: CGFloat = 0
 }
 
+/// Where the transcript's blocks were last laid out, in its content's coordinates. A block that has been measured and is
+/// a few screens away from the reader draws as an empty space of its height: in one stack, a block that changes size
+/// (a streaming reply, 12 times a second) moves every block after it and re-checks every block before it, down to each
+/// line of text, so a reader deep in a long conversation kept the main thread busy. The heights are the ones measured,
+/// so the scroll view's content stays exactly as tall and nothing moves when a block comes back. A class, so measuring
+/// never re-renders the transcript.
+final class BlockFrames {
+    private var frames: [String: (frame: CGRect, since: Date)] = [:]
+    /// The width blocks lay out at now. A height measured at another width no longer holds.
+    private var width: CGFloat = 0
+
+    /// The heights to hold for the blocks outside `near`; the others draw.
+    func held(_ ids: [String], near: Range<CGFloat>?) -> [String: CGFloat] {
+        guard let near else { return [:] }
+        var held: [String: CGFloat] = [:]
+        for id in ids {
+            // A height only just measured may not hold yet: on the Mac, selectable text lays out again a moment later.
+            if let (frame, since) = frames[id], frame.width == width, -since.timeIntervalSinceNow > 0.5,
+               !near.overlaps(frame.minY..<frame.maxY + 1) { held[id] = frame.height }
+        }
+        return held
+    }
+
+    func known(_ id: String) -> Bool { frames[id] != nil }
+
+    func height(of id: String) -> CGFloat? { frames[id]?.frame.height }
+
+    /// Drawn blocks span the column, so any of them gives its width.
+    func measured(_ id: String, _ frame: CGRect) {
+        if let known = frames[id], known.frame.size == frame.size {
+            frames[id]?.frame.origin = frame.origin
+        } else {
+            frames[id] = (frame, .now)
+        }
+        width = frame.width
+    }
+
+    /// A block held as a space moved with the blocks above it; its height and width are still the drawn ones.
+    func moved(_ id: String, to y: CGFloat) { frames[id]?.frame.origin.y = y }
+}
+
+/// The screen the transcript shows and how tall its content is, in screens.
+struct Band: Equatable {
+    var screen: Int
+    var content: Int
+    var container: CGFloat
+
+    /// What is drawn: two screens above the one shown and three below it. A block collapsing or growing by less than
+    /// that moves nothing drawn into empty space; by more, the content changes by a screen and this is drawn again.
+    var near: Range<CGFloat> { CGFloat(screen - 2) * container..<CGFloat(screen + 4) * container }
+}
+
 /// Collapsing a block that starts above the top of the screen would leave the reader somewhere further down: this
 /// brings its header back to the top instead. Called inside the collapse's animation.
 struct KeepInView: Equatable {
@@ -220,12 +272,27 @@ struct TranscriptView: View, Equatable {
     /// end, and the blocks above what the reader is looking at never shift.
     @State private var shownFrom: String?
     /// Where the reader was when blocks were added above them, until the scroll view has measured them.
-    @State private var revealing: (offset: CGFloat, content: CGFloat)?
+    @State private var revealing: Reveal?
     /// Set once the transcript has first appeared: blocks arriving after that spring in, the ones it opens with don't.
     @State private var opened = false
+    /// Where each block was last laid out. Writing it never re-renders the transcript.
+    @State private var frames = BlockFrames()
+    /// The screen the reader is on, and how tall the content is, both counted in screens: which blocks are near enough
+    /// to draw changes only when one of them does.
+    @State private var band: Band?
 
     /// Blocks laid out when a session opens, and added each time the reader nears the top.
     private static let window = 40
+
+    /// Blocks just added above the reader: where they were before, as the scroll view measures the new ones.
+    private struct Reveal {
+        var offset: CGFloat
+        var content: CGFloat
+        /// Until when the new blocks may still be settling, from the first time they were measured.
+        var until: Date?
+        /// Offsets asked of the scroll view so far.
+        var issued: [CGFloat] = []
+    }
 
     /// What the follow logic needs from the scroll view's geometry.
     private struct Scroll: Equatable {
@@ -241,6 +308,8 @@ struct TranscriptView: View, Equatable {
         let all = Activity.blocks(items, busy: session.status.isBusy)
         let start = Self.start(of: all, from: shownFrom)
         let blocks = all[start...]
+        // Worked out here rather than in each row: the rows only run again when what they capture changes.
+        let held = frames.held(blocks.map(\.id), near: band?.near)
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 if blocks.isEmpty {
@@ -265,11 +334,27 @@ struct TranscriptView: View, Equatable {
                     .frame(maxWidth: .infinity)
                 }
                 ForEach(blocks) { block in
-                    BlockView(block: block, agent: session.agent, openChild: openChild, openParent: openParent,
-                              streaming: session.status.isBusy && block.id == blocks.last?.id)
-                        .equatable()
-                        .modifier(Arrival(animate: opened && block.id == blocks.last?.id))
-                        .id(block.id)
+                    let last = block.id == blocks.last?.id
+                    Group {
+                        if let height = held[block.id] {
+                            // Measured, and screens away from the reader: only its height takes part in the layout. A
+                            // reply streaming far below them keeps the height it had until they come near it.
+                            Color.clear.frame(height: height)
+                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { frames.moved(block.id, to: $0) }
+                        } else {
+                            BlockView(block: block, agent: session.agent, openChild: openChild, openParent: openParent,
+                                      streaming: session.status.isBusy && last)
+                                .equatable()
+                                // Coming back from being held as a space isn't arriving.
+                                .modifier(Arrival(animate: opened && last && !frames.known(block.id)))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .modifier(Returning(height: frames.height(of: block.id)))
+                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.content)) } action: { frames.measured(block.id, $0) }
+                        }
+                    }
+                    // Swapped in place: a fade would leave it see-through until an animation runs.
+                    .transition(.identity)
+                    .id(block.id)
                 }
                 if session.status == .compacting {
                     CompactingMarker()
@@ -342,10 +427,26 @@ struct TranscriptView: View, Equatable {
                 metrics.offset = new.offset
                 metrics.moved &+= 1
             }
-            if let revealing, new.content != revealing.content {
-                // Blocks just went in above: keep what the reader was looking at where it was.
-                self.revealing = nil
-                position.scrollTo(y: revealing.offset + new.content - revealing.content)
+            if new.container > 0 {
+                let band = Band(screen: Int(new.offset / new.container), content: Int(new.content / new.container), container: new.container)
+                if band != self.band { self.band = band }
+            }
+            if let until = revealing?.until, Date.now > until { revealing = nil }
+            if var reveal = revealing, new.content != reveal.content {
+                // Blocks just went in above: keep what the reader was looking at where it was. They lay out again a
+                // moment later, a little taller (on the Mac, their selectable text), so this holds for a moment.
+                if new.offset != old.offset, !reveal.issued.isEmpty, !reveal.issued.contains(where: { abs($0 - new.offset) < 0.5 }) {
+                    // The reader scrolled meanwhile: keep their move. (Landing where an earlier request pointed means
+                    // the latest one was dropped, so it goes out again.)
+                    reveal.offset = new.offset - (old.content - reveal.content)
+                }
+                let target = reveal.offset + new.content - reveal.content
+                if abs(new.offset - target) > 0.5 {
+                    position.scrollTo(y: target)
+                    reveal.issued.append(target)
+                }
+                reveal.until = reveal.until ?? .now + 0.6
+                revealing = reveal
                 return
             }
             // Reading up toward the top: bring in the blocks before it, a couple of screens ahead.
@@ -454,7 +555,7 @@ struct TranscriptView: View, Equatable {
         let all = Activity.blocks(items, busy: session.status.isBusy)
         let start = Self.start(of: all, from: shownFrom)
         guard start > 0, let first = all[max(0, start - Self.window)].firstItemId else { return }
-        revealing = (metrics.offset, metrics.content)
+        revealing = Reveal(offset: metrics.offset, content: metrics.content)
         shownFrom = first
     }
 
@@ -547,6 +648,25 @@ struct WorkingIndicator: View {
             Text(text).font(.system(size: 13.5)).foregroundStyle(tint).shimmer(live)
         }
         .padding(.leading, 4)
+    }
+}
+
+/// A block drawn again after being held as a space keeps at least the height it had, for a moment: on the Mac its
+/// selectable text first lays out a little shorter, which moved everything below it for a frame as the reader scrolled.
+/// Only the height it came back with counts: a block drawn all along may grow and shrink as it likes.
+private struct Returning: ViewModifier {
+    @State private var height: CGFloat?
+
+    init(height: CGFloat?) { _height = State(initialValue: height) }
+
+    func body(content: Content) -> some View {
+        content
+            .frame(minHeight: height, alignment: .top)
+            .task {
+                guard height != nil else { return }
+                try? await Task.sleep(for: .seconds(0.5))
+                height = nil
+            }
     }
 }
 
