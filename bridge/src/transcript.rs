@@ -464,6 +464,28 @@ impl Transcript {
                 _ => {}
             }
         }
+        // A reply that failed or was stopped runs none of its tool calls: one it was still writing (DeepSeek's
+        // arguments that weren't JSON) would otherwise wait for good.
+        if matches!(message["stopReason"].as_str(), Some("error" | "aborted")) {
+            let calls = content
+                .iter()
+                .filter_map(|block| str_field(block, "id"))
+                .filter_map(|call| self.tools.get(&call).cloned());
+            let ids: Vec<String> = self.stream.values().cloned().chain(calls).collect();
+            for id in ids {
+                let waiting = self.index.get(&id).is_some_and(|&pos| {
+                    matches!(self.items[pos].status, Some(ToolStatus::Preparing | ToolStatus::Pending))
+                });
+                if waiting {
+                    let set = ItemSet {
+                        status: Some(ToolStatus::Error),
+                        output: Some("Never ran: the reply ended before it.".into()),
+                        ..Default::default()
+                    };
+                    self.set(&id, set);
+                }
+            }
+        }
         self.stream.clear();
         match message["stopReason"].as_str() {
             Some("error") => {
@@ -574,5 +596,25 @@ mod tests {
             flagged += transcript.take_looping().is_some() as usize;
         }
         assert_eq!(flagged, 1);
+    }
+
+    #[test]
+    fn a_tool_call_cut_off_by_a_failed_reply_never_runs() {
+        let mut transcript = Transcript::default();
+        let start = |id: &str, index: i64| json!({ "type": "message_update", "message": { "role": "assistant" },
+            "assistantMessageEvent": { "type": "toolcall_start", "contentIndex": index, "id": id, "toolName": "bash" } });
+        transcript.handle_event(&json!({ "type": "message_start", "message": { "role": "assistant", "content": [] } }));
+        transcript.handle_event(&start("call_1", 0));
+        transcript.handle_event(&json!({ "type": "message_end", "message": { "role": "assistant", "content": [],
+            "stopReason": "error", "errorMessage": "tool input is invalid JSON" } }));
+        let tool = transcript.items.iter().find(|i| i.kind == ItemKind::Tool).unwrap();
+        assert_eq!(tool.status, Some(ToolStatus::Error));
+        // A reply that ends well leaves its calls to run.
+        transcript.handle_event(&json!({ "type": "message_start", "message": { "role": "assistant", "content": [] } }));
+        transcript.handle_event(&start("call_2", 0));
+        transcript.handle_event(&json!({ "type": "message_end", "message": { "role": "assistant",
+            "content": [{ "type": "toolCall", "id": "call_2", "name": "bash", "arguments": {} }], "stopReason": "toolUse" } }));
+        let tool = transcript.items.iter().rfind(|i| i.kind == ItemKind::Tool).unwrap();
+        assert_eq!(tool.status, Some(ToolStatus::Preparing));
     }
 }
