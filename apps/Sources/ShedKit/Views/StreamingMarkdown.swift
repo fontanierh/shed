@@ -22,44 +22,29 @@ struct StreamingMarkdown: View {
     /// Time between chunks, and how long each one takes to fade in: a chunk has fully settled before the next begins.
     private static let beat = 0.8
     private static let fade = 0.74
+    private static let step = Duration.milliseconds(33)
     /// Characters per second at a steady pace; the reveal only speeds up to keep the hold-back under `maxLag` seconds.
     private static let pace = 300.0
     private static let maxLag = 3.5
 
     var body: some View {
-        let blocks = Self.blocks(shown ?? text)
-        let before = shown == nil ? [] : Self.blocks(settled)
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(blocks.indices, id: \.self) { index in
-                let block = blocks[index]
-                Group {
-                    if shown == nil || index < before.count - 1 || (index == before.count - 1 && before[index] == block) {
-                        markdown(block)
-                    } else if index < before.count {
-                        // The last block grew: only its last run of text has new characters, from where it ended before.
-                        markdown(block)
-                            .textRenderer(Sweep(progress: progress, tail: (Self.visibleLength(block), Self.visibleLength(before[index]))))
-                            // Selectable text is drawn by AppKit and skips custom renderers; it is selectable again once settled.
-                            .textSelection(.disabled)
-                    } else if Self.kind(block) == .code {
-                        markdown(block).opacity(progress)
-                    } else {
-                        markdown(block).textRenderer(Sweep(progress: progress, tail: nil)).textSelection(.disabled)
-                    }
-                }
-                .padding(.top, index == 0 ? 0 : Self.gap(after: blocks[index - 1], before: block))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .onChange(of: text, initial: true) { _, now in target = now }
+        // While the reveal runs, what shows changes once a beat, not with every piece of text that streams in: the
+        // blocks only lay out again when it does.
+        Revealed(shown: shown ?? text, settled: shown == nil ? nil : settled, progress: progress)
+            .equatable()
+            .onChange(of: text, initial: true) { _, now in target = now }
         .onChange(of: streaming, initial: true) { _, now in live = now }
         .task {
             guard streaming, !reduceMotion else { return }
             // Text already there when the view appears was read before; only what arrives from now on is revealed.
             shown = text
             settled = text
+            let clock = ContinuousClock()
+            var fading = Duration.zero
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(Self.beat))
+                // The fade below is part of the beat.
+                try? await Task.sleep(for: .seconds(Self.beat) - fading)
+                fading = .zero
                 guard let current = shown else { return }
                 guard target.hasPrefix(current) else {
                     // Rewritten rather than extended: show it as it is now.
@@ -80,21 +65,99 @@ struct StreamingMarkdown: View {
                     shown = next
                     progress = 0
                 }
-                // Let the starting frame land before fading toward the end.
-                try? await Task.sleep(for: .milliseconds(16))
-                withAnimation(.easeOut(duration: Self.fade)) { progress = 1 }
+                // Stepped rather than animated: a SwiftUI animation redraws the text on every display frame (120 a
+                // second on ProMotion), which leaves scrolling no room while a reply streams. The soft front hides the steps.
+                let start = clock.now
+                var done = 0.0
+                while done < 1, !Task.isCancelled {
+                    try? await Task.sleep(for: Self.step)
+                    done = min(1, (clock.now - start) / .seconds(Self.fade))
+                    progress = 1 - (1 - done) * (1 - done)
+                }
+                fading = clock.now - start
             }
         }
     }
 
-    private func markdown(_ string: String) -> some View {
-        Markdown(string)
-            .markdownTheme(.agent)
-            .markdownImageProvider(.media)
+    /// The text shown, block by block; the blocks of `settled` that `shown` still has as they were draw as they are,
+    /// and the rest sweep in. Only those take part in the fade: the settled ones aren't touched on each of its frames.
+    private struct Revealed: View, Equatable {
+        let shown: String
+        let settled: String?
+        let progress: Double
+
+        var body: some View {
+            let blocks = StreamingMarkdown.blocks(shown)
+            let before = settled.map(StreamingMarkdown.blocks) ?? []
+            // Blocks drawn as they are: all of them once settled, else those `settled` already had unchanged.
+            let still = settled == nil ? blocks.count
+                : before.isEmpty ? 0
+                : min(blocks.count, before.count - 1 + (before.count <= blocks.count && before[before.count - 1] == blocks[before.count - 1] ? 1 : 0))
+            VStack(alignment: .leading, spacing: 0) {
+                Settled(blocks: blocks, count: still).equatable()
+                if still < blocks.count {
+                    ForEach(still..<blocks.count, id: \.self) { index in
+                        let block = blocks[index]
+                        Group {
+                            if index < before.count {
+                                // The last block grew: only its last run of text has new characters, from where it ended before.
+                                MarkdownBlock(text: block.text).equatable()
+                                    .textRenderer(Sweep(progress: progress,
+                                                        tail: (StreamingMarkdown.visibleLength(block), StreamingMarkdown.visibleLength(before[index]))))
+                                    // Selectable text is drawn by AppKit and skips custom renderers; it is selectable again once settled.
+                                    .textSelection(.disabled)
+                            } else if block.kind == .code {
+                                MarkdownBlock(text: block.text).equatable().opacity(progress)
+                            } else {
+                                MarkdownBlock(text: block.text).equatable()
+                                    .textRenderer(Sweep(progress: progress, tail: nil)).textSelection(.disabled)
+                            }
+                        }
+                        .padding(.top, index == 0 ? 0 : StreamingMarkdown.gap(after: blocks[index - 1].kind, before: block.kind))
+                    }
+                }
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// The first `count` blocks, as they are.
+    private struct Settled: View, Equatable {
+        let blocks: [Block]
+        let count: Int
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(0..<count, id: \.self) { index in
+                    MarkdownBlock(text: blocks[index].text).equatable()
+                        .padding(.top, index == 0 ? 0 : StreamingMarkdown.gap(after: blocks[index - 1].kind, before: blocks[index].kind))
+                }
+            }
+        }
+
+        nonisolated static func == (a: Self, b: Self) -> Bool {
+            a.count == b.count && a.blocks.prefix(a.count) == b.blocks.prefix(b.count)
+        }
+    }
+
+    /// One block, parsed and laid out again only when its own text changes.
+    private struct MarkdownBlock: View, Equatable {
+        let text: String
+
+        var body: some View {
+            Markdown(text)
+                .markdownTheme(.agent)
+                .markdownImageProvider(.media)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: Blocks
+
+    struct Block: Equatable {
+        let text: String
+        fileprivate let kind: Kind
+    }
 
     private static func isFence(_ line: Substring) -> Bool {
         let trimmed = line.drop { $0 == " " }
@@ -102,7 +165,17 @@ struct StreamingMarkdown: View {
     }
 
     /// Top-level blocks: runs of lines between blank lines, with fenced code kept whole.
-    static func blocks(_ text: String) -> [String] {
+    /// Memoized: the fade asks for the same text's blocks on every frame.
+    @MainActor static func blocks(_ text: String) -> [Block] {
+        if let hit = recent.first(where: { $0.text == text }) { return hit.blocks }
+        let blocks = blockTexts(text).map { Block(text: $0, kind: kind($0)) }
+        recent = [(text, blocks)] + recent.prefix(3)
+        return blocks
+    }
+
+    @MainActor private static var recent: [(text: String, blocks: [Block])] = []
+
+    static func blockTexts(_ text: String) -> [String] {
         var blocks: [String] = []
         var current: [Substring] = []
         var fenced = false
@@ -118,7 +191,7 @@ struct StreamingMarkdown: View {
         return blocks
     }
 
-    private enum Kind: Equatable { case heading(Int), code, table, rule, quote, other }
+    fileprivate enum Kind: Equatable { case heading(Int), code, table, rule, quote, other }
 
     private static func kind(_ block: String) -> Kind {
         let first = block.prefix { $0 != "\n" }.drop { $0 == " " }
@@ -129,21 +202,23 @@ struct StreamingMarkdown: View {
         }
         if first.hasPrefix("|") { return .table }
         if first.hasPrefix(">") { return .quote }
+        // A rule is a short line: don't copy a whole paragraph to find out it isn't one.
+        guard first.utf8.count <= 80 else { return .other }
         let compact = first.filter { !$0.isWhitespace }
         if compact.count >= 3, let mark = compact.first, "-*_".contains(mark), compact.allSatisfy({ $0 == mark }) { return .rule }
         return .other
     }
 
     /// The theme's margins between two blocks, as a single document would collapse them.
-    private static func gap(after previous: String, before next: String) -> CGFloat {
-        let bottom: CGFloat = switch kind(previous) {
+    private static func gap(after previous: Kind, before next: Kind) -> CGFloat {
+        let bottom: CGFloat = switch previous {
         case .heading(1): 10
         case .heading(2): 8
         case .heading: 6
         case .quote: 10
         default: 16
         }
-        let top: CGFloat = switch kind(next) {
+        let top: CGFloat = switch next {
         case .heading(1): 28
         case .heading(2): 26
         case .heading(3): 22
@@ -157,10 +232,10 @@ struct StreamingMarkdown: View {
 
     /// Characters in the block's last run of text as rendered, markup aside: what the sweep counts in.
     /// Only an estimate of MarkdownUI's own text; when it misses, the sweep leaves that text alone.
-    static func visibleLength(_ block: String) -> Int {
-        var lines = block.split(separator: "\n", omittingEmptySubsequences: false).map { $0.drop { $0 == " " || $0 == "\t" } }
-        if case .heading = kind(block) { lines = [lines[0].drop { $0 == "#" }.drop { $0 == " " }] }
-        if case .quote = kind(block) { lines = lines.map { $0.drop { $0 == ">" }.drop { $0 == " " } } }
+    static func visibleLength(_ block: Block) -> Int {
+        var lines = block.text.split(separator: "\n", omittingEmptySubsequences: false).map { $0.drop { $0 == " " || $0 == "\t" } }
+        if case .heading = block.kind { lines = [lines[0].drop { $0 == "#" }.drop { $0 == " " }] }
+        if case .quote = block.kind { lines = lines.map { $0.drop { $0 == ">" }.drop { $0 == " " } } }
         // A list renders each item as its own text: keep the last item, without its marker.
         if let item = lines.lastIndex(where: { listMarker($0) != nil }) {
             lines = Array(lines[item...])
@@ -258,7 +333,17 @@ private struct Sweep: TextRenderer {
             start = tail.start
         }
         let front = progress * (Double(length - start) + Self.soft)
-        for slice in slices {
+        // Lines wholly before the new characters draw as they are, in one go rather than glyph by glyph.
+        var pending: [Text.Layout.RunSlice] = []
+        for line in layout {
+            let last = line.last?.last?.characterIndices.last.map { first.distance(to: $0) }
+            if let last, last < start {
+                context.draw(line)
+            } else {
+                pending += line.flatMap { run in run }
+            }
+        }
+        for slice in pending {
             guard let index = slice.characterIndices.first.map({ first.distance(to: $0) }) else { continue }
             let shown = index < start ? 1 : min(max((front - Double(index - start)) / Self.soft, 0), 1)
             if shown >= 1 {

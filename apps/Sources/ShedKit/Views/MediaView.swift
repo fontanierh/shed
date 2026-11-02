@@ -6,7 +6,7 @@ import ImageIO
 import SwiftUI
 
 /// Where media comes from: https URLs as they are, local paths on the agents' Mac through the bridge's `/media` route.
-public struct MediaSource: Sendable {
+public struct MediaSource: Sendable, Equatable {
     var bridgeURL: String
     var token: String
 

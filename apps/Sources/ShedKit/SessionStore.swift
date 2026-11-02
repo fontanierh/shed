@@ -80,6 +80,9 @@ public final class SessionStore {
 
     @ObservationIgnored private var clients: [String: BridgeClient] = [:]
     @ObservationIgnored private var itemIndex: [String: Int] = [:]
+    /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
+    @ObservationIgnored private var patched: [Int: Item] = [:]
+    @ObservationIgnored private var flushing = false
     @ObservationIgnored private var started = false
 
     public init() {
@@ -173,13 +176,21 @@ public final class SessionStore {
         return MediaSource(bridgeURL: env.url, token: token(of: env))
     }
 
-    private func token(of env: BridgeEnvironment) -> String {
+    private func token(of env: BridgeEnvironment, fresh: Bool = false) -> String {
         #if os(macOS)
-        // This Mac's own bridge: its token, read from its config, so it never goes stale.
-        if env.token.isEmpty, env.isLocal, let local = Self.localBridgeToken() { return local }
+        // This Mac's own bridge: its token, from its config. Read again on each connection, so it never goes stale,
+        // and kept in between: media links ask for it on every update of the conversation.
+        if env.token.isEmpty, env.isLocal {
+            if fresh || localToken == nil { localToken = Self.localBridgeToken() }
+            if let localToken { return localToken }
+        }
         #endif
         return env.token
     }
+
+    #if os(macOS)
+    @ObservationIgnored private var localToken: String?
+    #endif
 
     /// Every environment, connected afresh.
     public func connect() {
@@ -193,7 +204,7 @@ public final class SessionStore {
             connections[env.id] = .disconnected("Invalid bridge URL")
             return
         }
-        components.queryItems = [URLQueryItem(name: "token", value: token(of: env))]
+        components.queryItems = [URLQueryItem(name: "token", value: token(of: env, fresh: true))]
         guard let url = components.url else { return }
         client.connect(to: url)
     }
@@ -314,6 +325,7 @@ public final class SessionStore {
         }
         selectedId = id
         loadedId = nil
+        patched = [:]
         items = []
         itemIndex = [:]
         earlier = 0
@@ -338,6 +350,7 @@ public final class SessionStore {
     // MARK: Incoming messages
 
     private func apply(_ message: ServerMessage, from env: String) {
+        if case .itemPatch = message {} else { flush() }
         switch message {
         case .sessions(let list):
             var all = sessions.filter { Self.split($0.key)?.env != env }
@@ -357,6 +370,7 @@ public final class SessionStore {
             guard sessionId == selectedId else { return }
             loadedId = sessionId
             self.earlier = earlier
+            patched = [:]
             items = snapshot
             itemIndex = Dictionary(uniqueKeysWithValues: snapshot.enumerated().map { ($1.id, $0) })
             for item in snapshot.suffix(20) where item.kind == .user { arrived(item.text, in: sessionId) }
@@ -370,16 +384,35 @@ public final class SessionStore {
         case .itemPatch(let sessionId, let itemId, let set, let append):
             let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId, let index = itemIndex[itemId] else { return }
-            var item = items[index]
+            var item = patched[index] ?? items[index]
             set?.apply(to: &item)
             if let text = append?.text { item.text += text }
             if let args = append?.args { item.args = (item.args ?? "") + args }
-            items[index] = item
+            patched[index] = item
+            // A change of state (a tool finishing, a reply ending) shows at once; streamed text a few times a second.
+            if set != nil { flush() } else if !flushing {
+                flushing = true
+                Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(80))
+                    self?.flush()
+                }
+            }
         }
+    }
+
+    private func flush() {
+        flushing = false
+        guard !patched.isEmpty else { return }
+        let changes = patched
+        patched = [:]
+        var all = items
+        for (index, item) in changes where index < all.count { all[index] = item }
+        items = all
     }
 
     /// The page of history before the first loaded item.
     public func loadEarlier() async {
+        flush()
         guard let id = selectedId, let (env, raw) = Self.split(id), let client = clients[env],
               let first = items.first, earlier > 0, !loadingEarlier else { return }
         loadingEarlier = true
@@ -389,6 +422,7 @@ public final class SessionStore {
             // A snapshot may have replaced the transcript meanwhile.
             guard selectedId == id, items.first?.id == first.id else { return }
             let older = page.items.filter { itemIndex[$0.id] == nil }
+            flush()
             items = older + items
             itemIndex = Dictionary(uniqueKeysWithValues: items.enumerated().map { ($1.id, $0) })
             earlier = page.earlier
