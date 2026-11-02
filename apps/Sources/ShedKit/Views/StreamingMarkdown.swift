@@ -9,6 +9,9 @@ import SwiftUI
 struct StreamingMarkdown: View {
     let text: String
     let streaming: Bool
+    /// The reply's item, whose text streams in through `liveText` ahead of `text`.
+    var id: String? = nil
+    @Environment(\.liveText) private var liveText
     /// Revealed so far, or nil once the reveal has caught up (or never ran) and the text renders as is.
     @State private var shown: String?
     /// What was revealed before the latest chunk.
@@ -27,7 +30,14 @@ struct StreamingMarkdown: View {
     private static let pace = 300.0
     private static let maxLag = 3.5
 
+    /// The text so far. Only a streaming reply reads `liveText`, so text arriving for it redraws nothing else.
+    private var current: String {
+        guard streaming, let id, let streamed = liveText?.texts[id] else { return text }
+        return streamed
+    }
+
     var body: some View {
+        let text = current
         // While the reveal runs, what shows changes once a beat, not with every piece of text that streams in: the
         // blocks only lay out again when it does.
         Revealed(shown: shown ?? text, settled: shown == nil ? nil : settled, progress: progress)
@@ -37,8 +47,8 @@ struct StreamingMarkdown: View {
         .task {
             guard streaming, !reduceMotion else { return }
             // Text already there when the view appears was read before; only what arrives from now on is revealed.
-            shown = text
-            settled = text
+            shown = current
+            settled = current
             let clock = ContinuousClock()
             var fading = Duration.zero
             while !Task.isCancelled {

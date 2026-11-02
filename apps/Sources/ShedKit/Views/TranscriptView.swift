@@ -203,6 +203,8 @@ extension EnvironmentValues {
     @Entry var stopTool: ReaderAction? = nil
     /// Restarts the session's Python kernel, where it has one the reader may restart.
     @Entry var restartKernel: ReaderAction? = nil
+    /// Replies streaming in, ahead of the transcript's items.
+    @Entry var liveText: LiveText? = nil
 }
 
 /// An action the open session offers its transcript. Whether it is there is all that changes what a view shows, so
@@ -713,7 +715,7 @@ struct BlockView: View, Equatable {
             case .user:
                 UserMessage(item: item)
             case .text:
-                StreamingMarkdown(text: item.text, streaming: streaming)
+                StreamingMarkdown(text: item.text, streaming: streaming, id: item.id)
             case .compaction:
                 CompactionMarker(item: item)
             case .error:

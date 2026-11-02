@@ -38,6 +38,15 @@ public struct SessionNode: Identifiable {
     public var id: String { session.id }
 }
 
+/// The text of replies streaming in, ahead of the store's `items`. Only the view showing a reply reads it, so text
+/// arriving redraws that reply alone instead of revisiting every block of the transcript a dozen times a second.
+@MainActor
+@Observable
+public final class LiveText {
+    /// By item id: the reply's text so far, while it is newer than the one in `items`.
+    public fileprivate(set) var texts: [String: String] = [:]
+}
+
 @MainActor
 @Observable
 public final class SessionStore {
@@ -82,6 +91,8 @@ public final class SessionStore {
     @ObservationIgnored private var itemIndex: [String: Int] = [:]
     /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
     @ObservationIgnored private var patched: [Int: Item] = [:]
+    /// Where a reply already on screen grows while it streams; `items` catches up when anything else happens.
+    public let live = LiveText()
     @ObservationIgnored private var flushing = false
     @ObservationIgnored private var started = false
 
@@ -326,6 +337,7 @@ public final class SessionStore {
         selectedId = id
         loadedId = nil
         patched = [:]
+        live.texts = [:]
         items = []
         itemIndex = [:]
         earlier = 0
@@ -371,6 +383,7 @@ public final class SessionStore {
             loadedId = sessionId
             self.earlier = earlier
             patched = [:]
+            live.texts = [:]
             items = snapshot
             itemIndex = Dictionary(uniqueKeysWithValues: snapshot.enumerated().map { ($1.id, $0) })
             for item in snapshot.suffix(20) where item.kind == .user { arrived(item.text, in: sessionId) }
@@ -394,20 +407,34 @@ public final class SessionStore {
                 flushing = true
                 Task { [weak self] in
                     try? await Task.sleep(for: .milliseconds(80))
-                    self?.flush()
+                    self?.flush(streamed: true)
                 }
             }
         }
     }
 
-    private func flush() {
+    /// Applies the changes held back. `streamed`: only text has arrived since the last time, so a reply already on
+    /// screen just grows, in `live`, and stays held back here until something else happens.
+    private func flush(streamed: Bool = false) {
         flushing = false
         guard !patched.isEmpty else { return }
-        let changes = patched
-        patched = [:]
+        var changes = patched
+        if streamed {
+            var texts = live.texts
+            for (index, item) in changes where index < items.count && item.kind == .text && !items[index].text.isEmpty {
+                texts[item.id] = item.text
+                changes[index] = nil
+            }
+            if texts != live.texts { live.texts = texts }
+        }
+        patched = patched.filter { changes[$0.key] == nil }
+        guard !changes.isEmpty else { return }
         var all = items
         for (index, item) in changes where index < all.count { all[index] = item }
         items = all
+        if changes.values.contains(where: { live.texts[$0.id] != nil }) {
+            live.texts = live.texts.filter { id, _ in !changes.values.contains { $0.id == id } }
+        }
     }
 
     /// The page of history before the first loaded item.

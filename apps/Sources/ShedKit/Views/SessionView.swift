@@ -92,6 +92,7 @@ struct SessionView: View {
             #endif
             .fileLinks()
             .environment(\.media, store.media(for: session.id))
+            .environment(\.liveText, store.live)
             .environment(\.stopTool, stopTool)
             .environment(\.restartKernel, restartKernel)
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
