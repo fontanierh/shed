@@ -79,6 +79,7 @@ struct SessionView: View {
             .equatable()
             // Each session opens at its end, following new output.
             .id(session.id)
+            .fillsProposal()
             #if os(iOS)
             // Reading, not typing: a tap or a drag on the conversation puts the keyboard away. Simultaneous, so the
             // blocks' own buttons still work.

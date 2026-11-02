@@ -580,6 +580,22 @@ struct TranscriptView: View, Equatable {
     }
 }
 
+/// Takes the space it is offered without measuring what it holds. A scroll view asked for its size measures its whole
+/// content: the composer's inset asked on every flush of a streaming reply, laying out the conversation once more.
+struct FillsProposal: SwiftUI.Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
+    }
+}
+
+extension View {
+    func fillsProposal() -> some View { FillsProposal { self } }
+}
+
 struct EmptyTranscript: View {
     let session: SessionSummary
 
