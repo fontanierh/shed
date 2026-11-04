@@ -230,15 +230,25 @@ impl crate::session::App {
             let found = self.found_sites(&listeners, tree.as_ref()).await;
             let config = Config::read(self.store.dir());
 
-            for site in &found {
-                let key = (site.listener.port, site.listener.command.clone());
-                if !titles.contains_key(&key) {
-                    titles.insert(key.clone(), title(site.listener.port).await);
-                }
-            }
+            // Fetched together, so one slow server doesn't hold up the rest.
+            let missing: Vec<(u16, String)> = found
+                .iter()
+                .map(|s| (s.listener.port, s.listener.command.clone()))
+                .filter(|key| !titles.contains_key(key))
+                .collect();
+            let fetched = futures_util::future::join_all(
+                missing.iter().map(|(port, _)| title(*port)),
+            )
+            .await;
+            titles.extend(missing.into_iter().zip(fetched));
             titles.retain(|(port, _), _| found.iter().any(|s| s.listener.port == *port));
 
-            let (host, served) = serve_state().await.unwrap_or_default();
+            // Nothing to publish, nothing to ask Tailscale about.
+            let (host, served) = if config.publish {
+                serve_state().await.unwrap_or_default()
+            } else {
+                (String::new(), HashMap::new())
+            };
 
             if config.publish {
                 for site in &found {
@@ -263,12 +273,12 @@ impl crate::session::App {
                 }
             }
 
-            // Take down the routes whose site is gone, and only those.
+            // Take down the routes whose site is gone, and only those. Turning publishing off takes them all down.
             let live: Vec<u16> = found.iter().map(|s| s.listener.port).collect();
             let gone: Vec<u16> = published
                 .keys()
                 .copied()
-                .filter(|port| !live.contains(port))
+                .filter(|port| !config.publish || !live.contains(port))
                 .collect();
             for port in gone {
                 unpublish(port).await;
