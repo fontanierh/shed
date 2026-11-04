@@ -752,7 +752,7 @@ impl Feed {
                 }
             }
             "assistant/message" => {
-                let message = stamp(assistant_message(&data["message"]));
+                let message = stamp(assistant_message(&data["message"], finish(data)));
                 c.messages.push(message.clone());
                 c.blocks.clear();
                 if root {
@@ -1028,9 +1028,16 @@ fn question_reply(text: &str) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// How the model ended the reply, from the finish chunk its stream closes with: "stop", "tool-calls", "max-tokens".
+fn finish(data: &Value) -> Option<&str> {
+    data["stream"].as_array()?.iter().rev().find_map(|frame| {
+        (frame["chunk"]["type"] == "finish").then(|| frame["chunk"]["reason"]["kind"].as_str()).flatten()
+    })
+}
+
 /// dsh's assistant message as Pi's. Blocks keep their order, empty reasoning included, so they line up with the
-/// stream's block indices.
-fn assistant_message(message: &Value) -> Value {
+/// stream's block indices. A reply cut off at the output limit says so, as Pi's "length".
+fn assistant_message(message: &Value, finish: Option<&str>) -> Value {
     let blocks = message["content"].as_array().cloned().unwrap_or_default();
     let mut tool_use = false;
     let content: Vec<Value> = blocks
@@ -1052,6 +1059,8 @@ fn assistant_message(message: &Value) -> Value {
         .collect();
     let stop = if message["interrupted"] == true {
         "aborted"
+    } else if finish == Some("max-tokens") {
+        "length"
     } else if tool_use {
         "toolUse"
     } else {
@@ -1325,6 +1334,22 @@ mod tests {
         let message = user_message(&data).unwrap();
         let items = crate::transcript::Transcript::rebuild(&[message], 100);
         assert_eq!(items[0].kind, ItemKind::Compaction);
+    }
+
+    #[test]
+    fn a_reply_cut_at_the_output_limit_says_so() {
+        let data = json!({
+            "message": { "role": "assistant", "content": [{ "type": "reasoning", "text": "Let me plan the dome" }] },
+            "stream": [
+                { "type": "chunk", "chunk": { "type": "block-start", "index": 0 } },
+                { "type": "chunk", "chunk": { "type": "finish", "reason": { "kind": "max-tokens" } } },
+            ],
+        });
+        let message = assistant_message(&data["message"], finish(&data));
+        assert_eq!(message["stopReason"], "length");
+        let items = crate::transcript::Transcript::rebuild(&[message], 100);
+        assert_eq!(items.last().unwrap().text, "Stopped at the model's output limit");
+        assert_eq!(finish(&json!({})), None);
     }
 
     #[test]

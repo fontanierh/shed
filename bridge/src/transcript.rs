@@ -464,9 +464,9 @@ impl Transcript {
                 _ => {}
             }
         }
-        // A reply that failed or was stopped runs none of its tool calls: one it was still writing (DeepSeek's
-        // arguments that weren't JSON) would otherwise wait for good.
-        if matches!(message["stopReason"].as_str(), Some("error" | "aborted")) {
+        // A reply that failed, was stopped or ran out of output tokens runs none of its tool calls: one it was still
+        // writing (DeepSeek's arguments that weren't JSON) would otherwise wait for good.
+        if matches!(message["stopReason"].as_str(), Some("error" | "aborted" | "length")) {
             let calls = content
                 .iter()
                 .filter_map(|block| str_field(block, "id"))
@@ -495,6 +495,10 @@ impl Transcript {
             }
             Some("aborted") => {
                 self.add(Item::new(ItemKind::Note, "Aborted"));
+            }
+            // The model ran out of output tokens mid-reply: without this the cut reads as a finished answer.
+            Some("length") => {
+                self.add(Item::new(ItemKind::Note, "Stopped at the model's output limit"));
             }
             _ => {}
         }
