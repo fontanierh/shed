@@ -101,7 +101,13 @@ struct NewSessionSheet: View {
             if groups[provider] == nil { order.append(provider) }
             groups[provider, default: (prefix, [])].models.append(name)
         }
-        return order.map { ($0, groups[$0]?.prefix ?? "", groups[$0]?.models ?? []) }
+        return order.sorted(by: ModelInfo.groupOrder).map { ($0, groups[$0]?.prefix ?? "", groups[$0]?.models ?? []) }
+    }
+
+    /// A recent model's name in the menu: "gpt-6.1-sol · OpenAI API key".
+    private static func label(_ name: String) -> String {
+        let (group, prefix) = provider(of: name)
+        return prefix.count < name.count ? "\(name.dropFirst(prefix.count)) · \(group)" : name
     }
 
     /// The menu a "provider/id" name goes in, and what it starts with there (dropped from its button).
@@ -213,7 +219,7 @@ struct NewSessionSheet: View {
                 Button("Agent default") { model = "" }
                 Divider()
                 let recent = models.filter { recentModels.split(separator: "\n").contains(Substring($0)) }
-                ForEach(recent, id: \.self) { name in Button(name) { model = name } }
+                ForEach(recent, id: \.self) { name in Button(Self.label(name)) { model = name } }
                 if !recent.isEmpty { Divider() }
                 let groups = byProvider
                 if groups.count > 1 && models.count > 12 {

@@ -79,12 +79,28 @@ extension ModelInfo {
         }
     }
 
-    /// By provider, `first` leading and the rest alphabetical, each newest first.
+    /// By provider, `first`'s leading and the rest in `groupOrder`, each newest first.
     static func byProvider(_ models: [ModelInfo], matching query: String = "", first: ModelInfo?) -> [(provider: String, models: [ModelInfo])] {
         let groups = Dictionary(grouping: newestFirst(models, matching: query)) { group(provider: $0.provider, id: $0.id).label }
-        let lead = first.map { group(provider: $0.provider, id: $0.id).label }
-        let order = groups.keys.sorted { a, b in a == lead ? true : b == lead ? false : a < b }
+        let lead = first?.groupLabel
+        let order = groups.keys.sorted { a, b in a == lead ? true : b == lead ? false : groupOrder(a, b) }
         return order.map { ($0, groups[$0] ?? []) }
+    }
+
+    var groupLabel: String { Self.group(provider: provider, id: id).label }
+
+    /// The name shown within its group. Open Codex has no display names, so its ids stand in, less the group's part.
+    var shortName: String { name == id ? String(id.dropFirst(Self.group(provider: provider, id: id).prefix.count)) : name }
+
+    /// Subscriptions and API keys first, then the other providers alphabetically.
+    static func groupOrder(_ a: String, _ b: String) -> Bool {
+        let leading = ["ChatGPT subscription", "OpenAI API key", "Anthropic API key"]
+        switch (leading.firstIndex(of: a), leading.firstIndex(of: b)) {
+        case let (x?, y?): return x < y
+        case (_?, nil): return true
+        case (nil, _?): return false
+        default: return a.localizedCaseInsensitiveCompare(b) == .orderedAscending
+        }
     }
 
     /// The menu a model goes in, and the part of its id that menu already says. Open Codex serves every provider
@@ -96,6 +112,14 @@ extension ModelInfo {
         let label = switch inner {
         case "openai-apikey": "OpenAI API key"
         case "anthropic-apikey": "Anthropic API key"
+        case "mistral": "Mistral"
+        case "deepseek": "DeepSeek"
+        case "google": "Google"
+        case "openrouter": "OpenRouter"
+        case "fireworks": "Fireworks"
+        case "xiaomi-mimo": "Xiaomi MiMo"
+        case "xai": "xAI"
+        case "groq": "Groq"
         default: inner
         }
         return (label, inner + "/")
@@ -123,6 +147,8 @@ struct PhoneModelPicker: View {
     let current: ModelInfo?
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    /// Provider groups shown open: the current model's at first. A search opens them all.
+    @State private var open: Set<String> = []
 
     var body: some View {
         NavigationStack {
@@ -130,12 +156,29 @@ struct PhoneModelPicker: View {
                 if store.models.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
                 }
-                ForEach(ModelInfo.byProvider(store.models, matching: query, first: current), id: \.provider) { group in
-                    Section(group.provider) {
-                        ForEach(group.models, id: \.key) { model in row(model) }
+                let groups = ModelInfo.byProvider(store.models, matching: query, first: current)
+                ForEach(groups, id: \.provider) { group in
+                    let expanded = groups.count == 1 || !query.isEmpty || open.contains(group.provider)
+                    Section {
+                        if expanded { ForEach(group.models, id: \.key) { model in row(model) } }
+                    } header: {
+                        Button {
+                            if open.remove(group.provider) == nil { open.insert(group.provider) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text(group.provider)
+                                Spacer()
+                                Text("\(group.models.count)").monospacedDigit()
+                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .bold))
+                                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
+            .onAppear { if let current { open.insert(current.groupLabel) } }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Velvet(base: Palette.sidebar).ignoresSafeArea())
@@ -159,7 +202,7 @@ struct PhoneModelPicker: View {
                     } label: {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(model.name).font(.system(size: 16, weight: selected ? .semibold : .regular))
+                                Text(model.shortName).font(.system(size: 16, weight: selected ? .semibold : .regular))
                                     .foregroundStyle(selected ? Palette.amber : Palette.moon)
                                 Text(model.id).font(.system(size: 12)).foregroundStyle(Palette.moon.opacity(0.5)).lineLimit(1).truncationMode(.middle)
                             }

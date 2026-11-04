@@ -228,10 +228,14 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let data = app
                 .command(&session, "get_available_models", json!({}))
                 .await?;
-            let models: Vec<ModelInfo> = data["models"]
+            let mut models: Vec<ModelInfo> = data["models"]
                 .as_array()
                 .map(|ms| ms.iter().filter_map(ModelInfo::from_value).collect())
                 .unwrap_or_default();
+            // With Open Codex, a session switches among its models only, like the new-session list.
+            if crate::opencodex::gateway().is_some() {
+                models.retain(|m| m.provider == crate::opencodex::PROVIDER);
+            }
             serde_json::to_value(models)?
         }
         ClientOp::SetModel {

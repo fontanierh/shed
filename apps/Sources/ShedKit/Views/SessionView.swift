@@ -638,6 +638,8 @@ struct ModelPicker: View {
     let current: ModelInfo?
     let done: () -> Void
     @State private var query = ""
+    /// Provider groups shown open: the current model's at first. A search opens them all.
+    @State private var open: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -652,28 +654,28 @@ struct ModelPicker: View {
                 ProgressView().padding(30)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(filtered, id: \.key) { model in
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        let groups = ModelInfo.byProvider(store.models, matching: query, first: current)
+                        ForEach(groups, id: \.provider) { group in
+                            let expanded = groups.count == 1 || !query.isEmpty || open.contains(group.provider)
                             Button {
-                                store.setModel(model)
-                                done()
+                                if open.remove(group.provider) == nil { open.insert(group.provider) }
                             } label: {
-                                let selected = model.key == current?.key
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(model.name).foregroundStyle(Palette.moon)
-                                        Text(model.key).font(.caption).foregroundStyle(.secondary)
-                                    }
+                                HStack(spacing: 6) {
+                                    Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold))
+                                        .rotationEffect(.degrees(expanded ? 90 : 0)).frame(width: 12)
+                                    Text(group.provider).font(.system(size: 12, weight: .semibold))
                                     Spacer()
-                                    if model.reasoning { Image(systemName: "brain").foregroundStyle(.tertiary).help("Reasoning") }
-                                    if selected { Image(systemName: "checkmark").foregroundStyle(Palette.amber) }
+                                    Text("\(group.models.count)").font(.system(size: 11).monospacedDigit())
                                 }
-                                .padding(.horizontal, 10).padding(.vertical, 7)
-                                .background(selected ? Palette.amber.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 9))
-                                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Palette.amber.opacity(0.45) : .clear))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 4)
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            if expanded {
+                                ForEach(group.models, id: \.key) { model in row(model) }
+                            }
                         }
                     }
                     .padding(.horizontal, 8).padding(.bottom, 8)
@@ -682,10 +684,33 @@ struct ModelPicker: View {
         }
         .frame(width: 360, height: 420)
         .background(Velvet(base: Palette.surface))
+        .onAppear { if let current { open.insert(current.groupLabel) } }
         .task { await store.loadModels() }
     }
 
-    private var filtered: [ModelInfo] { ModelInfo.newestFirst(store.models, matching: query) }
+    private func row(_ model: ModelInfo) -> some View {
+        Button {
+            store.setModel(model)
+            done()
+        } label: {
+            let selected = model.key == current?.key
+            HStack {
+                Text(model.shortName).foregroundStyle(Palette.moon)
+                Spacer()
+                if let window = model.contextWindow {
+                    Text(ContextWindowMenu.short(window)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+                }
+                if model.reasoning { Image(systemName: "brain").foregroundStyle(.tertiary).help("Reasoning") }
+                if selected { Image(systemName: "checkmark").foregroundStyle(Palette.amber) }
+            }
+            .padding(.leading, 28).padding(.trailing, 10).padding(.vertical, 6)
+            .background(selected ? Palette.amber.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Palette.amber.opacity(0.45) : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(model.key)
+    }
 }
 
 /// A tool call or background command that looks stuck, why, and the way out, above the composer.
