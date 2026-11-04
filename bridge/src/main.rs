@@ -12,6 +12,7 @@ mod protocol;
 mod rpc;
 mod runaway;
 mod server;
+mod sites;
 mod session;
 mod stall;
 mod store;

@@ -28,6 +28,7 @@ struct SessionSidebar: View {
                 Sprout(size: 26)
                 Text("Shed").font(.system(size: 26, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
                 Spacer()
+                if !store.allSites.isEmpty { AllSitesButton(store: store) }
                 Button(action: openSettings) {
                     Image(systemName: "network").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
                         .frame(width: 30, height: 30).contentShape(Rectangle())

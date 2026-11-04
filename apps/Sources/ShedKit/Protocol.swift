@@ -160,6 +160,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let question: AgentQuestion?
     /// What the current run costs, from Open Codex's request history, while the session works.
     public let spend: RunSpend?
+    /// Web servers the session's processes are listening on.
+    public let sites: [Site]
 
     public var isSubagent: Bool { kind == .subagent }
     /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
@@ -175,6 +177,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     }
     /// Working, or idle with background jobs that will wake it: not finished either way.
     public var isActive: Bool { status.isBusy || backgroundJobs > 0 }
+    /// Whether the session serves a site the app can open from another device.
+    public var hasSites: Bool { !sites.isEmpty }
     public var folderName: String { (cwd as NSString).lastPathComponent }
 }
 
@@ -198,6 +202,29 @@ public struct AgentQuestion: Codable, Equatable, Sendable {
     public struct Option: Codable, Equatable, Sendable {
         public let label: String
         public let description: String?
+    }
+}
+
+/// A web server an agent started in one of its sessions, found by the port its processes listen on.
+public struct Site: Codable, Identifiable, Hashable, Sendable {
+    public let port: Int
+    /// The page's `<title>`, when it has one.
+    public let title: String?
+    /// What started it, as `ps` reports it.
+    public let command: String
+    /// Where to open it: its tailnet address once published, else this Mac's.
+    public let url: String
+    /// On the tailnet, over HTTPS, so another device can open it.
+    public let published: Bool
+    /// Bound to every interface rather than loopback: reachable from the LAN too, not only this Mac.
+    public let exposed: Bool
+
+    public var id: Int { port }
+    public var name: String { title ?? command }
+    /// `https://jims-macbook-pro.tail362838.ts.net:8890/` → `jims-macbook-pro.tail362838.ts.net:8890`.
+    public var host: String {
+        guard let components = URLComponents(string: url) else { return url }
+        return [components.host, components.port.map(String.init)].compactMap { $0 }.joined(separator: ":")
     }
 }
 

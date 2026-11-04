@@ -312,6 +312,11 @@ impl RpcChild {
         }
     }
 
+    /// The agent process's pid, while it is running.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().ok()?.as_ref().and_then(|c| c.id())
+    }
+
     /// Close stdin for an orderly shutdown; kill if the agent hasn't exited after 3 seconds.
     pub async fn close(&self) {
         match &self.dsh {

@@ -125,6 +125,18 @@ When a tool call or background command has run for a minute and stood still for 
 
 The bridge then asks OpenAI's [Decisions API](https://developers.openai.com/api/docs/guides/decisions) how likely the command is to be stuck, and on what. It sends the code or command, its processes with their CPU time, its latest output, the working directory and what the agent wrote before running it. At `threshold` or above (0.8 by default), the apps show the likely cause and offer to stop it.
 
+## Sites
+
+An agent that starts a web server — `vite`, `python -m http.server`, anything — gets it listed as a **site**. The bridge finds it by the ports the session's own processes listen on, so no agent has to register anything. Sites show in the session's header and, all together, in the sidebar, on the Mac and the iPhone.
+
+Publishing is off by default. To reach a site from another device, turn it on in `~/.agent-remote/config.json`:
+
+```json
+"sites": { "publish": true }
+```
+
+Each site is then published on its own tailnet HTTPS port (`tailscale serve --bg --https=<port>`), so the iPhone can open it. The bridge only ever takes down the routes it recorded in `~/.agent-remote/sites.json`: whatever else you publish by hand on the same machine is left alone.
+
 ## Uninstall
 
 ```bash

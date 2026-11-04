@@ -32,6 +32,14 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// A site and the session serving it, for the list of every site.
+public struct SiteEntry: Identifiable, Equatable {
+    public let site: Site
+    public let session: SessionSummary
+
+    public var id: String { "\(session.id)#\(site.port)" }
+}
+
 public struct SessionNode: Identifiable {
     public let session: SessionSummary
     public let children: [SessionNode]?
@@ -315,6 +323,21 @@ public final class SessionStore {
     /// Every subagent still at work (running, or idle with background jobs), across all sessions.
     public var activeSubagents: [SessionSummary] {
         sessions.values.filter { $0.isSubagent && $0.isActive }.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// Every site any session serves, newest session first, so the app can list them all in one place.
+    public var allSites: [SiteEntry] {
+        sessions.values
+            .flatMap { session in session.sites.map { SiteEntry(site: $0, session: session) } }
+            .sorted { a, b in
+                if a.session.createdAt != b.session.createdAt { return a.session.createdAt > b.session.createdAt }
+                return a.site.port < b.site.port
+            }
+    }
+
+    /// The sites one session serves.
+    public func sites(of sessionId: String) -> [Site] {
+        sessions[sessionId]?.sites ?? []
     }
 
     /// Subagents below this session (any depth) still at work. Prime parents keep going while these run.
