@@ -821,15 +821,29 @@ struct ComposerArea: View {
 struct Composer: View {
     let store: SessionStore
     let session: SessionSummary
+    #if os(macOS)
+    @State private var focused = false
+    #else
     @FocusState private var focused: Bool
+    #endif
     @State private var showModels = false
     /// Bumped on each send, to kick the button.
     @State private var sent = 0
     @State private var attachments: [Attachment] = []
     @State private var dropping = false
 
+    /// The draft being typed. It is saved to the store a moment after typing stops, not on every keystroke: saving
+    /// writes every session's draft to disk and redraws whatever reads the store.
+    @State private var draft = ""
+    /// Bumped on each keystroke, to time the save.
+    @State private var edits = 0
+
     private var text: Binding<String> {
-        Binding(get: { store.drafts[session.id] ?? "" }, set: { store.setDraft($0, for: session.id) })
+        Binding(get: { draft }, set: { draft = $0; edits += 1 })
+    }
+
+    private func saveDraft(for id: String? = nil) {
+        store.setDraft(draft, for: id ?? session.id)
     }
 
     var body: some View {
@@ -865,6 +879,15 @@ struct Composer: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
+                #if os(macOS)
+                ComposerTextView(text: text, focused: $focused, submit: send) { files in attach { await files.load() } }
+                    .background(alignment: .topLeading) {
+                        if draft.isEmpty {
+                            Text(placeholder).font(.system(size: 14.5)).foregroundStyle(.tertiary).allowsHitTesting(false)
+                        }
+                    }
+                    .padding(.vertical, 8)
+                #else
                 TextField(placeholder, text: text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14.5))
@@ -882,6 +905,7 @@ struct Composer: View {
                     }
                     .padding(.vertical, 8)
                     .accessibilityLabel("Message")
+                #endif
 
                 if busy {
                     Button(action: queueFollowUp) {
@@ -1006,15 +1030,21 @@ struct Composer: View {
             attach { await droppedFiles(providers) }
             return true
         }
-        #if os(macOS)
-        // Dropped or pasted on the text itself, which the field's editor would otherwise paste as paths.
-        .background(FileDropFieldEditorInstaller())
-        .onReceive(NotificationCenter.default.publisher(for: .filesOnText)) { note in
-            guard focused, let files = note.userInfo?["files"] as? PasteboardFiles else { return }
-            attach { await files.load() }
+        .onAppear { draft = store.drafts[session.id] ?? "" }
+        .onChange(of: session.id) { old, new in
+            saveDraft(for: old)
+            draft = store.drafts[new] ?? ""
+            attachments = []
         }
-        #endif
-        .onChange(of: session.id) { attachments = [] }
+        .task(id: edits) {
+            guard edits > 0, (try? await Task.sleep(for: .milliseconds(500))) != nil else { return }
+            saveDraft()
+        }
+        .onDisappear { saveDraft() }
+        // A message that failed to send comes back as the draft.
+        .onChange(of: store.drafts[session.id]) { _, restored in
+            if let restored, draft.isEmpty { draft = restored }
+        }
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: attachments.count)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: busy)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.queue.forReader.steering.count + session.queue.forReader.followUp.count)
@@ -1029,16 +1059,16 @@ struct Composer: View {
         return Double(index) / Double(levels.count - 1)
     }
 
-    private var trimmed: String { text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    /// Something to send, and no file still on its way to the session's computer.
+    /// Something to send, and no file still on its way to the session's computer. Asked several times a redraw, so
+    /// it stops at the first character that isn't blank instead of trimming the whole draft.
     private var canSend: Bool {
-        (!trimmed.isEmpty || attachments.contains { $0.path != nil }) && !attachments.contains(where: \.uploading)
+        (draft.contains { !$0.isWhitespace } || attachments.contains { $0.path != nil }) && !attachments.contains(where: \.uploading)
     }
 
     /// The text with the uploaded files' embeds after it.
     private var message: String {
-        ([trimmed].filter { !$0.isEmpty } + attachments.compactMap(\.embed)).joined(separator: "\n\n")
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ([trimmed].filter { !$0.isEmpty } + attachments.compactMap(\.embed)).joined(separator: "\n\n")
     }
 
     private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
@@ -1068,7 +1098,8 @@ struct Composer: View {
     private func send() {
         guard canSend else { return }
         store.send(message)
-        text.wrappedValue = ""
+        draft = ""
+        saveDraft()
         attachments = []
         sent += 1
         #if os(iOS)
@@ -1080,7 +1111,8 @@ struct Composer: View {
     private func queueFollowUp() {
         guard canSend else { return }
         store.followUp(message)
-        text.wrappedValue = ""
+        draft = ""
+        saveDraft()
         attachments = []
     }
 }
