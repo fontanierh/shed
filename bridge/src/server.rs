@@ -337,10 +337,7 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let (items, earlier) = session.state.lock().await.earlier_page(&before);
             json!({ "items": items, "earlier": earlier })
         }
-        ClientOp::ListAgentModels { agent } => match agent {
-            crate::rpc::AgentKind::Deepseek => json!({ "models": crate::dsh::list_models().await? }),
-            _ => json!({ "models": [] }),
-        },
+        ClientOp::ListAgentModels { agent } => json!({ "models": crate::rpc::list_models(agent).await? }),
         ClientOp::ListDir { path, hidden } => crate::files::list_dir(path.as_deref(), hidden)?,
     })
 }

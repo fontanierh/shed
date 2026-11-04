@@ -12,7 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Pi,
@@ -46,6 +46,56 @@ pub struct RpcChild {
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     next_id: AtomicU64,
     child: Mutex<Option<Child>>,
+}
+
+/// The models an agent can start a session on, as `[{provider, id, name}]`: what Pi and Prime list from their own
+/// settings, and the providers set up in DeepSeek Harness. Kept a minute, since listing starts the agent.
+pub async fn list_models(agent: AgentKind) -> Result<Value> {
+    static CACHE: Mutex<Option<HashMap<AgentKind, (std::time::Instant, Value)>>> = Mutex::new(None);
+    if let Some((at, models)) = CACHE.lock().unwrap().get_or_insert_default().get(&agent) {
+        if at.elapsed().as_secs() < 60 {
+            return Ok(models.clone());
+        }
+    }
+    let models = match agent {
+        AgentKind::Deepseek => crate::dsh::list_models().await?,
+        AgentKind::Pi => listed_models("pi", &["--list-models"]).await?,
+        AgentKind::Prime => listed_models("prime-agent", &["model", "list"]).await?,
+    };
+    CACHE
+        .lock()
+        .unwrap()
+        .get_or_insert_default()
+        .insert(agent, (std::time::Instant::now(), models.clone()));
+    Ok(models)
+}
+
+/// A model table as Pi and Prime print it: a header, then a provider and a model id leading each row.
+async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let run = Command::new(program)
+        .args(args)
+        .current_dir(if home.is_empty() { "/".into() } else { home })
+        .env("PRIME_AGENT_TELEMETRY", "0")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), run)
+        .await
+        .map_err(|_| anyhow!("{program} took too long to list its models"))?
+        .map_err(|e| anyhow!("failed to run {program}: {e}"))?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let models: Vec<Value> = text
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("provider"))
+        .skip(1)
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let (provider, id) = (fields.next()?, fields.next()?);
+            Some(json!({ "provider": provider, "id": id, "name": id }))
+        })
+        .collect();
+    Ok(json!(models))
 }
 
 fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {

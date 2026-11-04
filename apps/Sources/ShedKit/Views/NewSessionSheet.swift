@@ -49,35 +49,58 @@ struct NewSessionSheet: View {
             #endif
         }
     }
-    /// The models DeepSeek Harness last said it has set up, kept so a choice of one is recognised before it answers.
-    @AppStorage("newSession.dshModels") private var dshModels = ""
+    /// The models each agent last said it has on each computer, as "<environment>\t<agent>\t<provider/id>" lines: kept
+    /// so the menu is full at once and a chosen model is recognised before the agent answers again.
+    @AppStorage("newSession.agentModels") private var agentModels = ""
 
-    private var harnessModels: [String] {
-        let listed = dshModels.split(separator: "\n").map(String.init)
-        return listed.isEmpty ? ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"] : listed
+    private func listed(_ kind: AgentKind) -> [String] {
+        let prefix = "\(env)\t\(kind.rawValue)\t"
+        return agentModels.split(separator: "\n").filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
     }
 
-    private func runsOnHarness(_ model: String) -> Bool { model.hasPrefix("deepseek") || harnessModels.contains(model) }
+    /// Whether `kind` can start on `model` here: one it listed, or before it has said, one in its usual providers.
+    private func fits(_ model: String, _ kind: AgentKind) -> Bool {
+        let known = listed(kind)
+        if !known.isEmpty { return known.contains(model) }
+        return model.hasPrefix("deepseek") == (kind == .deepseek)
+    }
 
-    /// DeepSeek Harness runs only the providers set up in it, and the other agents none of them: a model left from the
-    /// other kind of agent would fail to start.
+    /// A model left from another agent, or another computer, would fail to start.
     private func fitModel() {
-        if !model.isEmpty, runsOnHarness(model) != (agent == .deepseek) { model = "" }
+        if !model.isEmpty, !fits(model, agent) { model = "" }
     }
 
-    /// Asks the computer's DeepSeek Harness which models it has, so providers added to it are offered too.
-    private func loadHarnessModels() async {
-        guard agent == .deepseek, let listed = try? await store.agentModels(in: env, .deepseek), !listed.isEmpty else { return }
-        dshModels = listed.joined(separator: "\n")
+    /// Asks the computer which models the agent has, so every provider set up there is offered.
+    private func loadModels() async {
+        let (env, kind) = (env, agent)
+        guard let models = try? await store.agentModels(in: env, kind), !models.isEmpty else { return }
+        let prefix = "\(env)\t\(kind.rawValue)\t"
+        let others = agentModels.split(separator: "\n").filter { !$0.hasPrefix(prefix) }.map(String.init)
+        agentModels = (others + models.map { prefix + $0 }).joined(separator: "\n")
     }
 
+    /// Recently used ones first, then the rest of what the agent listed.
     private var models: [String] {
-        let saved = recentModels.split(separator: "\n").map(String.init)
-        if agent == .deepseek {
-            let harness = harnessModels
-            return saved.filter(runsOnHarness) + harness.filter { !saved.contains($0) }
+        let recent = recentModels.split(separator: "\n").map(String.init).filter { fits($0, agent) }
+        var all = listed(agent)
+        if all.isEmpty {
+            all = agent == .deepseek ? ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"] : ["openai/gpt-6.1-terra"]
         }
-        return saved.filter { !runsOnHarness($0) } + ["openai/gpt-6.1-terra"].filter { !saved.contains($0) }
+        return recent + all.filter { !recent.contains($0) }
+    }
+
+    /// The models past the recent ones, by provider, so a long list stays a short menu.
+    private var byProvider: [(provider: String, models: [String])] {
+        let recent = Set(recentModels.split(separator: "\n").map(String.init))
+        let rest = models.filter { !recent.contains($0) }
+        var order: [String] = []
+        var groups: [String: [String]] = [:]
+        for name in rest {
+            let provider = String(name.split(separator: "/", maxSplits: 1).first ?? "")
+            if groups[provider] == nil { order.append(provider) }
+            groups[provider, default: []].append(name)
+        }
+        return order.map { ($0, groups[$0] ?? []) }
     }
 
     var body: some View {
@@ -91,7 +114,7 @@ struct NewSessionSheet: View {
         .onAppear { restoreFolder(); fitModel() }
         .onChange(of: env) { restoreFolder() }
         .onChange(of: agent) { fitModel() }
-        .task(id: "\(env) \(agent.rawValue)") { await loadHarnessModels() }
+        .task(id: "\(env) \(agent.rawValue)") { await loadModels(); fitModel() }
     }
 
     private var mac: some View {
@@ -181,7 +204,19 @@ struct NewSessionSheet: View {
             Menu {
                 Button("Agent default") { model = "" }
                 Divider()
-                ForEach(models, id: \.self) { name in Button(name) { model = name } }
+                let recent = models.filter { recentModels.split(separator: "\n").contains(Substring($0)) }
+                ForEach(recent, id: \.self) { name in Button(name) { model = name } }
+                if !recent.isEmpty { Divider() }
+                let groups = byProvider
+                if groups.count > 1 && models.count > 12 {
+                    ForEach(groups, id: \.provider) { group in
+                        Menu(group.provider) {
+                            ForEach(group.models, id: \.self) { name in Button(name.dropFirst(group.provider.count + 1)) { model = name } }
+                        }
+                    }
+                } else {
+                    ForEach(groups.flatMap(\.models), id: \.self) { name in Button(name) { model = name } }
+                }
             } label: {
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                     .frame(width: height, height: height)

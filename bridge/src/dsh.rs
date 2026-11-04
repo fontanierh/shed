@@ -84,15 +84,8 @@ pub fn install_profile() -> Result<PathBuf> {
 }
 
 /// The models the `shed` profile has set up, as `[{provider, id, name}]`, for choosing one before a session starts:
-/// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session,
-/// and keeps the answer a minute.
+/// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session.
 pub async fn list_models() -> Result<Value> {
-    static CACHE: Mutex<Option<(Instant, Value)>> = Mutex::new(None);
-    if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
-        if at.elapsed().as_secs() < 60 {
-            return Ok(models.clone());
-        }
-    }
     let layer = install_profile()?;
     let home = std::env::var("HOME").unwrap_or_default();
     let mut child = tokio::process::Command::new("dsh")
@@ -135,7 +128,6 @@ pub async fn list_models() -> Result<Value> {
     let models = tokio::time::timeout(std::time::Duration::from_secs(30), ask)
         .await
         .map_err(|_| anyhow!("dsh took too long to list its models"))??;
-    *CACHE.lock().unwrap() = Some((Instant::now(), models.clone()));
     Ok(models)
 }
 
