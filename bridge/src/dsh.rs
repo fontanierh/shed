@@ -83,6 +83,56 @@ pub fn install_profile() -> Result<PathBuf> {
     Ok(dir.join("shed.patch.yml"))
 }
 
+/// The models the `shed` profile has set up, as `[{provider, id, name}]`, for choosing one before a session starts:
+/// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session,
+/// and keeps the answer a minute.
+pub async fn list_models() -> Result<Value> {
+    static CACHE: Mutex<Option<(Instant, Value)>> = Mutex::new(None);
+    if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
+        if at.elapsed().as_secs() < 60 {
+            return Ok(models.clone());
+        }
+    }
+    let layer = install_profile()?;
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut child = tokio::process::Command::new("dsh")
+        .args(["--profile", PROFILE, "--patch"])
+        .arg(&layer)
+        .current_dir(if home.is_empty() { "/".into() } else { home })
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| anyhow!("failed to start dsh: {e}"))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
+    let ask = async {
+        while let Some(line) = lines.next_line().await? {
+            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if message["event"] == "ready" {
+                stdin
+                    .write_all(b"{\"id\":1,\"method\":\"models\",\"params\":{}}\n")
+                    .await?;
+                stdin.flush().await?;
+            } else if message["id"] == 1 {
+                if let Some(error) = message.get("error") {
+                    bail!("dsh: {}", error.as_str().unwrap_or("models request failed"));
+                }
+                return Ok(message["result"]["models"].clone());
+            }
+        }
+        bail!("dsh exited before listing its models")
+    };
+    let models = tokio::time::timeout(std::time::Duration::from_secs(30), ask)
+        .await
+        .map_err(|_| anyhow!("dsh took too long to list its models"))??;
+    *CACHE.lock().unwrap() = Some((Instant::now(), models.clone()));
+    Ok(models)
+}
+
 impl Dsh {
     /// Read a freshly spawned `dsh --profile shed`, then open or resume the session once the plugin is up.
     pub fn start(

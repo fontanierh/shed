@@ -478,6 +478,10 @@ pub enum ClientOp {
         session_id: String,
         before: String,
     },
+    /// The models an agent can start a session on, as far as the bridge can tell; empty when it can't.
+    ListAgentModels {
+        agent: AgentKind,
+    },
     /// Folders on the bridge's machine, for picking a working directory.
     ListDir {
         path: Option<String>,

@@ -617,6 +617,16 @@ public final class SessionStore {
         }
     }
 
+    /// The models `agent` has set up on that computer, as "provider/id"; empty when its bridge can't tell.
+    public func agentModels(in env: String, _ agent: AgentKind) async throws -> [String] {
+        struct Listed: Decodable {
+            struct Model: Decodable { let provider: String; let id: String }
+            let models: [Model]
+        }
+        let listed = try await client(env).call("list_agent_models", ["agent": agent.rawValue], as: Listed.self)
+        return listed.models.map { "\($0.provider)/\($0.id)" }
+    }
+
     /// Folders on an environment's computer; nil path means the home folder.
     public func listDir(in env: String, _ path: String?, hidden: Bool = false) async throws -> DirListing {
         var fields: [String: Any] = ["hidden": hidden]

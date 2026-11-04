@@ -49,20 +49,35 @@ struct NewSessionSheet: View {
             #endif
         }
     }
-    /// DeepSeek Harness runs only DeepSeek's models, and the other agents none of them: a model left from the other
-    /// kind of agent would fail to start.
+    /// The models DeepSeek Harness last said it has set up, kept so a choice of one is recognised before it answers.
+    @AppStorage("newSession.dshModels") private var dshModels = ""
+
+    private var harnessModels: [String] {
+        let listed = dshModels.split(separator: "\n").map(String.init)
+        return listed.isEmpty ? ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"] : listed
+    }
+
+    private func runsOnHarness(_ model: String) -> Bool { model.hasPrefix("deepseek") || harnessModels.contains(model) }
+
+    /// DeepSeek Harness runs only the providers set up in it, and the other agents none of them: a model left from the
+    /// other kind of agent would fail to start.
     private func fitModel() {
-        if !model.isEmpty, model.hasPrefix("deepseek") != (agent == .deepseek) { model = "" }
+        if !model.isEmpty, runsOnHarness(model) != (agent == .deepseek) { model = "" }
+    }
+
+    /// Asks the computer's DeepSeek Harness which models it has, so providers added to it are offered too.
+    private func loadHarnessModels() async {
+        guard agent == .deepseek, let listed = try? await store.agentModels(in: env, .deepseek), !listed.isEmpty else { return }
+        dshModels = listed.joined(separator: "\n")
     }
 
     private var models: [String] {
         let saved = recentModels.split(separator: "\n").map(String.init)
-        // DeepSeek Harness only runs the providers set up in it.
         if agent == .deepseek {
-            let deepseek = ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"]
-            return saved.filter { $0.hasPrefix("deepseek") } + deepseek.filter { !saved.contains($0) }
+            let harness = harnessModels
+            return saved.filter(runsOnHarness) + harness.filter { !saved.contains($0) }
         }
-        return saved + ["openai/gpt-6.1-terra"].filter { !saved.contains($0) }
+        return saved.filter { !runsOnHarness($0) } + ["openai/gpt-6.1-terra"].filter { !saved.contains($0) }
     }
 
     var body: some View {
@@ -76,6 +91,7 @@ struct NewSessionSheet: View {
         .onAppear { restoreFolder(); fitModel() }
         .onChange(of: env) { restoreFolder() }
         .onChange(of: agent) { fitModel() }
+        .task(id: "\(env) \(agent.rawValue)") { await loadHarnessModels() }
     }
 
     private var mac: some View {
