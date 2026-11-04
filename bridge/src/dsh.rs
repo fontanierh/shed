@@ -108,20 +108,26 @@ pub async fn list_models() -> Result<Value> {
     let mut stdin = child.stdin.take().expect("piped stdin");
     let mut lines = BufReader::new(child.stdout.take().expect("piped stdout")).lines();
     let ask = async {
+        let request = b"{\"id\":1,\"method\":\"models\",\"params\":{}}\n";
         while let Some(line) = lines.next_line().await? {
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
                 continue;
             };
             if message["event"] == "ready" {
-                stdin
-                    .write_all(b"{\"id\":1,\"method\":\"models\",\"params\":{}}\n")
-                    .await?;
+                stdin.write_all(request).await?;
                 stdin.flush().await?;
             } else if message["id"] == 1 {
                 if let Some(error) = message.get("error") {
                     bail!("dsh: {}", error.as_str().unwrap_or("models request failed"));
                 }
-                return Ok(message["result"]["models"].clone());
+                let models = &message["result"]["models"];
+                if models.as_array().is_some_and(|m| !m.is_empty()) {
+                    return Ok(models.clone());
+                }
+                // Ready comes before its providers have loaded, a few seconds later: ask again until they have.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                stdin.write_all(request).await?;
+                stdin.flush().await?;
             }
         }
         bail!("dsh exited before listing its models")
