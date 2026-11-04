@@ -286,10 +286,11 @@ impl crate::session::App {
                 let _ = self.store.save_published_sites(&published);
             }
 
+            let mut by_session: HashMap<String, Vec<Site>> = HashMap::new();
             for found in &found {
                 let port = found.listener.port;
                 let is_published = published.contains_key(&port) && served.contains_key(&port);
-                let site = Site {
+                by_session.entry(found.session_id.clone()).or_default().push(Site {
                     port,
                     title: titles
                         .get(&(port, found.listener.command.clone()))
@@ -303,11 +304,9 @@ impl crate::session::App {
                     },
                     published: is_published,
                     exposed: exposed(&found.listener.bind),
-                };
-                self.set_site(&found.session_id, site).await;
+                });
             }
-            // Sessions that lost their last site.
-            self.clear_sites_except(&live_sessions(&found)).await;
+            self.set_sites(by_session).await;
         }
     }
 
@@ -359,16 +358,6 @@ fn sites_of(
                     listener: listener.clone(),
                 });
             }
-        }
-    }
-    out
-}
-
-fn live_sessions(found: &[Found]) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for site in found {
-        if !out.contains(&site.session_id) {
-            out.push(site.session_id.clone());
         }
     }
     out

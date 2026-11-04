@@ -406,32 +406,16 @@ impl App {
         out
     }
 
-    /// Records the site a session is serving, or updates it in place; publishes the summary when it changed.
-    pub async fn set_site(&self, session_id: &str, site: crate::protocol::Site) {
-        let Ok(session) = self.find(session_id).await else {
-            return;
-        };
-        let mut st = session.state.lock().await;
-        match st.summary.sites.iter_mut().find(|s| s.port == site.port) {
-            Some(existing) if *existing == site => return,
-            Some(existing) => *existing = site,
-            None => st.summary.sites.push(site),
-        }
-        self.publish_summary(&st);
-    }
-
-    /// Forgets the sites of every session not in `keep`, once their servers are gone.
-    pub async fn clear_sites_except(&self, keep: &[String]) {
-        let sessions = self.sessions.read().await.clone();
-        for session in sessions {
-            if keep.contains(&session.id) {
-                continue;
-            }
+    /// Replaces each session's sites with the ones it serves now, and forgets the sites of every other session.
+    /// Wholesale rather than one at a time: a server that moves to another port must not leave the old one listed.
+    pub async fn set_sites(&self, found: std::collections::HashMap<String, Vec<crate::protocol::Site>>) {
+        for session in self.sessions.read().await.clone() {
+            let sites = found.get(&session.id).cloned().unwrap_or_default();
             let mut st = session.state.lock().await;
-            if st.summary.sites.is_empty() {
+            if st.summary.sites == sites {
                 continue;
             }
-            st.summary.sites.clear();
+            st.summary.sites = sites;
             self.publish_summary(&st);
         }
     }
