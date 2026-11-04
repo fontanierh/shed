@@ -21,7 +21,7 @@ Shed lets you run coding agents on your Macs and drive them from anywhere. It wo
 - **Context and cost at a glance.** A gauge for the context window, and the session's spend so far, as Open Codex measures it.
 - **Runaway protection.** The bridge stops a reply that has degenerated into whitespace or the same few characters repeated, and tells the agent why.
 - **On the iPhone,** a Live Activity follows a running session from the Lock Screen and the Dynamic Island, with what it spends a minute.
-- **One set of models for every agent.** Every agent offers exactly the models Open Codex serves: API keys and subscriptions (ChatGPT, Claude) set up once there show up as separate choices in all of them.
+- **One set of models for every agent.** Every agent offers exactly the models Open Codex serves: API keys and a ChatGPT subscription set up once there show up as separate choices in all of them.
 
 ## How it works
 
@@ -38,7 +38,7 @@ Each computer runs the **bridge**, a small Rust service that drives the agents i
 ## Requirements
 
 - macOS 15 or later on each computer that runs agents, with the Xcode command line tools (`xcode-select --install`).
-- An API key for at least one model provider (OpenAI, Anthropic, Mistral, DeepSeek, Google, OpenRouter), or a ChatGPT or Claude subscription.
+- An API key for at least one model provider (OpenAI, Anthropic, Mistral, DeepSeek, Google, OpenRouter), or a ChatGPT subscription.
 - [Tailscale](https://tailscale.com/download), to reach the bridge from another device. Not needed to use the Mac app on the same Mac.
 - For the iPhone app: iOS 18 or later, and Xcode with an Apple account (a free one works).
 
@@ -55,7 +55,7 @@ setup/install.sh
 
 Run in a terminal, it walks through each part and asks for what is missing. Keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`). The script:
 
-- **Open Codex.** Uses the one already on the Mac as it is, or installs the release Shed is tested with, and applies Shed's fixes that Open Codex hasn't released yet (`setup/opencodex/`). It runs as Open Codex's own login service. Each API key you give goes to Open Codex alone. Then it offers to sign in to a ChatGPT subscription (`ocx account login openai`) and a Claude subscription (`ocx login anthropic`) in the browser. A key and a subscription for the same vendor show as separate models: `openai-apikey/…` and `anthropic-apikey/…` are billed to the key, and bare ids such as `gpt-6.1-terra` go to the ChatGPT subscription.
+- **Open Codex.** Uses the one already on the Mac as it is, or installs the release Shed is tested with, and applies Shed's fixes that Open Codex hasn't released yet (`setup/opencodex/`). It runs as Open Codex's own login service. Each API key you give goes to Open Codex alone. Then it offers to sign in to a ChatGPT subscription (`ocx account login openai`) in the browser. The OpenAI key and the subscription show as separate models: `openai-apikey/…` is billed to the key, and bare ids such as `gpt-6.1-terra` go to the subscription. Claude comes from the Anthropic API key (`anthropic-apikey/…`) only: a Claude subscription is meant for Anthropic's own apps, so the bridge leaves out any Claude subscription signed in to Open Codex.
 - **Agents.** Installs or updates Pi, Prime Agent and DeepSeek Harness, makes GPT-6.1 Terra the default where none is set, and installs Pi's subagent and background-jobs extensions.
 - **Bridge.** Builds the bridge and registers it as a login service on `127.0.0.1:7878`.
 - **Mac app.** Installs `~/Applications/Shed.app`.

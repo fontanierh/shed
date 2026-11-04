@@ -78,7 +78,11 @@ async fn get(url: &str, token: Option<&str>) -> Result<Value> {
     Ok(serde_json::from_slice(&out.stdout)?)
 }
 
-/// The models Open Codex serves, as it lists them. Cached for a minute.
+/// Open Codex's provider for a Claude Pro or Max login. Its models stay out of Shed: a Claude subscription is
+/// meant for Anthropic's own apps, so Claude reaches the agents through an API key alone.
+const CLAUDE_SUBSCRIPTION: &str = "anthropic/";
+
+/// The models Open Codex serves, as it lists them, less the Claude subscription's. Cached for a minute.
 pub async fn catalog(gateway: &Gateway) -> Result<Vec<Value>> {
     static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
     if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
@@ -90,9 +94,16 @@ pub async fn catalog(gateway: &Gateway) -> Result<Vec<Value>> {
     let models = listed["data"]
         .as_array()
         .cloned()
-        .ok_or_else(|| anyhow!("Open Codex listed no models"))?;
+        .ok_or_else(|| anyhow!("Open Codex listed no models"))?
+        .into_iter()
+        .filter(offered)
+        .collect::<Vec<_>>();
     *CACHE.lock().unwrap() = Some((Instant::now(), models.clone()));
     Ok(models)
+}
+
+fn offered(model: &Value) -> bool {
+    !model["id"].as_str().unwrap_or_default().starts_with(CLAUDE_SUBSCRIPTION)
 }
 
 /// The reasoning efforts a model takes, as Open Codex names them.

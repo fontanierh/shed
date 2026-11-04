@@ -162,13 +162,8 @@ if [ "$OPENCODEX" = 1 ]; then
     else
       note "ChatGPT subscription: not signed in (later: the dashboard, or ocx account login openai)"
     fi
-    if has_account anthropic; then
-      note "Claude subscription: signed in"
-    elif ask "Sign in with a Claude Pro or Max subscription?"; then
-      ocx login anthropic || note "not signed in; retry with: ocx login anthropic"
-    else
-      note "Claude subscription: not signed in (later: the dashboard, or ocx login anthropic)"
-    fi
+    # A Claude subscription is for Anthropic's own apps: the bridge leaves its models out, so Claude comes from the
+    # Anthropic API key alone.
     models="$(curl -fsS http://127.0.0.1:10100/v1/models 2>/dev/null | "$NODE" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).data.length)}catch{console.log(0)}})')"
     note "$models models available to every agent"
     summary+=("Open Codex $ocx_version: $models models")

@@ -96,7 +96,6 @@ extension ModelInfo {
         let label = switch inner {
         case "openai-apikey": "OpenAI API key"
         case "anthropic-apikey": "Anthropic API key"
-        case "anthropic": "Claude subscription"
         default: inner
         }
         return (label, inner + "/")
