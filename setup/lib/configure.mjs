@@ -5,6 +5,7 @@
 //   pi-models <vendored> <file>      add our model overrides to Pi's models.json, by provider and model id
 //   bridge-defaults <vendored> <file>   set the bridge's per-model default context windows, keeping its token
 //   default-model <file> <provider> <id> <thinking>   set the default model only where none is set yet
+//   opencodex <file> on|off          whether the bridge gives every agent Open Codex's models (off: their own)
 import fs from "node:fs";
 import path from "node:path";
 
@@ -91,6 +92,20 @@ switch (step) {
     settings.defaultThinkingLevel ??= thinking;
     write(file, settings, 0o644);
     console.log(`  default model ${provider}/${id} (${settings.defaultThinkingLevel}) in ${file}`);
+    break;
+  }
+  case "opencodex": {
+    // The bridge finds Open Codex on its own; `false` is the only setting this owns. Any other value is the user's.
+    const [file, state] = args;
+    const config = read(file);
+    if (state === "off" && config.opencodex !== false) {
+      config.opencodex = false;
+      write(file, config);
+    } else if (state === "on" && config.opencodex === false) {
+      delete config.opencodex;
+      write(file, config);
+    }
+    console.log(state === "off" ? `  the agents keep their own providers (opencodex: false in ${file})` : `  the agents go through Open Codex`);
     break;
   }
   default:

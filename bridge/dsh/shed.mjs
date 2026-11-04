@@ -176,9 +176,13 @@ export function apply(ctx) {
       const selection = { current: undefined, assembled: undefined };
       const setup = async (agentCtx, agent) => {
         const logged = resume ? agent?.session.requestHeader()?.config : undefined;
-        selection.current = await selected(model?.model ? model : logged ? { ...logged } : undefined).catch(() =>
-          logged ? { provider: logged.provider, model: logged.model } : undefined,
-        );
+        // A session started on a provider Shed now reaches through Open Codex resumes on the same model there.
+        const throughGateway = logged && logged.provider !== "opencodex"
+          ? { ...logged, provider: "opencodex", model: `${logged.provider}/${logged.model}` }
+          : undefined;
+        selection.current = await selected(model?.model ? model : logged ? { ...logged } : undefined)
+          .catch(() => (throughGateway ? selected(throughGateway) : Promise.reject()))
+          .catch(() => (logged ? { provider: logged.provider, model: logged.model } : undefined));
         installModelSelection(agentCtx, selection);
       };
       const handle = resume

@@ -106,6 +106,20 @@ public struct Goal: Codable, Equatable, Sendable {
     public let lastReason: String?
 }
 
+/// A working session's spend, measured by the bridge from Open Codex's request history. It covers the session and,
+/// for a Prime session, its subagents.
+public struct RunSpend: Codable, Equatable, Sendable {
+    /// Dollars per minute over the last five minutes, when Open Codex prices the models. Nil until there is enough
+    /// history or when nothing is priced.
+    public let perMinute: Double?
+    public let tokensPerMinute: Double?
+    /// Dollars since the run started, when priced.
+    public let runCost: Double?
+    public let runTokens: Int
+    /// When the run started (epoch ms).
+    public let since: Double
+}
+
 public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// Tagged with its environment by the store ("<environment>:<bridge's id>"), so ids stay unique across computers.
     public internal(set) var id: String
@@ -144,6 +158,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let goal: Goal?
     /// What the agent asks the user and waits on (DeepSeek's questions and plan review).
     public let question: AgentQuestion?
+    /// What the current run costs, from Open Codex's request history, while the session works.
+    public let spend: RunSpend?
 
     public var isSubagent: Bool { kind == .subagent }
     /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's

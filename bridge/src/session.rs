@@ -14,7 +14,7 @@ use crate::history::{self, History};
 use crate::prime::{DaemonEvent, PrimeDaemon};
 use crate::protocol::{
     ContextUsage, Goal, Item, ItemKind, ModelInfo, Queue, ServerMessage, SessionKind,
-    SessionStatus, SessionSummary, WaitingOn,
+    SessionStatus, SessionSummary, Spend, WaitingOn,
 };
 use crate::rpc::{AgentKind, ChildOutput, RpcChild, SpawnOptions};
 use crate::store::{SessionRecord, Store};
@@ -91,6 +91,9 @@ pub struct SessionState {
     /// Prime: the conversation's `sessionId`, which outlives the `activeSessionId` the bridge knows it by (a reopened
     /// session gets a new one). What its chosen context window is saved under.
     prime_session: Option<String>,
+    /// What Open Codex counted for the session (with its subagents, for Prime): its agent reports nothing for models
+    /// Open Codex prices, so this is the least the session has cost.
+    gateway_cost: f64,
     /// Prime: the worker process running this session, for counting its background jobs.
     pub(crate) worker_pid: Option<u32>,
     /// Prime: running a tool call, which one (Prime's count of calls so far) and since when.
@@ -273,6 +276,7 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         last_active_at: None,
         goal: None,
         question: None,
+        spend: None,
     }
 }
 
@@ -293,6 +297,7 @@ impl SessionState {
             roster_mark: (String::new(), 0),
             sent_messages: usize::MAX,
             prime_session: None,
+            gateway_cost: 0.0,
             worker_pid: None,
             tools: None,
             stall: Default::default(),
@@ -368,6 +373,7 @@ impl App {
         });
         tokio::spawn(app.clone().run_prime(prime_events));
         tokio::spawn(app.clone().watch_background_jobs());
+        tokio::spawn(app.clone().watch_spend());
         Ok(app)
     }
 
@@ -708,6 +714,125 @@ impl App {
                         self.publish_summary(&st);
                     }
                     break;
+                }
+            }
+        }
+    }
+
+    /// What each working session spends, from Open Codex's request history: each session's own requests, counted as
+    /// they're made, give its cost; a top-level session's family (it and everything under it) gives what the run has
+    /// spent and its rate over the last five minutes. A run starts when a top-level session gets to work and ends when
+    /// it and its subagents settle, after one last count. Sessions on other providers keep the cost their agent reports.
+    async fn watch_spend(self: Arc<Self>) {
+        const WINDOW: u64 = 5 * 60 * 1000;
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        let mut tallies: HashMap<String, crate::opencodex::Tally> = HashMap::new();
+        // Per top-level session: the family's totals when the run started, and its recent (time, cost, tokens).
+        let mut runs: HashMap<String, (u64, f64, u64)> = HashMap::new();
+        let mut samples: HashMap<String, std::collections::VecDeque<(u64, f64, u64)>> = HashMap::new();
+        loop {
+            ticker.tick().await;
+            let Some(gateway) = crate::opencodex::gateway() else {
+                continue;
+            };
+            let sessions = self.sessions.read().await.clone();
+            // (session, parent, working, the id it sends Open Codex, whether its model is Open Codex's)
+            let mut rows = Vec::with_capacity(sessions.len());
+            for s in &sessions {
+                let st = s.state.lock().await;
+                let working = matches!(
+                    st.summary.status,
+                    SessionStatus::Starting | SessionStatus::Running | SessionStatus::Compacting
+                ) || st.summary.running_subagents
+                    || st.summary.background_jobs > 0;
+                let gateway_model = st
+                    .summary
+                    .model
+                    .as_ref()
+                    .is_some_and(|m| m.provider == crate::opencodex::PROVIDER);
+                rows.push((s.clone(), st.summary.parent_id.clone(), working, agent_session_id(s.agent, &st), gateway_model));
+            }
+            let now = now_ms();
+            for top in rows.iter().filter(|r| r.1.is_none()) {
+                let session = &top.0;
+                let ended = if top.2 {
+                    false
+                } else if runs.contains_key(&session.id) {
+                    true
+                } else {
+                    continue;
+                };
+                // The session and everything under it.
+                let mut family = vec![session.id.clone()];
+                let mut i = 0;
+                while i < family.len() {
+                    let id = family[i].clone();
+                    family.extend(rows.iter().filter(|r| r.1.as_deref() == Some(id.as_str())).map(|r| r.0.id.clone()));
+                    i += 1;
+                }
+                let members: Vec<_> = rows.iter().filter(|r| family.contains(&r.0.id)).collect();
+                let mut failed = false;
+                for member in &members {
+                    let Some(conversation) = member.3.as_deref().map(crate::opencodex::conversation) else {
+                        continue;
+                    };
+                    if let Err(e) = tallies.entry(conversation.clone()).or_default().update(&gateway, &conversation).await {
+                        eprintln!("Open Codex spend: {e}");
+                        failed = true;
+                        break;
+                    }
+                }
+                if failed {
+                    continue;
+                }
+                let own = |r: &(Arc<Session>, Option<String>, bool, Option<String>, bool)| {
+                    r.3.as_deref()
+                        .and_then(|id| tallies.get(&crate::opencodex::conversation(id)))
+                        .copied()
+                        .unwrap_or_default()
+                };
+                let (cost, tokens, priced) = members.iter().map(|m| own(m)).fold((0.0, 0, false), |acc, t| {
+                    (acc.0 + t.cost, acc.1 + t.tokens, acc.2 || t.priced)
+                });
+                let run = *runs.entry(session.id.clone()).or_insert((now, cost, tokens));
+                let recent = samples.entry(session.id.clone()).or_default();
+                recent.push_back((now, cost, tokens));
+                // Keep the last sample before the window as its baseline.
+                while recent.len() > 1 && now - recent[1].0 >= WINDOW {
+                    recent.pop_front();
+                }
+                let base = recent[0];
+                // Under half a minute of history says little about a rate.
+                let minutes = (now - base.0) as f64 / 60_000.0;
+                let spend = Spend {
+                    per_minute: (priced && minutes >= 0.5).then(|| (cost - base.1).max(0.0) / minutes),
+                    tokens_per_minute: (minutes >= 0.5).then(|| (tokens - base.2) as f64 / minutes),
+                    run_cost: priced.then(|| (cost - run.1).max(0.0)),
+                    run_tokens: tokens - run.2,
+                    since: run.0,
+                };
+                if ended {
+                    runs.remove(&session.id);
+                    samples.remove(&session.id);
+                }
+                for member in &members {
+                    let mut st = member.0.state.lock().await;
+                    let mut changed = false;
+                    // Prime counts what its subagents spend into their parent; Pi's and dsh's add up in the apps.
+                    let tally = own(member);
+                    let figure = if member.0.id == session.id && session.agent == AgentKind::Prime { cost } else { tally.cost };
+                    if member.4 && (tally.priced || priced) && st.gateway_cost != figure {
+                        st.gateway_cost = figure;
+                        st.summary.cost = st.summary.cost.max(figure);
+                        changed = true;
+                    }
+                    if member.0.id == session.id && st.summary.spend.as_ref() != Some(&spend) {
+                        st.summary.spend = Some(spend.clone());
+                        changed = true;
+                    }
+                    if changed {
+                        self.publish_summary(&st);
+                    }
                 }
             }
         }
@@ -1129,7 +1254,8 @@ impl App {
             }
         }
         if let Some(own) = reported {
-            st.summary.cost = self.prime_cost(st.session_file.as_deref(), own, st.summary.cost);
+            st.summary.cost = self.prime_cost(st.session_file.as_deref(), own, st.summary.cost)
+                .max(st.gateway_cost);
         }
         if let Some(pid) = row["workerPid"].as_u64() {
             st.worker_pid = Some(pid as u32);
@@ -1453,7 +1579,7 @@ impl App {
                 });
             }
             let usage = &result["usage"];
-            st.summary.cost = usage["cost"].as_f64().unwrap_or(0.0);
+            st.summary.cost = usage["cost"].as_f64().unwrap_or(0.0).max(st.gateway_cost);
             st.summary.context = parent_window.map(|window| {
                 let tokens = usage["contextTokens"].as_u64();
                 ContextUsage {
@@ -1642,7 +1768,8 @@ impl App {
                     self.prime_cost(file.as_deref(), own, st.summary.cost)
                 } else {
                     own
-                };
+                }
+                .max(st.gateway_cost);
             }
             let usage = &stats["contextUsage"];
             st.summary.context = usage["contextWindow"].as_u64().map(|window| ContextUsage {
@@ -2110,4 +2237,18 @@ pub fn expand_dir(path: &str) -> Result<String> {
 /// What a session's chosen context window is saved under: a Prime conversation's `sessionId`, else the session's id.
 fn limit_key<'a>(session: &'a Session, st: &'a SessionState) -> &'a str {
     st.prime_session.as_deref().unwrap_or(&session.id)
+}
+
+/// The session id an agent sends Open Codex with its requests: Prime's own session id, dsh's session file id, and the
+/// id in a Pi session file's name (`<time>_<id>.jsonl`).
+fn agent_session_id(agent: AgentKind, st: &SessionState) -> Option<String> {
+    if agent == AgentKind::Prime {
+        return st.prime_session.clone();
+    }
+    let file = st.session_file.as_deref()?;
+    let name = std::path::Path::new(file).file_stem()?.to_str()?;
+    Some(match agent {
+        AgentKind::Pi => name.rsplit('_').next().unwrap_or(name).to_string(),
+        _ => name.to_string(),
+    })
 }

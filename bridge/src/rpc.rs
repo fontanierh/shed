@@ -57,11 +57,24 @@ pub async fn list_models(agent: AgentKind) -> Result<Value> {
             return Ok(models.clone());
         }
     }
-    let models = match agent {
+    // With Open Codex, each agent offers exactly its catalog: written into the agent's configuration first, then
+    // listed as the agent sees it.
+    let gateway = crate::opencodex::gateway();
+    if let Some(gateway) = &gateway {
+        if let Err(e) = crate::opencodex::sync(gateway).await {
+            eprintln!("Open Codex catalog: {e}");
+        }
+    }
+    let mut models = match agent {
         AgentKind::Deepseek => crate::dsh::list_models().await?,
         AgentKind::Pi => listed_models("pi", &["--list-models"]).await?,
         AgentKind::Prime => listed_models("prime-agent", &["model", "list"]).await?,
     };
+    if gateway.is_some() {
+        if let Some(list) = models.as_array_mut() {
+            list.retain(|m| m["provider"] == crate::opencodex::PROVIDER);
+        }
+    }
     CACHE
         .lock()
         .unwrap()
@@ -148,6 +161,7 @@ impl RpcChild {
                 (opts.agent == AgentKind::Deepseek)
                     .then_some(("DSH_PERMISSION_MODE", "danger-full-access")),
             )
+            .env(crate::opencodex::KEY_ENV, crate::opencodex::KEY)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

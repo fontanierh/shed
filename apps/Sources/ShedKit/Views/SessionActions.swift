@@ -80,10 +80,26 @@ extension ModelInfo {
     }
 
     /// By provider, `first` leading and the rest alphabetical, each newest first.
-    static func byProvider(_ models: [ModelInfo], matching query: String = "", first: String?) -> [(provider: String, models: [ModelInfo])] {
-        let groups = Dictionary(grouping: newestFirst(models, matching: query), by: \.provider)
-        let order = groups.keys.sorted { a, b in a == first ? true : b == first ? false : a < b }
+    static func byProvider(_ models: [ModelInfo], matching query: String = "", first: ModelInfo?) -> [(provider: String, models: [ModelInfo])] {
+        let groups = Dictionary(grouping: newestFirst(models, matching: query)) { group(provider: $0.provider, id: $0.id).label }
+        let lead = first.map { group(provider: $0.provider, id: $0.id).label }
+        let order = groups.keys.sorted { a, b in a == lead ? true : b == lead ? false : a < b }
         return order.map { ($0, groups[$0] ?? []) }
+    }
+
+    /// The menu a model goes in, and the part of its id that menu already says. Open Codex serves every provider
+    /// under its own name, so its models go by the provider inside it; bare ids are the ChatGPT subscription's.
+    static func group(provider: String, id: String) -> (label: String, prefix: String) {
+        guard provider == "opencodex" else { return (provider, "") }
+        guard let slash = id.firstIndex(of: "/") else { return ("ChatGPT subscription", "") }
+        let inner = String(id[..<slash])
+        let label = switch inner {
+        case "openai-apikey": "OpenAI API key"
+        case "anthropic-apikey": "Anthropic API key"
+        case "anthropic": "Claude subscription"
+        default: inner
+        }
+        return (label, inner + "/")
     }
 
     private var recency: (version: [Int], size: Int, date: String) {
@@ -115,7 +131,7 @@ struct PhoneModelPicker: View {
                 if store.models.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
                 }
-                ForEach(ModelInfo.byProvider(store.models, matching: query, first: current?.provider), id: \.provider) { group in
+                ForEach(ModelInfo.byProvider(store.models, matching: query, first: current), id: \.provider) { group in
                     Section(group.provider) {
                         ForEach(group.models, id: \.key) { model in row(model) }
                     }

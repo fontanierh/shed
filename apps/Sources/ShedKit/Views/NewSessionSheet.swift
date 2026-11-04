@@ -89,18 +89,26 @@ struct NewSessionSheet: View {
         return recent + all.filter { !recent.contains($0) }
     }
 
-    /// The models past the recent ones, by provider, so a long list stays a short menu.
-    private var byProvider: [(provider: String, models: [String])] {
+    /// The models past the recent ones, by provider, so a long list stays a short menu. Open Codex serves every
+    /// provider under its own name, so its models group by the provider inside it.
+    private var byProvider: [(provider: String, prefix: String, models: [String])] {
         let recent = Set(recentModels.split(separator: "\n").map(String.init))
         let rest = models.filter { !recent.contains($0) }
         var order: [String] = []
-        var groups: [String: [String]] = [:]
+        var groups: [String: (prefix: String, models: [String])] = [:]
         for name in rest {
-            let provider = String(name.split(separator: "/", maxSplits: 1).first ?? "")
+            let (provider, prefix) = Self.provider(of: name)
             if groups[provider] == nil { order.append(provider) }
-            groups[provider, default: []].append(name)
+            groups[provider, default: (prefix, [])].models.append(name)
         }
-        return order.map { ($0, groups[$0] ?? []) }
+        return order.map { ($0, groups[$0]?.prefix ?? "", groups[$0]?.models ?? []) }
+    }
+
+    /// The menu a "provider/id" name goes in, and what it starts with there (dropped from its button).
+    private static func provider(of name: String) -> (String, String) {
+        let provider = String(name.split(separator: "/", maxSplits: 1).first ?? "")
+        let group = ModelInfo.group(provider: provider, id: String(name.dropFirst(provider.count + 1)))
+        return (group.label, provider + "/" + group.prefix)
     }
 
     var body: some View {
@@ -211,7 +219,7 @@ struct NewSessionSheet: View {
                 if groups.count > 1 && models.count > 12 {
                     ForEach(groups, id: \.provider) { group in
                         Menu(group.provider) {
-                            ForEach(group.models, id: \.self) { name in Button(name.dropFirst(group.provider.count + 1)) { model = name } }
+                            ForEach(group.models, id: \.self) { name in Button(name.dropFirst(group.prefix.count)) { model = name } }
                         }
                     }
                 } else {

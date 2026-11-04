@@ -1,0 +1,194 @@
+diff --git a/src/config/provider-validation.ts b/src/config/provider-validation.ts
+index 3e707f9a9..e06104c07 100644
+--- a/src/config/provider-validation.ts
++++ b/src/config/provider-validation.ts
+@@ -478,7 +478,7 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
+     if (allowTombstones && row === null) continue;
+     if (!capabilityRecord(row)) return "modelCapabilities rows must be plain objects";
+     for (const [axis, declaration] of Object.entries(row)) {
+-      if (!["inputModalities", "contextTier", "video", "deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) return "modelCapabilities contains an unknown axis";
++      if (!["inputModalities", "contextTier", "video", "deepseekImageFiles", "mistralMaxImages", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) return "modelCapabilities contains an unknown axis";
+       if (allowTombstones && declaration === null) continue;
+       if (axis === "inputModalities") {
+         if (!Array.isArray(declaration) || declaration.length === 0
+@@ -487,6 +487,10 @@ export function modelCapabilitiesConfigError(value: unknown, allowTombstones = f
+         }
+       } else if (axis === "contextTier") {
+         if (declaration !== "default" && declaration !== "long_context") return "modelCapabilities contextTier must be default or long_context";
++      } else if (axis === "mistralMaxImages") {
++        if (typeof declaration !== "number" || !Number.isSafeInteger(declaration) || declaration < 1 || declaration > 1000) {
++          return "modelCapabilities mistralMaxImages must be an integer from 1 to 1000";
++        }
+       } else if (["deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"].includes(axis)) {
+         if (typeof declaration !== "boolean") return `modelCapabilities ${axis} must be a boolean`;
+       } else {
+@@ -521,6 +525,9 @@ export function mergeModelCapabilities(
+       } else if (axis === "deepseekImageFiles") {
+         if (value === null) delete row.deepseekImageFiles;
+         else row.deepseekImageFiles = value as boolean;
++      } else if (axis === "mistralMaxImages") {
++        if (value === null) delete row.mistralMaxImages;
++        else row.mistralMaxImages = value as number;
+       } else if (axis === "supportsReasoning" || axis === "supportsThinkingToggle" || axis === "supportsReasoningEffort" || axis === "defaultThinkingEnabled") {
+         if (value === null) delete row[axis];
+         else row[axis] = value as boolean;
+@@ -551,7 +558,7 @@ export function sanitizeModelCapabilitiesForLoad(value: unknown): Record<string,
+   for (const [id, raw] of Object.entries(value).slice(0, MODEL_DISCOVERY_MAX_MODELS)) {
+     if (!capabilityRecord(raw) || !isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
+     const row: Record<string, unknown> = {};
+-    for (const axis of ["inputModalities", "contextTier", "video", "deepseekImageFiles", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"] as const) {
++    for (const axis of ["inputModalities", "contextTier", "video", "deepseekImageFiles", "mistralMaxImages", "supportsReasoning", "supportsThinkingToggle", "supportsReasoningEffort", "defaultThinkingEnabled"] as const) {
+       if (!Object.hasOwn(raw, axis)) continue;
+       const declaration = raw[axis];
+       if (modelCapabilitiesConfigError({ [id]: { [axis]: declaration } }) === null) row[axis] = declaration;
+diff --git a/src/server/responses/mistral-image-limit.ts b/src/server/responses/mistral-image-limit.ts
+new file mode 100644
+index 000000000..727d9f749
+--- /dev/null
++++ b/src/server/responses/mistral-image-limit.ts
+@@ -0,0 +1,74 @@
++import type { TranslatorBudget } from "../../lib/translator-budget";
++import type { AdapterRequest } from "../../adapters/base";
++
++// https://docs.mistral.ai/capabilities/vision/ documents 8 images per API request, and most
++// Mistral vision models refuse a ninth with HTTP 400 ("Total number of images exceeds the maximum
++// allowed of 8"). Some models accept more; DeepSeek V4.1 Flash answers an opaque HTTP 503 (code
++// 3800) past its cap. Operators declare a model's cap with `modelCapabilities.<id>.mistralMaxImages`.
++export const MISTRAL_DEFAULT_MAX_IMAGES = 8;
++/**
++ * Caps measured on api.mistral.ai (2026-11-04) for models above the documented 8: the largest
++ * accepted count before refusal, or for GLM the largest count tried without one.
++ */
++const MEASURED_MAX_IMAGES: Readonly<Record<string, number>> = {
++  "deepseek-v4-1-flash-1017": 20,
++  "mistral-large-4": 100,
++  "mistral-large-4-0": 100,
++  "zai-glm-5-3-flash": 256,
++};
++
++/** The operator's declaration, then a measured cap, then the documented default. */
++export function mistralMaxImages(model: string, declared?: number): number {
++  return declared ?? (Object.hasOwn(MEASURED_MAX_IMAGES, model) ? MEASURED_MAX_IMAGES[model]! : MISTRAL_DEFAULT_MAX_IMAGES);
++}
++
++const NOTE = "[image omitted: Mistral accepts a limited number of images per request; older images were dropped]";
++
++/** Narrow parsed JSON objects without treating arrays as image or message records. */
++function record(value: unknown): value is Record<string, unknown> {
++  return value !== null && typeof value === "object" && !Array.isArray(value);
++}
++
++/** Only the first-party Chat destination, never a similarly named gateway. */
++export function isMistralChatRequest(request: AdapterRequest): boolean {
++  try {
++    const url = new URL(request.url);
++    return url.origin === "https://api.mistral.ai" && url.pathname === "/v1/chat/completions" && request.method === "POST";
++  } catch { return false; }
++}
++
++/**
++ * Keep the newest images a Mistral request may carry and replace older ones with a text note,
++ * across every message (including promoted tool-result images). The client history stays intact;
++ * only this outbound body is pruned. Returns undefined when nothing needs to change.
++ */
++export function mistralImageLimitBody(
++  request: AdapterRequest,
++  options: { maxImages: number; budget?: TranslatorBudget },
++): string | undefined {
++  if (!isMistralChatRequest(request)) return undefined;
++  // Cheap bound before parsing: a request with no more image parts than the cap is never rewritten.
++  let occurrences = 0;
++  for (let at = request.body.indexOf('"image_url"'); at !== -1; at = request.body.indexOf('"image_url"', at + 1)) {
++    if (++occurrences > options.maxImages) break;
++  }
++  if (occurrences <= options.maxImages) return undefined;
++  const requestBytes = Buffer.byteLength(request.body, "utf8");
++  const releaseCopy = options.budget?.observeAcceptedRequestCopy(requestBytes * 2);
++  try {
++    const body: unknown = JSON.parse(request.body);
++    if (!record(body) || !Array.isArray(body.messages)) return undefined;
++    const images: Array<{ parts: unknown[]; index: number }> = [];
++    for (const message of body.messages) {
++      if (!record(message) || !Array.isArray(message.content)) continue;
++      message.content.forEach((part, index) => {
++        if (record(part) && part.type === "image_url") images.push({ parts: message.content as unknown[], index });
++      });
++    }
++    const excess = images.length - options.maxImages;
++    if (excess <= 0) return undefined;
++    for (const { parts, index } of images.slice(0, excess)) parts[index] = { type: "text", text: NOTE };
++    const releaseSerialization = options.budget?.observeExternallyCapped("passthrough_serialization", requestBytes);
++    try { return JSON.stringify(body); } finally { releaseSerialization?.(); }
++  } finally { releaseCopy?.(); }
++}
+diff --git a/src/server/responses/request-transport.ts b/src/server/responses/request-transport.ts
+index e010fd9c4..4294ad72e 100644
+--- a/src/server/responses/request-transport.ts
++++ b/src/server/responses/request-transport.ts
+@@ -85,6 +85,7 @@ import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendObserverIni
+ import { resolveConnectTimeoutMs } from "../../stall-timeout";
+ import { isLocalUpstream } from "../../lib/local-upstream";
+ import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
++import { isMistralChatRequest, mistralImageLimitBody, mistralMaxImages } from "./mistral-image-limit";
+ import type { ProviderFetchOptions } from "./fetch-helpers";
+ import { captureConfigGeneration } from "../../lib/state-store-sweeper";
+ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuota } from "../../providers/quota";
+@@ -643,6 +644,17 @@ export async function prepareResponsesTransport(
+     const fileConsentGeneration = captureConfigGeneration();
+     resolved.buildRequest = async (requestParsed, incoming) => {
+       const request = await build(requestParsed, incoming);
++      /** Swap in a rewritten body, keeping its byte observation and dropping a stale length. */
++      const replaceBody = (body: string): void => {
++        request.releaseBodyObservation?.();
++        request.body = body;
++        const headers = new Headers(request.headers);
++        headers.delete("content-length");
++        request.headers = Object.fromEntries(headers);
++        request.releaseBodyObservation = incoming.translatorBudget.observeExternallyCapped(
++          "passthrough_serialization", Buffer.byteLength(body, "utf8"),
++        );
++      };
+       // Capture at adapter creation, never from mutable serving state after an await.
+       if (binding) requestBindings.set(request, binding);
+       const allowedImageFileModels = fileProvider.modelCapabilities
+@@ -681,18 +693,17 @@ export async function prepareResponsesTransport(
+             uploadSignal, {
+               allowedModels: allowedImageFileModels, budget: incoming.translatorBudget,
+             });
+-          if (body !== undefined) {
+-            request.releaseBodyObservation?.();
+-            request.body = body;
+-            const headers = new Headers(request.headers);
+-            headers.delete("content-length");
+-            request.headers = Object.fromEntries(headers);
+-            request.releaseBodyObservation = incoming.translatorBudget.observeExternallyCapped(
+-              "passthrough_serialization", Buffer.byteLength(body, "utf8"),
+-            );
+-          }
++          if (body !== undefined) replaceBody(body);
+         } catch (error) { request.releaseBodyObservation?.(); throw error; }
+       }
++      if (isMistralChatRequest(request)) {
++        const model = request.outboundModelId ?? requestParsed.modelId;
++        const body = mistralImageLimitBody(request, {
++          maxImages: mistralMaxImages(model, fileProvider.modelCapabilities?.[model]?.mistralMaxImages),
++          budget: incoming.translatorBudget,
++        });
++        if (body !== undefined) replaceBody(body);
++      }
+       return request;
+     };
+     if (resolved.runTurn) {
+diff --git a/src/types/provider.ts b/src/types/provider.ts
+index c2358cc46..22be33e08 100644
+--- a/src/types/provider.ts
++++ b/src/types/provider.ts
+@@ -294,6 +294,8 @@ export interface ModelCapabilities extends ReasoningCapabilities {
+   video?: { processing?: "static" | "agentic" };
+   /** Opt in exact first-party DeepSeek models to one-hour image file persistence. */
+   deepseekImageFiles?: boolean;
++  /** Images a first-party Mistral Chat request may carry for this model; older ones are pruned. */
++  mistralMaxImages?: number;
+ }
+ 
+ /**

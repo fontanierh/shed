@@ -283,6 +283,26 @@ pub struct SessionSummary {
     /// stopped waiting and carried on, but still takes the answer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub question: Option<Value>,
+    /// Set on top-level sessions while they work through Open Codex, and kept once they settle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spend: Option<Spend>,
+}
+
+/// What a session and its subagents spend, by Open Codex's request history.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Spend {
+    /// Dollars a minute over the last five minutes of the run, when Open Codex prices its models.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_minute: Option<f64>,
+    /// Tokens a minute over the same stretch. Both need half a minute of the run to say.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokens_per_minute: Option<f64>,
+    /// Dollars and tokens since the run started, at `since` (epoch ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_cost: Option<f64>,
+    pub run_tokens: u64,
+    pub since: u64,
 }
 
 /// A background command a session is waiting on.

@@ -6,6 +6,7 @@ mod files;
 mod history;
 mod jobs;
 mod media;
+mod opencodex;
 mod prime;
 mod protocol;
 mod rpc;

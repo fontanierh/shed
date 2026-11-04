@@ -17,6 +17,8 @@ public struct ShedActivity: ActivityAttributes, Sendable {
         public var rate: Double? = nil
         /// Dollars spent so far this run, with its subagents.
         public var spent: Double? = nil
+        /// Tokens per minute over the last five minutes, when Open Codex has no prices for the models.
+        public var tokensPerMinute: Double? = nil
         /// Subagents anywhere under the session: how many are still at work, and how many there are.
         public var subagentsActive: Int? = nil
         public var subagents: Int? = nil
@@ -70,6 +72,17 @@ final class LiveActivities {
                 startCost[session.id] = first
                 var state = ShedActivity.ContentState(phase: Self.phase(session), title: session.title, step: Self.step(session, store: store), since: start,
                                                       rate: rate(session.id, cost: cost), spent: max(0, cost - first))
+                // Open Codex's request history, measured on the computer, outranks the app's own sampling: it sees
+                // every request as it lands, not only the totals agents report.
+                if let spend = session.spend {
+                    if spend.runCost != nil {
+                        state.rate = spend.perMinute.map(Self.rounded)
+                        state.spent = spend.runCost
+                    } else {
+                        state.rate = nil
+                        state.tokensPerMinute = spend.tokensPerMinute.map(Self.rounded)
+                    }
+                }
                 let descendants = Self.descendants(of: session, in: sessions).filter { !$0.isDormant(at: .now) }
                 state.subagents = descendants.count
                 state.subagentsActive = descendants.filter(\.isActive).count
@@ -126,8 +139,12 @@ final class LiveActivities {
         spending[id] = samples
         guard let base = samples.first else { return nil }
         guard now.timeIntervalSince(base.at) >= 10 else { return nil }
-        let rate = max(0, cost - base.cost) / now.timeIntervalSince(base.at) * 60
-        return rate > 0 ? Double(rate.formatted(.number.precision(.significantDigits(2)).locale(Locale(identifier: "en_US_POSIX")).grouping(.never))) : 0
+        return Self.rounded(max(0, cost - base.cost) / now.timeIntervalSince(base.at) * 60)
+    }
+
+    /// Two significant digits, so the card only updates when the figure visibly moves.
+    private static func rounded(_ rate: Double) -> Double {
+        rate > 0 ? Double(rate.formatted(.number.precision(.significantDigits(2)).locale(Locale(identifier: "en_US_POSIX")).grouping(.never))) ?? rate : 0
     }
 
     private static func descendants(of session: SessionSummary, in sessions: [String: SessionSummary]) -> [SessionSummary] {
@@ -247,6 +264,8 @@ struct Spend: View {
             Text(Self.dollars(state.spent ?? 0))
         } else if let rate = state.rate {
             Text(Self.perMinute(rate))
+        } else if let tokens = state.tokensPerMinute {
+            Text(Self.tokensPerMinute(tokens))
         } else {
             // Not enough history for a rate yet: what the run has cost so far.
             Text(Self.dollars(state.spent ?? 0))
@@ -256,7 +275,13 @@ struct Spend: View {
     /// What the figure above it is.
     static func caption(_ state: ShedActivity.ContentState) -> String {
         if state.phase == "done" || state.phase == "error" { return "this run" }
-        return state.rate == nil ? "so far" : "last 5 min"
+        return state.rate == nil && state.tokensPerMinute == nil ? "so far" : "last 5 min"
+    }
+
+    /// "12k tok/min", "800 tok/min".
+    static func tokensPerMinute(_ tokens: Double) -> String {
+        let english = Locale(identifier: "en_US")
+        return tokens.formatted(.number.notation(.compactName).precision(.significantDigits(2)).locale(english)) + " tok/min"
     }
 
     /// "$0.36/min", "$0.048/min", "$1.2/min".

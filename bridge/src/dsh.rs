@@ -39,7 +39,8 @@ pub struct Dsh {
 /// Write the `shed` profile: the bundles it composes, the plugin, and the layer that swaps the SDK's JSON-RPC server
 /// for it. The layer also gives the agent ask_user_question, which only dsh's own apps mount, in its timed mode:
 /// a question nobody answers within two minutes lets the agent carry on, and the answer still reaches it later. The
-/// profile's own `cordis.patch.yml` is the user's and is created only when missing. Returns the layer.
+/// profile's own `cordis.patch.yml` is the user's and is created only when missing. With Open Codex, the layer also
+/// makes it dsh's one model provider, replacing the providers configured in `cordis.patch.yml`. Returns the layer.
 pub fn install_profile() -> Result<PathBuf> {
     let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".dsh/profiles")
@@ -79,6 +80,7 @@ pub fn install_profile() -> Result<PathBuf> {
         json!(persona),
         json!(plugin.to_string_lossy()),
     );
+    let layer = layer + &crate::opencodex::dsh_layer().unwrap_or_default();
     write("shed.patch.yml", &layer)?;
     Ok(dir.join("shed.patch.yml"))
 }
@@ -91,6 +93,7 @@ pub async fn list_models() -> Result<Value> {
     let mut child = tokio::process::Command::new("dsh")
         .args(["--profile", PROFILE, "--patch"])
         .arg(&layer)
+        .env(crate::opencodex::KEY_ENV, crate::opencodex::KEY)
         .current_dir(if home.is_empty() { "/".into() } else { home })
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
