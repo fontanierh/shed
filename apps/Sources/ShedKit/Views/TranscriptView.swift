@@ -1013,17 +1013,50 @@ struct ReasoningRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if expanded || reasoning.title == nil {
-                Text(reasoning.body)
-                    .font(.system(size: 13)).italic()
-                    .foregroundStyle(.secondary)
-                    .lineSpacing(3)
-                    .lineLimit(expanded ? nil : 2)
+            if expanded {
+                ReasoningLines(text: reasoning.body)
+                    .padding(.leading, 32)
+                    .padding(.bottom, 10)
+            } else if reasoning.title == nil {
+                // Only the first lines show: no need to lay out the rest of a long, still-growing text.
+                ReasoningLines.style(Text(reasoning.body.prefix(400)))
+                    .lineLimit(2)
                     .padding(.leading, 32)
                     .padding(.bottom, 10)
             }
         }
         .trackTop(top)
+    }
+}
+
+/// Open reasoning, one Text per line: as it streams, only the line being written is laid out again, not everything
+/// thought so far, which on a phone kept the main thread busy and the row slow to close.
+struct ReasoningLines: View {
+    let text: String
+
+    static func style(_ text: Text) -> some View {
+        text.font(.system(size: 13)).italic().foregroundStyle(.secondary).lineSpacing(3)
+    }
+
+    var body: some View {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        VStack(alignment: .leading, spacing: 7) {
+            Finished(lines: lines.dropLast()).equatable()
+            if let last = lines.last { Self.style(Text(last)).frame(maxWidth: .infinity, alignment: .leading) }
+        }
+    }
+
+    /// The lines before the last, which no longer change while the reasoning streams.
+    private struct Finished: View, Equatable {
+        let lines: ArraySlice<Substring>
+
+        nonisolated static func == (a: Finished, b: Finished) -> Bool { a.lines.elementsEqual(b.lines) }
+
+        var body: some View {
+            ForEach(lines.indices, id: \.self) { index in
+                ReasoningLines.style(Text(lines[index])).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
     }
 }
 
