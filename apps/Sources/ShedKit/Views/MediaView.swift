@@ -9,10 +9,20 @@ import SwiftUI
 public struct MediaSource: Sendable, Equatable {
     var bridgeURL: String
     var token: String
+    /// The session's working directory, which paths the agent gives relative to start from.
+    var cwd: String
 
-    public init(bridgeURL: String, token: String) {
+    public init(bridgeURL: String, token: String, cwd: String = "") {
         self.bridgeURL = bridgeURL
         self.token = token
+        self.cwd = cwd
+    }
+
+    /// A path as the agent gave it, made absolute against the session's folder.
+    func url(forPath path: String) -> URL {
+        if path.hasPrefix("/") || cwd.isEmpty { return URL(fileURLWithPath: path) }
+        let home = cwd.hasPrefix("~") ? NSHomeDirectory() + cwd.dropFirst() : cwd
+        return URL(fileURLWithPath: path, relativeTo: URL(fileURLWithPath: home, isDirectory: true)).standardizedFileURL
     }
 
     /// The request to load `url` with, or nil when it can't be reached.

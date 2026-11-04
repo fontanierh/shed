@@ -184,7 +184,7 @@ public final class SessionStore {
     /// Where a session's transcript loads embedded media from: its own computer.
     public func media(for sessionId: String) -> MediaSource {
         guard let env = environment(of: sessionId) else { return MediaSource(bridgeURL: "", token: "") }
-        return MediaSource(bridgeURL: env.url, token: token(of: env))
+        return MediaSource(bridgeURL: env.url, token: token(of: env), cwd: sessions[sessionId]?.cwd ?? "")
     }
 
     private func token(of env: BridgeEnvironment, fresh: Bool = false) -> String {

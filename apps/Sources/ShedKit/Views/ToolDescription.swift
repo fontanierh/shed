@@ -99,7 +99,33 @@ struct ToolDescription {
         return args
     }
 
+    /// The images a call loaded into the model's context: Prime's `attach_image`, by the paths its answer names, or
+    /// before it answers, the ones its code passes.
+    static func attachedImages(_ item: Item) -> [String] {
+        guard item.toolName == "python_repl" || item.toolName == "python" else { return [] }
+        let code = pythonCode(item.args ?? "")
+        guard code.contains("attach_image(") else { return [] }
+        // The answer comes as Python's repr of a string: newlines escaped and quotes around it.
+        if let output = item.output,
+           let listed = matches(#"Loaded \d+ image\(s\) into context: (.+?)(?:\\n|\n|['"]|$)"#, in: output).first {
+            return listed.components(separatedBy: ", ").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        return imagePaths(in: code)
+    }
+
+    /// The image paths written out in the code's `attach_image(...)` calls.
+    private static func imagePaths(in code: String) -> [String] {
+        matches(#"attach_image\(([^)]*)\)"#, in: code).flatMap { call in
+            matches(#"['"]([^'"\n]+\.(?:png|jpe?g|gif|webp|heic|bmp|tiff?))['"]"#, in: call)
+        }
+    }
+
     static func python(code: String) -> ToolDescription {
+        if code.contains("attach_image(") {
+            let names = imagePaths(in: code).map { ($0 as NSString).lastPathComponent }
+            return .init(icon: "photo.on.rectangle", title: names.count > 1 ? "Looked at images" : "Looked at image",
+                         detail: names.isEmpty ? nil : names.joined(separator: ", "), language: "python")
+        }
         let spawned = matches(#"rlm\.spawn\([\s\S]*?name\s*=\s*['"]([^'"]+)['"]"#, in: code)
         if !spawned.isEmpty {
             return .init(icon: "arrow.triangle.branch", title: spawned.count > 1 ? "Spawned subagents" : "Spawned subagent",

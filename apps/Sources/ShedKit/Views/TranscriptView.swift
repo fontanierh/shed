@@ -1201,6 +1201,13 @@ struct ToolRow: View {
                 .padding(.bottom, 8)
             }
 
+            let attached = ToolDescription.attachedImages(item)
+            if !attached.isEmpty {
+                AttachedImages(paths: attached, loaded: item.status == .done)
+                    .padding(.leading, 32)
+                    .padding(.bottom, 8)
+            }
+
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     if let args = item.args, !args.isEmpty {
@@ -1642,5 +1649,88 @@ struct ReportCard: View {
         } else {
             Avatar(name: name, size: 22)
         }
+    }
+}
+
+/// What the model chose to look at: the images a call loaded into its context, as thumbnails that open full size.
+struct AttachedImages: View {
+    let paths: [String]
+    /// Whether the call finished: until then the images are on their way into the context.
+    let loaded: Bool
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 10) {
+                ForEach(paths, id: \.self) { path in AttachedImage(path: path, loaded: loaded) }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollIndicators(.never)
+    }
+}
+
+private struct AttachedImage: View {
+    let path: String
+    let loaded: Bool
+    @Environment(\.media) private var media
+    @Environment(\.lightbox) private var lightbox
+    @State private var image: CGImage?
+    @State private var failed = false
+
+    private var request: URLRequest? { media.request(for: media.url(forPath: path)) }
+    private var name: String { (path as NSString).lastPathComponent }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        Group {
+            if let image {
+                Image(decorative: image, scale: 2)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: thumbnailWidth(image), height: 132)
+                    .clipShape(shape)
+                    .transition(.opacity)
+            } else {
+                shape.fill(Palette.surface.opacity(0.6))
+                    .frame(width: 176, height: 132)
+                    .overlay {
+                        Image(systemName: failed ? "photo.badge.exclamationmark" : "photo")
+                            .font(.system(size: 18)).foregroundStyle(Palette.lineNumber)
+                    }
+                    .shimmer(!failed)
+            }
+        }
+        .overlay(shape.strokeBorder(Palette.lilac.opacity(loaded ? 0.55 : 0.3), lineWidth: 1))
+        .overlay(alignment: .bottomLeading) {
+            HStack(spacing: 4) {
+                Image(systemName: "sparkle").font(.system(size: 8, weight: .bold)).foregroundStyle(Palette.lilac)
+                Text(loaded ? "In context" : "Loading").font(.system(size: 10, weight: .semibold))
+                Text(name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            .padding(.horizontal, 7).frame(height: 20)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(6)
+        }
+        .shadow(color: Palette.lilac.opacity(loaded ? 0.18 : 0), radius: 8)
+        .contentShape(shape)
+        .onTapGesture {
+            guard let image, let request else { return }
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) {
+                lightbox?.shown = .init(image: image, name: name, request: request)
+            }
+        }
+        .help(path)
+        .animation(.easeOut(duration: 0.3), value: image != nil)
+        .task(id: request?.url) {
+            guard let request else { failed = true; return }
+            do { image = try await MediaCache.shared.image(for: request) } catch { failed = true }
+        }
+    }
+
+    /// As wide as the image's shape asks at the strip's height, within reason.
+    private func thumbnailWidth(_ image: CGImage) -> CGFloat {
+        let aspect = image.height > 0 ? CGFloat(image.width) / CGFloat(image.height) : 4 / 3
+        return min(max(132 * aspect, 96), 300)
     }
 }
