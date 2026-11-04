@@ -518,23 +518,18 @@ public final class SessionStore {
         }
     }
 
-    public func createSession(in env: String, agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async -> Bool {
+    /// Throws to the sheet that asked, which shows why: an alert behind a sheet never appears on the Mac.
+    public func createSession(in env: String, agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async throws {
         var fields: [String: Any] = ["agent": agent.rawValue, "cwd": cwd]
         if let model, !model.isEmpty { fields["model"] = model }
         if let thinking, !thinking.isEmpty { fields["thinking"] = thinking }
-        do {
-            let client = try client(env)
-            let created = try await client.call("create_session", fields, as: SessionSummary.self)
-            let summary = tagged(created, env)
-            sessions[summary.id] = summary
-            select(summary.id)
-            if let firstMessage, !firstMessage.isEmpty {
-                try await client.call("send", ["sessionId": created.id, "text": firstMessage])
-            }
-            return true
-        } catch {
-            report(error)
-            return false
+        let client = try client(env)
+        let created = try await client.call("create_session", fields, as: SessionSummary.self)
+        let summary = tagged(created, env)
+        sessions[summary.id] = summary
+        select(summary.id)
+        if let firstMessage, !firstMessage.isEmpty {
+            do { try await client.call("send", ["sessionId": created.id, "text": firstMessage]) } catch { report(error) }
         }
     }
 

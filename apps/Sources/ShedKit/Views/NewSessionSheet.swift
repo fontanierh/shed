@@ -16,6 +16,8 @@ struct NewSessionSheet: View {
     @AppStorage("newSession.recentFolders") private var recentFolders = ""
     @AppStorage("newSession.recentModels") private var recentModels = ""
     @State private var creating = false
+    /// Why the last Start failed, shown in the sheet until the choice changes.
+    @State private var startError: String?
 
     /// The computer the session starts on: the one chosen last, while it is still there.
     private var env: String {
@@ -31,6 +33,29 @@ struct NewSessionSheet: View {
     }
 
     private var recents: [String] { folders(recentFolders).filter { $0.env == env }.map(\.path) }
+
+    /// Whether the bridge refused a folder because it is gone.
+    private static func isMissing(_ error: Error) -> Bool {
+        error.localizedDescription.contains("No such file or directory")
+    }
+
+    /// Takes a folder that no longer exists out of the recent and last-used ones on this computer.
+    private func forget(_ path: String, in env: String) {
+        func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
+        recentFolders = folders(recentFolders).filter { $0.env != env || $0.path != path }.map(line).joined(separator: "\n")
+        lastFolders = folders(lastFolders).filter { $0.env != env || $0.path != path }.map(line).joined(separator: "\n")
+    }
+
+    /// Recent folders deleted since are dropped, and so is a restored folder that went with them.
+    private func pruneFolders() async {
+        let env = env
+        for path in Set(recents + [cwd]) where !path.isEmpty {
+            do { _ = try await store.listDir(in: env, path) } catch let error where Self.isMissing(error) {
+                forget(path, in: env)
+                if cwd == path { cwd = "" }
+            } catch {}
+        }
+    }
 
     private func restoreFolder() {
         let first = store.environments.first?.id
@@ -129,6 +154,19 @@ struct NewSessionSheet: View {
         .onChange(of: env) { restoreFolder() }
         .onChange(of: agent) { fitModel() }
         .task(id: "\(env) \(agent.rawValue)") { await loadModels(); fitModel() }
+        .task(id: env) { await pruneFolders() }
+        .onChange(of: "\(env)\t\(agent.rawValue)\t\(cwd)\t\(model)") { startError = nil }
+    }
+
+    /// Why Start failed, in the sheet itself.
+    @ViewBuilder private var startErrorBanner: some View {
+        if let startError {
+            Label(startError, systemImage: "exclamationmark.triangle.fill")
+                .font(.callout).foregroundStyle(Palette.danger)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .card(radius: 10, fill: Palette.danger.opacity(0.08), border: Palette.danger.opacity(0.4))
+        }
     }
 
     private var mac: some View {
@@ -170,6 +208,7 @@ struct NewSessionSheet: View {
             .padding(.horizontal, 32)
             .padding(.bottom, 24)
 
+            startErrorBanner.padding(.horizontal, 32).padding(.bottom, 16)
             Rectangle().fill(Palette.border).frame(height: 1)
             HStack(spacing: 10) {
                 HStack(spacing: 8) {
@@ -301,6 +340,7 @@ struct NewSessionSheet: View {
 
                     section("Model") { modelField(height: 44) }
                     section("Reasoning effort") { effortPicker }
+                    startErrorBanner
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -340,11 +380,12 @@ struct NewSessionSheet: View {
         let folder = cwd
         let chosenModel = model
         let env = env
+        startError = nil
         Task {
-            let ok = await store.createSession(in: env, agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
-                                               firstMessage: "")
-            creating = false
-            if ok {
+            do {
+                try await store.createSession(in: env, agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
+                                              firstMessage: "")
+                creating = false
                 func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
                 let others = folders(recentFolders).filter { $0.env != env }
                 let mine = ([folder] + recents.filter { $0 != folder }).prefix(6).map { (env: env, path: $0) }
@@ -355,6 +396,14 @@ struct NewSessionSheet: View {
                     recentModels = ([chosenModel] + saved.filter { $0 != chosenModel }).prefix(5).joined(separator: "\n")
                 }
                 dismiss()
+            } catch {
+                creating = false
+                if Self.isMissing(error) {
+                    forget(folder, in: env)
+                    startError = "\(Format.path(folder)) no longer exists on this computer. Choose another folder."
+                } else {
+                    startError = error.localizedDescription
+                }
             }
         }
     }
