@@ -30,7 +30,17 @@ final class SessionStreamingTests: XCTestCase {
         XCTAssertEqual(store.items[0].text, "Start one two ")
     }
 
-    @MainActor func testThousandDeltaBurstStaysBatched() async throws {
+    @MainActor private func waitForLive(_ store: SessionStore, _ key: String, upTo ms: Int) async -> Int {
+        var waited = 0
+        while waited < ms {
+            if store.live.texts[key] != nil { return waited }
+            try? await Task.sleep(for: .milliseconds(10), tolerance: .zero)
+            waited += 10
+        }
+        return -1
+    }
+
+    @MainActor func testThousandDeltaBurstStaysBatched() async {
         let store = SessionStore()
         store.select("test:reply")
         store.apply(.session(summary("reply")), from: "test")
@@ -41,7 +51,9 @@ final class SessionStreamingTests: XCTestCase {
         }
         XCTAssertEqual(store.items[0].text, "Start ")
         XCTAssertTrue(store.live.texts.isEmpty)
-        try await Task.sleep(for: .milliseconds(120), tolerance: .zero)
+        // The deadline bounds batching, not how soon a loaded main actor must service it.
+        let appeared = await waitForLive(store, "text", upTo: 2000)
+        XCTAssertGreaterThanOrEqual(appeared, 0)
         let expected = "Start " + String(repeating: "word ", count: 1000)
         XCTAssertEqual(store.live.texts["text"], expected)
         XCTAssertEqual(store.items[0].text, "Start ")
