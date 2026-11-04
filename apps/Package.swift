@@ -14,5 +14,6 @@ let package = Package(
     targets: [
         .target(name: "ShedKit", dependencies: [.product(name: "MarkdownUI", package: "swift-markdown-ui")]),
         .executableTarget(name: "ShedMac", dependencies: ["ShedKit"]),
+        .testTarget(name: "ShedKitTests", dependencies: ["ShedKit"]),
     ]
 )
