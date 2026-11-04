@@ -590,6 +590,10 @@ struct FillsProposal: SwiftUI.Layout {
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         for subview in subviews { subview.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size)) }
     }
+
+    /// No alignment guides of its own: the default asks the content for its guides, measuring the conversation again.
+    func explicitAlignment(of guide: HorizontalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? { nil }
 }
 
 extension View {

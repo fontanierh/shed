@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Rendered block by block (paragraphs, headings, lists, code), so a growing reply only lays out its last block again.
 /// While the reply streams, each word fades in as it arrives, in reading order, and the text before it stays as it is.
-/// Only the blocks with a word still fading redraw on each frame, and only while one is: the rest draw once.
+/// The fade advances as text arrives, so it costs no frames of its own; only the blocks that grew redraw.
 struct StreamingMarkdown: View {
     let text: String
     let streaming: Bool
@@ -28,20 +28,20 @@ struct StreamingMarkdown: View {
         // Noted as the view updates rather than after, so a word is never drawn before it is known to have just arrived.
         let blocks = arrivals.noting(Self.blocks(current), at: .now, animate: !reduceMotion && (streaming || arrivals.until > settled))
         let fading = arrivals.until > settled
+        // The fade steps on as text arrives, not on frames of its own: each word brightens over the next few updates,
+        // which redraw its block anyway. A frame-by-frame fade redrew the whole paragraph thirty times a second.
+        let now = Date.now.timeIntervalSinceReferenceDate
         Group {
             if (streaming && !reduceMotion) || fading {
                 // Every block in the same runs, whether a word of it is fading or not, so none is rebuilt as its words settle.
-                TimelineView(.animation(minimumInterval: Fade.frame, paused: !fading)) { context in
-                    let now = context.date.timeIntervalSinceReferenceDate
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(stride(from: 0, to: blocks.count, by: Run.length)), id: \.self) { start in
-                            let indices = start..<min(start + Run.length, blocks.count)
-                            Run(
-                                blocks: indices.map { FadingBlock(text: blocks[$0].text, fade: arrivals.fade($0, at: now)) },
-                                spacings: indices.map { Self.spacing(blocks, $0) }
-                            )
-                            .equatable()
-                        }
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(stride(from: 0, to: blocks.count, by: Run.length)), id: \.self) { start in
+                        let indices = start..<min(start + Run.length, blocks.count)
+                        Run(
+                            blocks: indices.map { FadingBlock(text: blocks[$0].text, fade: arrivals.fade($0, at: now)) },
+                            spacings: indices.map { Self.spacing(blocks, $0) }
+                        )
+                        .equatable()
                     }
                 }
                 // Selectable text is drawn by AppKit, which skips custom renderers: the reply is selectable once it rests.
@@ -130,15 +130,25 @@ struct StreamingMarkdown: View {
     }
 
     /// Top-level blocks: runs of lines between blank lines, with fenced code kept whole.
-    /// Memoized: the view and its arrivals ask for the same text's blocks several times per update.
+    /// Memoized: the view and its arrivals ask for the same text's blocks several times per update. A streaming reply
+    /// only grows, which changes nothing before its last block: it is split again from there, not from its start.
     @MainActor static func blocks(_ text: String) -> [Block] {
         if let hit = recent.first(where: { $0.text == text }) { return hit.blocks }
-        let blocks = blockTexts(text).map { Block(text: $0, kind: kind($0)) }
-        recent = [(text, blocks)] + recent.prefix(3)
+        var blocks: [Block]
+        if let base = recent.first(where: { !$0.blocks.isEmpty && text.hasPrefix($0.text) }) {
+            let tail = text.utf8.dropFirst(base.lastStart)
+            blocks = base.blocks.dropLast() + blockTexts(String(Substring(tail))).map { Block(text: $0, kind: kind($0)) }
+        } else {
+            blocks = blockTexts(text).map { Block(text: $0, kind: kind($0)) }
+        }
+        // Where the last block starts: it ends the text, but for blank lines.
+        let lastStart = blocks.last.flatMap { last in text.range(of: last.text, options: .backwards) }
+            .map { text.utf8.distance(from: text.startIndex, to: $0.lowerBound) } ?? 0
+        recent = [(text, blocks, lastStart)] + recent.prefix(3)
         return blocks
     }
 
-    @MainActor private static var recent: [(text: String, blocks: [Block])] = []
+    @MainActor private static var recent: [(text: String, blocks: [Block], lastStart: Int)] = []
 
     static func blockTexts(_ text: String) -> [String] {
         var blocks: [String] = []
@@ -334,15 +344,15 @@ private struct Fade: TextRenderer, Equatable {
     /// How long a word takes to fade in, and how far apart the words of one batch start.
     static let duration = 0.5
     static let stagger = 0.03
+    /// How far in a word is when it first shows.
+    static let floor = 0.15
     /// How often streamed text arrives: the words of one batch spread over it.
     static let batch = 0.08
-    /// At most 60 frames a second: the fade looks the same, at half the redraws of a 120 Hz display.
-    static let frame = 1.0 / 60
 
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
-        let slices = layout.flatMap { line in line.flatMap { run in run } }
-        guard let track, !track.ambiguous, let first = slices.first?.characterIndices.first,
-              let last = slices.last?.characterIndices.last, first.distance(to: last) + 1 == track.length,
+        // The text's ends from its first and last glyphs: collecting every glyph of the block cost more than drawing.
+        guard let track, !track.ambiguous, let first = layout.first?.first?.first?.characterIndices.first,
+              let last = layout.last?.last?.last?.characterIndices.last, first.distance(to: last) + 1 == track.length,
               let fading = track.words.firstIndex(where: { $0.at + Self.duration > now }) else {
             for line in layout { context.draw(line) }
             return
@@ -361,8 +371,8 @@ private struct Fade: TextRenderer, Equatable {
                 while word < track.words.count, track.words[word].end <= index { word += 1 }
                 // Past the last word noted (whitespace after it): nothing to draw.
                 guard word < track.words.count else { continue }
-                let shown = min(max((now - track.words[word].at) / Self.duration, 0), 1)
-                guard shown > 0 else { continue }
+                // A word staggered to start after this update shows faintly now rather than only at the next one.
+                let shown = min(max((now - track.words[word].at) / Self.duration, Self.floor), 1)
                 var glyph = context
                 glyph.opacity = 1 - (1 - shown) * (1 - shown)
                 glyph.draw(slice)
