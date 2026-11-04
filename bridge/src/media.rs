@@ -93,6 +93,43 @@ pub async fn media_handler(
     }
 }
 
+/// `POST /upload?name=shot.png` with the file as the body, authorized like the WebSocket: a file dropped on the
+/// composer, saved on this machine so the message can point the agent at it. Answers `{"path": ...}`.
+pub async fn upload_handler(
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+    State(app): State<Arc<App>>,
+    body: axum::body::Bytes,
+) -> Response {
+    if !authorized(&app, &query, &headers) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let name = upload_name(query.get("name").map(String::as_str).unwrap_or(""));
+    // A folder per upload, so two files dropped with the same name don't overwrite each other. The temp dir is
+    // purged by the system, which is all the cleanup throwaway attachments need.
+    let dir = std::env::temp_dir()
+        .join("shed-uploads")
+        .join(uuid::Uuid::new_v4().to_string());
+    let path = dir.join(&name);
+    let written = async {
+        tokio::fs::create_dir_all(&dir).await?;
+        tokio::fs::write(&path, &body).await
+    };
+    match written.await {
+        Ok(()) => axum::Json(serde_json::json!({ "path": path.to_string_lossy() })).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// The uploaded file's name, kept to its last component so it can't escape its folder.
+fn upload_name(name: &str) -> String {
+    let name = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    match name {
+        "" | "." | ".." => "attachment".into(),
+        name => name.into(),
+    }
+}
+
 async fn serve(path: &str, kind: &'static str, range: Option<&str>) -> std::io::Result<Response> {
     let mut file = tokio::fs::File::open(path).await?;
     let metadata = file.metadata().await?;
@@ -180,6 +217,9 @@ mod tests {
         assert_eq!(content_type("/a/B.PNG"), "image/png");
         assert_eq!(content_type("/a/notes.md"), "text/markdown; charset=utf-8");
         assert_eq!(content_type("/a.b/Makefile"), "application/octet-stream");
+        assert_eq!(upload_name("../../etc/passwd"), "passwd");
+        assert_eq!(upload_name(".."), "attachment");
+        assert_eq!(upload_name("Screenshot 2026-11-04 at 10.12.03.png"), "Screenshot 2026-11-04 at 10.12.03.png");
     }
 
     #[tokio::test]

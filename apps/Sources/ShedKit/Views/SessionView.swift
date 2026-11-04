@@ -800,6 +800,8 @@ struct Composer: View {
     @State private var showModels = false
     /// Bumped on each send, to kick the button.
     @State private var sent = 0
+    @State private var attachments: [Attachment] = []
+    @State private var dropping = false
 
     private var text: Binding<String> {
         Binding(get: { store.drafts[session.id] ?? "" }, set: { store.setDraft($0, for: session.id) })
@@ -831,6 +833,12 @@ struct Composer: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
+            if !attachments.isEmpty {
+                AttachmentStrip(attachments: attachments) { gone in attachments.removeAll { $0.id == gone.id } }
+                    .padding(.horizontal, 4)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(placeholder, text: text, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -859,8 +867,8 @@ struct Composer: View {
                             .card(radius: 17, fill: Palette.raised)
                     }
                     .buttonStyle(PressStyle())
-                    .disabled(trimmed.isEmpty)
-                    .opacity(trimmed.isEmpty ? 0.5 : 1)
+                    .disabled(!canSend)
+                    .opacity(canSend ? 1 : 0.5)
                     .help("Queue: send after the agent finishes")
                     .transition(.scale.combined(with: .opacity))
 
@@ -870,12 +878,12 @@ struct Composer: View {
                             .foregroundStyle(Palette.amber)
                             .padding(.horizontal, 14).frame(height: 34)
                             .background(Palette.amber.opacity(0.12), in: Capsule())
-                            .overlay(Capsule().strokeBorder(Palette.amber.opacity(trimmed.isEmpty ? 0.3 : 0.75)))
-                            .glow(radius: 8, on: !trimmed.isEmpty)
+                            .overlay(Capsule().strokeBorder(Palette.amber.opacity(canSend ? 0.75 : 0.3)))
+                            .glow(radius: 8, on: canSend)
                     }
                     .buttonStyle(PressStyle())
-                    .disabled(trimmed.isEmpty)
-                    .opacity(trimmed.isEmpty ? 0.6 : 1)
+                    .disabled(!canSend)
+                    .opacity(canSend ? 1 : 0.6)
                     .help("Steer: deliver now, while the agent works")
                     .transition(.scale.combined(with: .opacity))
 
@@ -891,7 +899,7 @@ struct Composer: View {
                     .help("Stop the current run (⌘.)")
                     .transition(.scale.combined(with: .opacity))
                 } else {
-                    SendButton(enabled: !trimmed.isEmpty, kick: sent, action: send)
+                    SendButton(enabled: canSend, kick: sent, action: send)
                         .transition(.scale.combined(with: .opacity))
                 }
             }
@@ -901,7 +909,8 @@ struct Composer: View {
             .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Palette.surface.opacity(0.95)))
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(focused || busy ? Palette.ice.opacity(0.45) : Palette.border, lineWidth: 1)
+                    .strokeBorder(dropping ? Palette.amber.opacity(0.8) : focused || busy ? Palette.ice.opacity(0.45) : Palette.border,
+                                  lineWidth: dropping ? 1.5 : 1)
             )
             .shadow(color: focused ? Palette.ice.opacity(0.12) : .black.opacity(0.3), radius: focused ? 16 : 14, y: focused ? 0 : 6)
             .contentShape(Rectangle())
@@ -967,6 +976,21 @@ struct Composer: View {
         // On iPhone the keyboard would cover the transcript, so it waits for a tap.
         .onAppear { focused = true }
         #endif
+        // Anywhere on the composer: files from Finder, the screenshot thumbnail, images dragged out of other apps.
+        .onDrop(of: attachableTypes, isTargeted: $dropping) { providers in
+            attach { await droppedFiles(providers) }
+            return true
+        }
+        #if os(macOS)
+        // Dropped or pasted on the text itself, which the field's editor would otherwise paste as paths.
+        .background(FileDropFieldEditorInstaller())
+        .onReceive(NotificationCenter.default.publisher(for: .filesOnText)) { note in
+            guard focused, let files = note.userInfo?["files"] as? PasteboardFiles else { return }
+            attach { await files.load() }
+        }
+        #endif
+        .onChange(of: session.id) { attachments = [] }
+        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: attachments.count)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: busy)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.queue.forReader.steering.count + session.queue.forReader.followUp.count)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.goal?.objective)
@@ -982,6 +1006,32 @@ struct Composer: View {
 
     private var trimmed: String { text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    /// Something to send, and no file still on its way to the session's computer.
+    private var canSend: Bool {
+        (!trimmed.isEmpty || attachments.contains { $0.path != nil }) && !attachments.contains(where: \.uploading)
+    }
+
+    /// The text with the uploaded files' embeds after it.
+    private var message: String {
+        ([trimmed].filter { !$0.isEmpty } + attachments.compactMap(\.embed)).joined(separator: "\n\n")
+    }
+
+    private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
+        let media = store.media(for: session.id)
+        Task {
+            for file in await files() {
+                let attachment = Attachment(name: file.name)
+                attachments.append(attachment)
+                do {
+                    let path = try await media.upload(file.data, name: file.name)
+                    if let i = attachments.firstIndex(where: { $0.id == attachment.id }) { attachments[i].path = path }
+                } catch {
+                    if let i = attachments.firstIndex(where: { $0.id == attachment.id }) { attachments[i].error = error.localizedDescription }
+                }
+            }
+        }
+    }
+
     private var placeholder: String {
         if session.question != nil { return "Or type your answer…" }
         #if os(macOS)
@@ -991,9 +1041,10 @@ struct Composer: View {
     }
 
     private func send() {
-        guard !trimmed.isEmpty else { return }
-        store.send(trimmed)
+        guard canSend else { return }
+        store.send(message)
         text.wrappedValue = ""
+        attachments = []
         sent += 1
         #if os(iOS)
         // Sent: back to reading. The Mac keeps the focus for the next message.
@@ -1002,9 +1053,10 @@ struct Composer: View {
     }
 
     private func queueFollowUp() {
-        guard !trimmed.isEmpty else { return }
-        store.followUp(trimmed)
+        guard canSend else { return }
+        store.followUp(message)
         text.wrappedValue = ""
+        attachments = []
     }
 }
 

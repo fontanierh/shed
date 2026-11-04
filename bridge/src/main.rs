@@ -17,7 +17,8 @@ mod store;
 mod transcript;
 
 use anyhow::{bail, Result};
-use axum::routing::get;
+use axum::extract::DefaultBodyLimit;
+use axum::routing::{get, post};
 use axum::Router;
 
 fn usage() -> ! {
@@ -51,6 +52,10 @@ async fn main() -> Result<()> {
     let router = Router::new()
         .route("/ws", get(server::ws_handler))
         .route("/media", get(media::media_handler))
+        .route(
+            "/upload",
+            post(media::upload_handler).layer(DefaultBodyLimit::max(512 << 20)),
+        )
         .route("/health", get(|| async { "ok" }))
         .with_state(app.clone());
 

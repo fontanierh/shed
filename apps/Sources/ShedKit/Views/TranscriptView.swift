@@ -754,20 +754,27 @@ struct UserMessage: View {
     let item: Item
 
     var body: some View {
+        let (text, files) = MessageAttachments.split(item.text)
         VStack(alignment: .trailing, spacing: 4) {
-            Text(item.text)
-                .font(.system(size: 15.5))
-                .foregroundStyle(Palette.moon)
-                .lineSpacing(4)
-                .padding(.horizontal, 16).padding(.vertical, 11)
-                .background {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(LinearGradient(colors: [Palette.userBubble.opacity(0.95), Palette.userBubble.opacity(0.7)], startPoint: .top, endPoint: .bottom))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [Palette.userBubbleBorder, Palette.userBubbleBorder.opacity(0.4)], startPoint: .top, endPoint: .bottom))
-                }
+            ForEach(files, id: \.self) { path in
+                MediaView(url: URL(fileURLWithPath: path))
+                    .frame(maxWidth: 360, alignment: .trailing)
+            }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.system(size: 15.5))
+                    .foregroundStyle(Palette.moon)
+                    .lineSpacing(4)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(LinearGradient(colors: [Palette.userBubble.opacity(0.95), Palette.userBubble.opacity(0.7)], startPoint: .top, endPoint: .bottom))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [Palette.userBubbleBorder, Palette.userBubbleBorder.opacity(0.4)], startPoint: .top, endPoint: .bottom))
+                    }
+            }
 
             if item.status == .pending {
                 // Sent, not yet back from the agent.
