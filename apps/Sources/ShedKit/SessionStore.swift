@@ -91,9 +91,9 @@ public final class SessionStore {
     @ObservationIgnored private var itemIndex: [String: Int] = [:]
     /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
     @ObservationIgnored private var patched: [Int: Item] = [:]
-    /// Where a reply already on screen grows while it streams; `items` catches up when anything else happens.
+    /// Where a reply already on screen grows while it streams; `items` catches up on transcript or state changes.
     public let live = LiveText()
-    @ObservationIgnored private var flushing = false
+    @ObservationIgnored private var flushing: Task<Void, Never>?
     @ObservationIgnored private var started = false
 
     public init() {
@@ -334,6 +334,8 @@ public final class SessionStore {
         if let old = selectedId, let (env, raw) = Self.split(old), let client = clients[env] {
             Task { try? await client.call("detach", ["sessionId": raw]) }
         }
+        flushing?.cancel()
+        flushing = nil
         selectedId = id
         loadedId = nil
         patched = [:]
@@ -361,17 +363,19 @@ public final class SessionStore {
 
     // MARK: Incoming messages
 
-    private func apply(_ message: ServerMessage, from env: String) {
-        if case .itemPatch = message {} else { flush() }
+    func apply(_ message: ServerMessage, from env: String) {
         switch message {
         case .sessions(let list):
             var all = sessions.filter { Self.split($0.key)?.env != env }
             for summary in list.map({ tagged($0, env) }) { all[summary.id] = summary }
+            if let selectedId, sessions[selectedId]?.status != all[selectedId]?.status { flush() }
             sessions = all
             snapshots += 1
             if let selectedId, sessions[selectedId] == nil, Self.split(selectedId)?.env == env { select(nil) }
         case .session(let summary):
             let summary = tagged(summary, env)
+            // Summary traffic must not commit streamed text; only a state change can stop the reply reading `live`.
+            if summary.id == selectedId, sessions[summary.id]?.status != summary.status { flush() }
             sessions[summary.id] = summary
         case .sessionRemoved(let id):
             let id = Self.tag(env, id)
@@ -382,6 +386,8 @@ public final class SessionStore {
             guard sessionId == selectedId else { return }
             loadedId = sessionId
             self.earlier = earlier
+            flushing?.cancel()
+            flushing = nil
             patched = [:]
             live.texts = [:]
             items = snapshot
@@ -390,6 +396,7 @@ public final class SessionStore {
         case .itemAdd(let sessionId, let item):
             let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId, itemIndex[item.id] == nil else { return }
+            flush()
             // The agent's copy of a message on its way: it takes the sending one's place in the same update.
             if item.kind == .user { arrived(item.text, in: sessionId) }
             itemIndex[item.id] = items.count
@@ -403,10 +410,11 @@ public final class SessionStore {
             if let args = append?.args { item.args = (item.args ?? "") + args }
             patched[index] = item
             // A change of state (a tool finishing, a reply ending) shows at once; streamed text a few times a second.
-            if set != nil { flush() } else if !flushing {
-                flushing = true
-                Task { [weak self] in
-                    try? await Task.sleep(for: .milliseconds(80))
+            // Keep one deadline through the burst. Replacing it on each delta would starve a fast stream.
+            if set != nil { flush() } else if flushing == nil {
+                flushing = Task { [weak self] in
+                    do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
+                    guard !Task.isCancelled else { return }
                     self?.flush(streamed: true)
                 }
             }
@@ -414,9 +422,10 @@ public final class SessionStore {
     }
 
     /// Applies the changes held back. `streamed`: only text has arrived since the last time, so a reply already on
-    /// screen just grows, in `live`, and stays held back here until something else happens.
+    /// screen just grows, in `live`, and stays held back here until a transcript or state change.
     private func flush(streamed: Bool = false) {
-        flushing = false
+        flushing?.cancel()
+        flushing = nil
         guard !patched.isEmpty else { return }
         var changes = patched
         if streamed {
