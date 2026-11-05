@@ -9,7 +9,7 @@ final class SessionStreamingTests: XCTestCase {
                        model: nil, thinkingLevel: nil, thinkingLevels: [], context: nil,
                        cost: 0, queue: Queue(steering: [], followUp: []), autoCompaction: true,
                        contextLimit: nil, standardWindow: nil, backgroundJobs: 0, waitingOn: nil,
-                       stuck: nil, lastActiveAt: nil, goal: nil, question: nil, spend: nil)
+                       stuck: nil, lastActiveAt: nil, goal: nil, question: nil, spend: nil, sites: nil)
     }
 
     @MainActor func testSelectedSessionTransitionsAndItemsCommitText() {

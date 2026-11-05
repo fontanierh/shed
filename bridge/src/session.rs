@@ -45,7 +45,7 @@ pub struct App {
     pub sessions: RwLock<Vec<Arc<Session>>>,
     pub hub: broadcast::Sender<Arc<Envelope>>,
     prime: Arc<PrimeDaemon>,
-    store: Store,
+    pub(crate) store: Store,
     /// Registry saves run one at a time, each from the list as it is then, so an older save can't land last.
     saving: Mutex<()>,
     /// Context windows chosen per session (see `SessionSummary::context_limit`).
@@ -277,6 +277,7 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         goal: None,
         question: None,
         spend: None,
+        sites: Vec::new(),
     }
 }
 
@@ -335,6 +336,14 @@ impl SessionState {
     }
 }
 
+impl Session {
+    /// The pid of the agent process this session runs in, for finding the ports it listens on.
+    pub async fn pid(&self) -> Option<u32> {
+        let child = self.state.lock().await.child.clone();
+        child.as_ref().and_then(|child| child.pid())
+    }
+}
+
 impl App {
     pub fn new(store: Store) -> Result<Arc<App>> {
         let token = store.token()?;
@@ -374,6 +383,7 @@ impl App {
         tokio::spawn(app.clone().run_prime(prime_events));
         tokio::spawn(app.clone().watch_background_jobs());
         tokio::spawn(app.clone().watch_spend());
+        tokio::spawn(app.clone().watch_sites());
         Ok(app)
     }
 
@@ -394,6 +404,20 @@ impl App {
             out.push(s.state.lock().await.summary.clone());
         }
         out
+    }
+
+    /// Replaces each session's sites with the ones it serves now, and forgets the sites of every other session.
+    /// Wholesale rather than one at a time: a server that moves to another port must not leave the old one listed.
+    pub async fn set_sites(&self, found: std::collections::HashMap<String, Vec<crate::protocol::Site>>) {
+        for session in self.sessions.read().await.clone() {
+            let sites = found.get(&session.id).cloned().unwrap_or_default();
+            let mut st = session.state.lock().await;
+            if st.summary.sites == sites {
+                continue;
+            }
+            st.summary.sites = sites;
+            self.publish_summary(&st);
+        }
     }
 
     pub fn broadcast_global(&self, msg: &ServerMessage) {

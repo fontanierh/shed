@@ -286,6 +286,8 @@ pub struct SessionSummary {
     /// Set on top-level sessions while they work through Open Codex, and kept once they settle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend: Option<Spend>,
+    /// Web servers the session's processes are listening on. Always sent, empty or not.
+    pub sites: Vec<Site>,
 }
 
 /// What a session and its subagents spend, by Open Codex's request history.
@@ -340,6 +342,24 @@ pub struct BackgroundJob {
     /// Why it looks stuck, when it does (see `Stuck`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stuck: Option<String>,
+}
+
+/// A web server an agent started in one of its sessions, found by the port its processes listen on.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Site {
+    pub port: u16,
+    /// The page's `<title>`, when it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// What started it, as `ps` reports it.
+    pub command: String,
+    /// Where to open it: its tailnet address once published, else this Mac's.
+    pub url: String,
+    /// On the tailnet, over HTTPS, so another device can open it.
+    pub published: bool,
+    /// Bound to every interface rather than loopback: reachable from the LAN too, not only this Mac.
+    pub exposed: bool,
 }
 
 /// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission

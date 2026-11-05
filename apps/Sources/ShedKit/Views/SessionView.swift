@@ -8,6 +8,7 @@ struct SessionView: View {
     @State private var showingJobs = false
     @State private var restartingKernel = false
     @State private var showingSubagents = false
+    @State private var showingSites = false
     /// The running background commands, fetched when their count changes, so the transcript can name what it waits on.
 
     /// Where the session stands once idle, so a quiet session is never a mystery: the commands and subagents that
@@ -139,10 +140,18 @@ struct SessionView: View {
         #else
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
-                                                  restartKernel: { restartingKernel = true }) }
+                                                  showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
         .modifier(SoftTopEdge())
         .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
+        .sheet(isPresented: $showingSites) {
+            NavigationStack {
+                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+                           title: "Sites", empty: "Servers this session starts appear here.")
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         #endif
         .renameSession($renaming, store: store)
     }
@@ -188,6 +197,7 @@ struct PhoneSessionToolbar: ToolbarContent {
     let session: SessionSummary
     let rename: () -> Void
     let showJobs: () -> Void
+    let showSites: () -> Void
     let restartKernel: () -> Void
 
     var body: some ToolbarContent {
@@ -210,6 +220,10 @@ struct PhoneSessionToolbar: ToolbarContent {
                 ToolbarItem(placement: .topBarTrailing) { jobs }
                     .sharedBackgroundVisibility(.hidden)
             }
+            if session.hasSites {
+                ToolbarItem(placement: .topBarTrailing) { sites }
+                    .sharedBackgroundVisibility(.hidden)
+            }
             ToolbarItem(placement: .topBarTrailing) { stop }
                 .sharedBackgroundVisibility(.hidden)
             ToolbarItem(placement: .topBarTrailing) { menu }
@@ -220,6 +234,9 @@ struct PhoneSessionToolbar: ToolbarContent {
             }
             if session.backgroundJobs > 0 {
                 ToolbarItem(placement: .topBarTrailing) { jobs }
+            }
+            if session.hasSites {
+                ToolbarItem(placement: .topBarTrailing) { sites }
             }
             ToolbarItem(placement: .topBarTrailing) { stop }
             ToolbarItem(placement: .topBarTrailing) { menu }
@@ -260,6 +277,24 @@ struct PhoneSessionToolbar: ToolbarContent {
         .accessibilityLabel(session.backgroundJobs == 1 ? "1 background command running" : "\(session.backgroundJobs) background commands running")
     }
 
+    /// The session's sites: a globe and how many. Opens their list.
+    private var sites: some View {
+        Button(action: showSites) {
+            HStack(spacing: 5) {
+                Image(systemName: "globe").font(.system(size: 13, weight: .medium))
+                Text("\(session.servedSites.count)").font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .contentTransition(.numericText())
+            }
+            .foregroundStyle(Palette.ice)
+            .padding(.horizontal, 4)
+            .frame(height: 32)
+            .contentShape(Rectangle())
+            .animation(.easeOut(duration: 0.25), value: session.servedSites.count)
+        }
+        .buttonStyle(PressStyle())
+        .accessibilityLabel(session.servedSites.count == 1 ? "1 site running" : "\(session.servedSites.count) sites running")
+    }
+
     private var summary: String {
         let cost = session.cost.formatted(.currency(code: "USD").precision(.fractionLength(2)))
         return "\(session.agent.displayName) · \(cost) · \(session.folderName)"
@@ -288,6 +323,9 @@ struct PhoneSessionToolbar: ToolbarContent {
                 }
                 if session.hasBackgroundCommands {
                     Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
+                }
+                if session.hasSites {
+                    Button("Sites", systemImage: "globe", action: showSites)
                 }
                 Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(session.cwd) }
                 Button("Stop Session", systemImage: "stop.circle", role: .destructive) { store.close() }
@@ -521,6 +559,7 @@ struct SessionHeader: View {
             // The composer shows the context gauge; read-only sessions have none.
             if session.readOnly || session.status == .stopped, let context = session.context { ContextGauge(context: context) }
             if session.hasBackgroundCommands { BackgroundCommandsButton(store: store, session: session) }
+            if session.hasSites { SitesButton(store: store, session: session) }
             Text(session.cost, format: .currency(code: "USD").precision(.fractionLength(2)))
                 .font(.system(size: 12.5).monospacedDigit())
                 .contentTransition(.numericText(value: session.cost))

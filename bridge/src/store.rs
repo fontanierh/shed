@@ -114,6 +114,29 @@ impl Store {
             .unwrap_or_default()
     }
 
+    /// The sites the bridge published, so it can take their routes down when they end and never touch the rest.
+    pub fn load_published_sites(&self) -> std::collections::BTreeMap<u16, crate::sites::Published> {
+        std::fs::read_to_string(self.dir.join("sites.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_published_sites(
+        &self,
+        sites: &std::collections::BTreeMap<u16, crate::sites::Published>,
+    ) -> Result<()> {
+        write_private(
+            &self.dir.join("sites.json"),
+            &serde_json::to_vec_pretty(sites)?,
+        )
+    }
+
+    /// The bridge's state folder, for reading `config.json` as it is now.
+    pub fn dir(&self) -> &PathBuf {
+        &self.dir
+    }
+
     pub fn save_limits(&self, limits: &HashMap<String, u64>) -> Result<()> {
         write_private(
             &self.dir.join("limits.json"),

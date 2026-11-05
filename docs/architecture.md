@@ -55,6 +55,10 @@ Every subagent is a session in the tree, with `kind:"subagent"`, a `parentId` an
 
 Both agents can leave shell commands running after their turn ends. A `[bash-done]` notice wakes the agent when a command finishes. Prime does this natively (REPL `bash()`). Pi gets the same from the `background-jobs` extension in `setup/pi`, which also loads in Pi's own TUI (`/jobs`, "shells: N"). The bridge's `list_jobs`, `job_output` and `kill_job` ops serve both. The app shows a terminal button in the session header with the running count. It opens the list with live output and "Cancel command". A cancelled command exits `-15`, and the agent hears about it as it would from its own TUI.
 
+## Sites
+
+A session's web servers are found from the outside: the bridge reads the listening sockets of the processes in each session's tree (`lsof -nP -iTCP -sTCP:LISTEN`), so any server counts, whatever the agent started it with. Each site is a `Site` on its `SessionSummary` (`port`, `title`, `command`, `url`, `published`, `exposed`), published on its own `tailscale serve` HTTPS port when `sites.publish` is set, and taken down when its process ends. The bridge only removes routes it recorded in `sites.json`: the serve configuration is shared with whatever else the machine publishes.
+
 ## Setup
 
 `setup/install.sh` provisions a Mac and can be run again at any time: Pi and Prime Agent at their latest versions, API keys from the environment, model definitions Prime's catalog lacks (`setup/prime/models.json`), Pi's subagent and background-jobs extensions (`setup/pi`), the bridge as a launchd service, the Mac app, and the `tailscale serve` publication. `setup/sync-remote.sh` keeps the bridge on another Mac in step with a checkout, and `setup/uninstall.sh` removes the service, the publication and the app.

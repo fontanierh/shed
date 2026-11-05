@@ -35,7 +35,13 @@ also point at a file mid-sentence. Embed a file instead of pasting its contents 
 that matters in the reply. https URLs work as well. Paths with spaces go in angle brackets: \
 ![Report](</absolute/path/with spaces/report.md>). Save anything you generate or download to a file first (in the \
 working directory, or /tmp for throwaway files); never paste base64 into a reply. Images: png, jpg, gif, webp, heic, \
-tiff. Video: mp4, mov, m4v. Audio: mp3, m4a, aac, wav, aiff, flac.";
+tiff. Video: mp4, mov, m4v. Audio: mp3, m4a, aac, wav, aiff, flac.
+
+## Sites
+
+A web server you start in a session is found by the port it listens on, and offered to the user as a site: it shows \
+in the session's header and in the app's list of every site. Name it in your reply (\"the preview is up\"); don't \
+quote a port number, and don't run `tailscale serve` yourself.";
 
 /// The content type for a file the apps fetch, by extension: media the players need typed, the rest as bytes the apps
 /// view or download.
