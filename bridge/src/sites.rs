@@ -296,7 +296,11 @@ impl crate::session::App {
             let (host, mut served) = state.unwrap_or_default();
             if known {
                 // A route taken down from outside the bridge (`tailscale serve reset`) is published again.
+                let before = published.len();
                 published.retain(|port, _| served.contains_key(port));
+                if published.len() != before {
+                    let _ = self.store.save_published_sites(&published);
+                }
             }
 
             if known {

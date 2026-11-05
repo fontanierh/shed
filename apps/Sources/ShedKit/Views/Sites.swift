@@ -208,21 +208,21 @@ private struct SiteRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                Button {
-                    SiteOpener.copy(site.url)
-                    copied = true
-                    Task { try? await Task.sleep(for: .seconds(1.2)); copied = false }
-                } label: {
-                    Image(systemName: copied ? "checkmark" : "link")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 26, height: 26)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(PressStyle())
-                .help("Copy the address")
-                // Unpublished, the address is the Mac's own loopback: on the phone it would open the phone's.
-                if site.published || !Self.isPhone {
+            // Unpublished, the address is the Mac's own loopback: on the phone it would open, or copy, the phone's.
+            if site.published || !Self.isPhone {
+                HStack(spacing: 6) {
+                    Button {
+                        SiteOpener.copy(site.url)
+                        copied = true
+                        Task { try? await Task.sleep(for: .seconds(1.2)); copied = false }
+                    } label: {
+                        Image(systemName: copied ? "checkmark" : "link")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 26, height: 26)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressStyle())
+                    .help("Copy the address")
                     Button { SiteOpener.open(site.url) } label: {
                         Text("Open").font(.system(size: 12, weight: .medium))
                             .padding(.horizontal, 11).frame(height: 26)
@@ -231,8 +231,8 @@ private struct SiteRow: View {
                     .buttonStyle(PressStyle())
                     .help(site.url)
                 }
+                .padding(.top, 1)
             }
-            .padding(.top, 1)
         }
         .padding(.horizontal, 10).padding(.vertical, 7)
         .card(radius: 9, fill: Palette.raised.opacity(0.5))
