@@ -103,9 +103,25 @@ fn split_address(name: &str) -> Option<(&str, u16)> {
     Some((bind, port.parse().ok()?))
 }
 
-/// A port bound to every interface, or to one that isn't loopback: reachable from the LAN too, not just this Mac.
+/// A port bound to every interface, or to a LAN address: reachable from the local network, not just this Mac and the
+/// tailnet. Loopback and Tailscale's own addresses (100.64.0.0/10, fd7a:115c:a1e0::/48) are not.
 fn exposed(bind: &str) -> bool {
-    !matches!(bind, "127.0.0.1" | "[::1]" | "localhost")
+    let addr = bind.trim_start_matches('[').trim_end_matches(']');
+    if addr == "localhost" {
+        return false;
+    }
+    match addr.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => {
+            let [a, b, ..] = ip.octets();
+            !(ip.is_loopback() || (a == 100 && (64..128).contains(&b)))
+        }
+        Ok(std::net::IpAddr::V6(ip)) => {
+            let s = ip.segments();
+            !(ip.is_loopback() || (s[0] == 0xfd7a && s[1] == 0x115c && s[2] == 0xa1e0))
+        }
+        // `*`: every interface.
+        Err(_) => true,
+    }
 }
 
 /// The `<title>` of the page a site serves, for the list. One short request, made once per site.
@@ -161,14 +177,24 @@ fn page_title(html: &str) -> Option<String> {
     Some(title.chars().take(80).collect())
 }
 
+/// The Tailscale CLI: on PATH, or inside the app as the App Store and the cask install it (as `setup/install.sh` finds it).
+fn tailscale() -> tokio::process::Command {
+    const APP: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+    let on_path = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join("tailscale").is_file())
+    });
+    let program = if !on_path && std::path::Path::new(APP).is_file() {
+        APP
+    } else {
+        "tailscale"
+    };
+    tokio::process::Command::new(program)
+}
+
 /// The tailnet name this bridge is published under, e.g. `jims-macbook-pro.tail362838.ts.net`, and the ports
 /// `tailscale serve` already answers on. `None` when Tailscale isn't installed or isn't running.
 async fn serve_state() -> Option<(String, HashMap<u16, String>)> {
-    let status = tokio::process::Command::new("tailscale")
-        .args(["status", "--json"])
-        .output()
-        .await
-        .ok()?;
+    let status = tailscale().args(["status", "--json"]).output().await.ok()?;
     if !status.status.success() {
         return None;
     }
@@ -177,18 +203,36 @@ async fn serve_state() -> Option<(String, HashMap<u16, String>)> {
         .as_str()?
         .trim_end_matches('.')
         .to_string();
-    let served = tokio::process::Command::new("tailscale")
+    let served = tailscale()
         .args(["serve", "status", "--json"])
         .output()
         .await
         .ok()?;
-    let served: Value = serde_json::from_slice(&served.stdout).unwrap_or(Value::Null);
+    if !served.status.success() {
+        return None;
+    }
+    // Nothing served prints `{}`, or nothing at all on some versions.
+    let served: Value = if served.stdout.iter().all(u8::is_ascii_whitespace) {
+        Value::Null
+    } else {
+        serde_json::from_slice(&served.stdout).ok()?
+    };
     Some((host, served_ports(&served)))
 }
 
-/// The ports `tailscale serve` has handlers on, each with what the `/` handler proxies to.
+/// The ports `tailscale serve` has handlers on, each with what the `/` handler proxies to. TCP forwards count too: a
+/// port is taken whatever answers on it.
 fn served_ports(served: &Value) -> HashMap<u16, String> {
     let mut out = HashMap::new();
+    for port in served["TCP"]
+        .as_object()
+        .into_iter()
+        .flat_map(|tcp| tcp.keys())
+    {
+        if let Ok(port) = port.parse::<u16>() {
+            out.insert(port, String::new());
+        }
+    }
     let Some(web) = served["Web"].as_object() else {
         return out;
     };
@@ -236,21 +280,26 @@ impl crate::session::App {
                 .map(|s| (s.listener.port, s.listener.command.clone()))
                 .filter(|key| !titles.contains_key(key))
                 .collect();
-            let fetched = futures_util::future::join_all(
-                missing.iter().map(|(port, _)| title(*port)),
-            )
-            .await;
+            let fetched =
+                futures_util::future::join_all(missing.iter().map(|(port, _)| title(*port))).await;
             titles.extend(missing.into_iter().zip(fetched));
             titles.retain(|(port, _), _| found.iter().any(|s| s.listener.port == *port));
 
-            // Nothing to publish, nothing to ask Tailscale about.
-            let (host, served) = if config.publish {
-                serve_state().await.unwrap_or_default()
+            // Nothing to publish, nothing to ask Tailscale about. Without its serve config, publishing waits: the bridge
+            // couldn't tell which ports the user serves by hand.
+            let state = if config.publish {
+                serve_state().await
             } else {
-                (String::new(), HashMap::new())
+                None
             };
+            let known = state.is_some();
+            let (host, mut served) = state.unwrap_or_default();
+            if known {
+                // A route taken down from outside the bridge (`tailscale serve reset`) is published again.
+                published.retain(|port, _| served.contains_key(port));
+            }
 
-            if config.publish {
+            if known {
                 for site in &found {
                     let port = site.listener.port;
                     if published.contains_key(&port) {
@@ -261,6 +310,7 @@ impl crate::session::App {
                         continue;
                     }
                     if publish(port).await {
+                        served.insert(port, format!("http://127.0.0.1:{port}"));
                         published.insert(
                             port,
                             Published {
@@ -280,31 +330,36 @@ impl crate::session::App {
                 .copied()
                 .filter(|port| !config.publish || !live.contains(port))
                 .collect();
+            // A route that wouldn't come down stays recorded, so the next tick tries again.
             for port in gone {
-                unpublish(port).await;
-                published.remove(&port);
-                let _ = self.store.save_published_sites(&published);
+                if unpublish(port).await {
+                    published.remove(&port);
+                    let _ = self.store.save_published_sites(&published);
+                }
             }
 
             let mut by_session: HashMap<String, Vec<Site>> = HashMap::new();
             for found in &found {
                 let port = found.listener.port;
                 let is_published = published.contains_key(&port) && served.contains_key(&port);
-                by_session.entry(found.session_id.clone()).or_default().push(Site {
-                    port,
-                    title: titles
-                        .get(&(port, found.listener.command.clone()))
-                        .cloned()
-                        .flatten(),
-                    command: found.listener.command.clone(),
-                    url: if is_published && !host.is_empty() {
-                        format!("https://{host}:{port}/")
-                    } else {
-                        format!("http://127.0.0.1:{port}/")
-                    },
-                    published: is_published,
-                    exposed: exposed(&found.listener.bind),
-                });
+                by_session
+                    .entry(found.session_id.clone())
+                    .or_default()
+                    .push(Site {
+                        port,
+                        title: titles
+                            .get(&(port, found.listener.command.clone()))
+                            .cloned()
+                            .flatten(),
+                        command: found.listener.command.clone(),
+                        url: if is_published && !host.is_empty() {
+                            format!("https://{host}:{port}/")
+                        } else {
+                            format!("http://127.0.0.1:{port}/")
+                        },
+                        published: is_published,
+                        exposed: exposed(&found.listener.bind),
+                    });
             }
             self.set_sites(by_session).await;
         }
@@ -366,7 +421,7 @@ fn sites_of(
 /// `tailscale serve --bg --https=<port> http://127.0.0.1:<port>`: the site on its own tailnet port, tailnet only.
 async fn publish(port: u16) -> bool {
     let target = format!("http://127.0.0.1:{port}");
-    tokio::process::Command::new("tailscale")
+    tailscale()
         .args(["serve", "--bg", &format!("--https={port}"), &target])
         .output()
         .await
@@ -375,7 +430,7 @@ async fn publish(port: u16) -> bool {
 }
 
 async fn unpublish(port: u16) -> bool {
-    tokio::process::Command::new("tailscale")
+    tailscale()
         .args(["serve", &format!("--https={port}"), "off"])
         .output()
         .await
@@ -407,16 +462,21 @@ mod tests {
     }
 
     #[test]
-    fn only_loopback_is_not_exposed() {
+    fn loopback_and_tailnet_binds_are_not_exposed() {
         assert!(!exposed("127.0.0.1"));
         assert!(!exposed("[::1]"));
+        assert!(!exposed("100.121.116.92"));
+        assert!(!exposed("[fd7a:115c:a1e0::1]"));
         assert!(exposed("*"));
         assert!(exposed("192.168.0.67"));
+        assert!(exposed("[::]"));
     }
 
     #[tokio::test]
     async fn a_sites_title_is_read_from_the_page_it_serves() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
@@ -486,7 +546,8 @@ mod tests {
     #[test]
     fn served_ports_come_from_the_serve_config() {
         let served: Value = serde_json::from_str(
-            r#"{"Web":{"host.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8890"}}},
+            r#"{"TCP":{"443":{"HTTPS":true},"5432":{"TCPForward":"127.0.0.1:5432"}},
+                "Web":{"host.ts.net:443":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:8890"}}},
                         "host.ts.net:7878":{"Handlers":{"/":{"Proxy":"http://127.0.0.1:7878"}}}}}"#,
         )
         .unwrap();
@@ -499,5 +560,6 @@ mod tests {
             ports.get(&7878).map(String::as_str),
             Some("http://127.0.0.1:7878")
         );
+        assert!(ports.contains_key(&5432));
     }
 }

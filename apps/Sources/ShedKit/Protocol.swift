@@ -160,8 +160,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let question: AgentQuestion?
     /// What the current run costs, from Open Codex's request history, while the session works.
     public let spend: RunSpend?
-    /// Web servers the session's processes are listening on.
-    public let sites: [Site]
+    /// Web servers the session's processes are listening on. Missing from a bridge older than sites.
+    public let sites: [Site]?
 
     public var isSubagent: Bool { kind == .subagent }
     /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
@@ -178,7 +178,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// Working, or idle with background jobs that will wake it: not finished either way.
     public var isActive: Bool { status.isBusy || backgroundJobs > 0 }
     /// Whether the session serves a site the app can open from another device.
-    public var hasSites: Bool { !sites.isEmpty }
+    public var hasSites: Bool { !servedSites.isEmpty }
+    public var servedSites: [Site] { sites ?? [] }
     public var folderName: String { (cwd as NSString).lastPathComponent }
 }
 

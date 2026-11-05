@@ -328,7 +328,7 @@ public final class SessionStore {
     /// Every site any session serves, newest session first, so the app can list them all in one place.
     public var allSites: [SiteEntry] {
         sessions.values
-            .flatMap { session in session.sites.map { SiteEntry(site: $0, session: session) } }
+            .flatMap { session in session.servedSites.map { SiteEntry(site: $0, session: session) } }
             .sorted { a, b in
                 if a.session.createdAt != b.session.createdAt { return a.session.createdAt > b.session.createdAt }
                 return a.site.port < b.site.port
@@ -337,7 +337,7 @@ public final class SessionStore {
 
     /// The sites one session serves.
     public func sites(of sessionId: String) -> [Site] {
-        sessions[sessionId]?.sites ?? []
+        sessions[sessionId]?.servedSites ?? []
     }
 
     /// Subagents below this session (any depth) still at work. Prime parents keep going while these run.

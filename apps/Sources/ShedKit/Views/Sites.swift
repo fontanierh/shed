@@ -54,7 +54,7 @@ struct SitesButton: View {
     @State private var open = false
 
     var body: some View {
-        let count = session.sites.count
+        let count = session.servedSites.count
         Button { open.toggle() } label: {
             HStack(spacing: 6) {
                 Image(systemName: "globe")
@@ -71,7 +71,7 @@ struct SitesButton: View {
         .buttonStyle(PressStyle())
         .help(count == 0 ? "Sites" : count == 1 ? "1 site running" : "\(count) sites running")
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            SitesPanel(entries: session.sites.map { SiteEntry(site: $0, session: session) },
+            SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
                        title: session.isSubagent ? (session.name ?? "Subagent") : session.title,
                        empty: "Servers this session starts appear here.")
                 .frame(width: 420)
@@ -171,6 +171,11 @@ struct SitesPanel: View {
 private struct SiteRow: View {
     let entry: SiteEntry
     @State private var copied = false
+    #if os(iOS)
+    private static let isPhone = true
+    #else
+    private static let isPhone = false
+    #endif
 
     var body: some View {
         let site = entry.site
@@ -216,13 +221,16 @@ private struct SiteRow: View {
                 }
                 .buttonStyle(PressStyle())
                 .help("Copy the address")
-                Button { SiteOpener.open(site.url) } label: {
-                    Text("Open").font(.system(size: 12, weight: .medium))
-                        .padding(.horizontal, 11).frame(height: 26)
-                        .card(radius: 13, fill: Palette.ice.opacity(0.12), border: Palette.ice.opacity(0.4))
+                // Unpublished, the address is the Mac's own loopback: on the phone it would open the phone's.
+                if site.published || !Self.isPhone {
+                    Button { SiteOpener.open(site.url) } label: {
+                        Text("Open").font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 11).frame(height: 26)
+                            .card(radius: 13, fill: Palette.ice.opacity(0.12), border: Palette.ice.opacity(0.4))
+                    }
+                    .buttonStyle(PressStyle())
+                    .help(site.url)
                 }
-                .buttonStyle(PressStyle())
-                .help(site.url)
             }
             .padding(.top, 1)
         }

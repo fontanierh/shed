@@ -146,7 +146,7 @@ struct SessionView: View {
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         .sheet(isPresented: $showingSites) {
             NavigationStack {
-                SitesPanel(entries: session.sites.map { SiteEntry(site: $0, session: session) },
+                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
                            title: "Sites", empty: "Servers this session starts appear here.")
             }
             .presentationDetents([.medium, .large])
@@ -282,17 +282,17 @@ struct PhoneSessionToolbar: ToolbarContent {
         Button(action: showSites) {
             HStack(spacing: 5) {
                 Image(systemName: "globe").font(.system(size: 13, weight: .medium))
-                Text("\(session.sites.count)").font(.system(size: 13, weight: .semibold).monospacedDigit())
+                Text("\(session.servedSites.count)").font(.system(size: 13, weight: .semibold).monospacedDigit())
                     .contentTransition(.numericText())
             }
             .foregroundStyle(Palette.ice)
             .padding(.horizontal, 4)
             .frame(height: 32)
             .contentShape(Rectangle())
-            .animation(.easeOut(duration: 0.25), value: session.sites.count)
+            .animation(.easeOut(duration: 0.25), value: session.servedSites.count)
         }
         .buttonStyle(PressStyle())
-        .accessibilityLabel(session.sites.count == 1 ? "1 site running" : "\(session.sites.count) sites running")
+        .accessibilityLabel(session.servedSites.count == 1 ? "1 site running" : "\(session.servedSites.count) sites running")
     }
 
     private var summary: String {

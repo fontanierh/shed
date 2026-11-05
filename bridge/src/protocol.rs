@@ -286,8 +286,7 @@ pub struct SessionSummary {
     /// Set on top-level sessions while they work through Open Codex, and kept once they settle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spend: Option<Spend>,
-    /// Web servers the session's processes are listening on.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// Web servers the session's processes are listening on. Always sent, empty or not.
     pub sites: Vec<Site>,
 }
 
