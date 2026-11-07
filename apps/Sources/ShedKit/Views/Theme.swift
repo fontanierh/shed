@@ -7,37 +7,53 @@ import AppKit
 #else
 import UIKit
 #endif
-/// Moonlight on blue-black velvet; amber for whatever is alive right now. Shed is dark only.
+/// Near-black ground under a dithered beam of light; frosted glass for everything that sits on it. Electric blue for
+/// what is alive or primary, orange for what needs you. Shed is dark only.
 enum Palette {
-    /// Behind the transcript.
-    static let canvas = hex(0x0A0F17)
-    /// Behind the session list, a touch lighter than the transcript.
-    static let sidebar = hex(0x0D131D)
-    /// Cards: tool calls, reports, the composer.
-    static let surface = hex(0x131B27)
-    /// A card that sits above another: menus, the selected row.
-    static let raised = hex(0x18222F)
+    /// Behind the transcript: near-black, a touch blue.
+    static let canvas = hex(0x06080C)
+    /// Behind the session list: solid, so the list reads calmly beside the beam.
+    static let sidebar = hex(0x0A0C11)
+    /// Glass: cards, tool calls, the composer. Translucent, so the beam glows faintly through.
+    static let surface = hex(0x121822, alpha: 0.78)
+    /// Glass above glass: menus, the selected row, pressed things.
+    static let raised = hex(0x1B2330, alpha: 0.88)
     /// Code and tool output, set into a surface.
-    static let sunken = hex(0x080C13)
-    static let border = hex(0x1F2A3A)
-    static let rail = hex(0x2A3B55)
-    static let inlineCode = hex(0x1A2433)
-    /// Ice-blue glass.
-    static let userBubble = hex(0x15284A)
-    static let userBubbleBorder = hex(0x2A4A7A)
-    static let lineNumber = hex(0x44536B)
+    static let sunken = hex(0x040609, alpha: 0.92)
+    /// Hairlines: lit a little brighter at the top where they edge glass.
+    static let border = hex(0x252E3C)
+    static let rail = hex(0x2B3442)
+    static let inlineCode = hex(0x171E2A)
+    /// Blue-tinted glass.
+    static let userBubble = hex(0x143364, alpha: 0.86)
+    static let userBubbleBorder = hex(0x4486EC)
+    /// A hairline lit by the beam: the edge of glass rows and chips on the dark field.
+    static let lit = hex(0x2C4C7E)
+    /// The composer's glass, opaque.
+    static let composer = hex(0x111A27)
+    static let lineNumber = hex(0x4A5568)
 
-    /// Moonlight: the cool accent, links, Prime.
-    static let ice = hex(0x9CC2F5)
-    /// Near-white text with a blue cast.
-    static let moon = hex(0xE4ECF7)
-    static let periwinkle = hex(0x8A9EF0)
-    static let lilac = hex(0xB9A2F2)
-    static let rose = hex(0xF0A3C4)
-    /// Firefly amber: live and active things only.
-    static let amber = hex(0xF5B95C)
-    static let ember = hex(0xE8913A)
-    static let danger = hex(0xF07F7F)
+    /// Cool accent: links, Prime.
+    static let ice = hex(0x8CC4FF)
+    /// Text: near-white.
+    static let moon = hex(0xEEF1F6)
+    static let periwinkle = hex(0x8E9DFF)
+    static let lilac = hex(0xB59BFF)
+    static let rose = hex(0xFF9EC4)
+    /// Electric blue: what is alive right now, and the primary action.
+    static let accent = hex(0x4C9BFF)
+    static let accentDeep = hex(0x2C6BE0)
+    /// Orange: what waits on you (a question, a session that wants an answer).
+    static let attention = hex(0xFF8A3D)
+    static let success = hex(0x3DD68C)
+    static let danger = hex(0xFF6B5E)
+
+    /// The beam, from its cool edge through its core to its warm edge.
+    static let beamDeep = hex(0x1A3C9C)
+    static let beamCyan = hex(0x3EB4FF)
+    static let beamCore = hex(0xFFE2B8)
+    static let beamOrange = hex(0xFF8A2A)
+    static let beamRed = hex(0xD8361F)
 
     static let prime = ice
     static let pi = lilac
@@ -53,13 +69,14 @@ enum Palette {
 
     /// A stable spirit color per subagent name.
     static func avatar(_ name: String) -> Color {
-        let colors: [Color] = [ice, amber, lilac, periwinkle, rose, hex(0x7FD0F2)]
+        let colors: [Color] = [ice, attention, lilac, periwinkle, rose, hex(0x7FD0F2), success]
         let hash = name.unicodeScalars.reduce(5381) { ($0 &* 33) &+ Int($1.value) }
         return colors[abs(hash) % colors.count]
     }
 
-    private static func hex(_ value: UInt32) -> Color {
-        Color(.sRGB, red: Double(value >> 16 & 0xFF) / 255, green: Double(value >> 8 & 0xFF) / 255, blue: Double(value & 0xFF) / 255)
+    static func hex(_ value: UInt32, alpha: Double = 1) -> Color {
+        Color(.sRGB, red: Double(value >> 16 & 0xFF) / 255, green: Double(value >> 8 & 0xFF) / 255, blue: Double(value & 0xFF) / 255,
+              opacity: alpha)
     }
 }
 
@@ -315,5 +332,51 @@ enum Format {
     /// "~/src/project" for paths under the home folder.
     static func path(_ path: String, home: String = NSHomeDirectory()) -> String {
         path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+}
+
+/// A segmented control in glass: the chosen segment lit blue, its highlight gliding over on a spring.
+struct GlassSegments<Value: Hashable>: View {
+    let options: [(value: Value, label: String)]
+    @Binding var selection: Value
+    var height: CGFloat = 28
+    @Namespace private var glide
+    @State private var hovered: Value?
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.value) { option in
+                let on = option.value == selection
+                Button {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { selection = option.value }
+                } label: {
+                    Text(option.label)
+                        .font(.system(size: 12.5, weight: on ? .semibold : .medium))
+                        .foregroundStyle(on ? Palette.moon : Palette.moon.opacity(hovered == option.value ? 0.85 : 0.6))
+                        .lineLimit(1)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: height - 4)
+                        .background {
+                            if on {
+                                RoundedRectangle(cornerRadius: (height - 4) / 2.6, style: .continuous)
+                                    .fill(LinearGradient(colors: [Palette.accent.opacity(0.42), Palette.accentDeep.opacity(0.3)],
+                                                         startPoint: .top, endPoint: .bottom))
+                                    .overlay(RoundedRectangle(cornerRadius: (height - 4) / 2.6, style: .continuous)
+                                        .strokeBorder(Palette.accent.opacity(0.7), lineWidth: 1))
+                                    .shadow(color: Palette.accent.opacity(0.35), radius: 6)
+                                    .matchedGeometryEffect(id: "selection", in: glide)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .onHover { hovered = $0 ? option.value : (hovered == option.value ? nil : hovered) }
+                #endif
+                .accessibilityAddTraits(on ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .card(radius: height / 2.4, fill: Palette.sunken.opacity(0.85))
     }
 }

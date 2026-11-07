@@ -4,6 +4,8 @@ import SwiftUI
 public struct RootView: View {
     @Bindable var store: SessionStore
     @State private var showNewSession = false
+    /// What the home page's composer starts a session with.
+    @State private var newSession = NewSessionDraft()
     @State private var showSettings = false
     @State private var lightbox = Lightbox()
 
@@ -13,7 +15,7 @@ public struct RootView: View {
 
     public var body: some View {
         NavigationSplitView {
-            SessionSidebar(store: store, newSession: { showNewSession = true }, openSettings: { showSettings = true })
+            SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true }, openSettings: { showSettings = true })
                 .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 380)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -23,7 +25,10 @@ public struct RootView: View {
                 } else if case .disconnected = store.connection {
                     Unreachable(store: store, showSettings: $showSettings)
                 } else {
-                    Welcome(enabled: store.connection == .connected) { showNewSession = true }
+                    HomeView(store: store) { message, folder in
+                        newSession = NewSessionDraft(message: message, folder: folder)
+                        showNewSession = true
+                    }
                 }
             }
             .transition(.opacity)
@@ -36,7 +41,9 @@ public struct RootView: View {
         }
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
-        .sheet(isPresented: $showNewSession) { NewSessionSheet(store: store) }
+        .sheet(isPresented: $showNewSession) {
+            NewSessionSheet(store: store, initialMessage: newSession.message, initialFolder: newSession.folder)
+        }
         .sheet(isPresented: $showSettings) { EnvironmentSettings(store: store) }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
@@ -44,96 +51,43 @@ public struct RootView: View {
             Text(store.errorMessage ?? "")
         }
         .preferredColorScheme(.dark)
-        .tint(Palette.amber)
+        .tint(Palette.accent)
         .task { store.start() }
     }
 }
 
-/// No session selected: a spirit keeping its lantern lit.
-struct Welcome: View {
-    let enabled: Bool
-    let newSession: () -> Void
-
-    var body: some View {
-        VStack(spacing: 18) {
-            ZStack(alignment: .bottomTrailing) {
-                Spirit(color: Palette.ice, size: 84)
-                Lantern().offset(x: 46, y: 6)
-            }
-            .padding(.bottom, 6)
-            Text("Pick a session or start a new one")
-                .font(.system(size: 24, weight: .regular, design: .serif))
-                .foregroundStyle(Palette.moon)
-            Text("Your agents' conversations, reasoning and subagents live here.")
-                .font(.system(size: 14)).foregroundStyle(.secondary)
-            Button(action: newSession) {
-                HStack(spacing: 10) {
-                    Image(systemName: "plus").font(.system(size: 12, weight: .bold)).foregroundStyle(Palette.canvas)
-                        .frame(width: 24, height: 24).background(Palette.amber.gradient, in: Circle())
-                    Text("New session").font(.system(size: 14, weight: .medium)).foregroundStyle(Palette.moon)
-                    Text("⌘N").font(.system(size: 11)).foregroundStyle(.tertiary).padding(.leading, 6)
-                }
-                .padding(.leading, 10).padding(.trailing, 16).frame(height: 44)
-                .card(radius: 14, fill: Palette.raised, border: Palette.amber.opacity(0.55))
-                .glow(radius: 14)
-            }
-            .buttonStyle(PressStyle())
-            .disabled(!enabled)
-            .padding(.top, 8)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            ZStack { Velvet(); Fireflies(count: 9, warm: 0.45, seed: 3) }
-        }
-    }
+/// What New Session opens with: a first message and a folder, from the home page.
+struct NewSessionDraft {
+    var message = ""
+    var folder: String? = nil
 }
 
-/// A little paper lantern with a warm flicker.
-struct Lantern: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Capsule().fill(Palette.lineNumber).frame(width: 10, height: 3)
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(RadialGradient(colors: [Palette.moon, Palette.amber, Palette.ember], center: .center, startRadius: 1, endRadius: 16))
-                .frame(width: 20, height: 26)
-                .overlay(VStack(spacing: 5) { ForEach(0..<3, id: \.self) { _ in Rectangle().fill(Palette.ember.opacity(0.35)).frame(height: 0.8) } })
-            Capsule().fill(Palette.lineNumber).frame(width: 10, height: 3)
-        }
-        .shadow(color: Palette.amber.opacity(0.6), radius: 12)
-        .background {
-            PulseField(color: Palette.amber, period: 2.6, still: reduceMotion)
-                .frame(width: 70, height: 70)
-                .allowsHitTesting(false)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
-/// The bridge can't be reached: the spirit dozes until it can.
+/// The bridge can't be reached: a computer with a red dot, and the way back.
 struct Unreachable: View {
     let store: SessionStore
     @Binding var showSettings: Bool
 
     var body: some View {
         VStack(spacing: 16) {
-            Spirit(color: Palette.periwinkle, size: 76, asleep: true)
+            Image(systemName: store.environments.count == 1 && store.environments[0].isLocal ? "laptopcomputer" : "desktopcomputer")
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(Palette.moon.opacity(0.85))
+                .frame(width: 88, height: 88)
+                .card(radius: 26, fill: Palette.surface.opacity(0.7))
                 .overlay(alignment: .topTrailing) {
-                    Text("z z").font(.system(size: 16, weight: .semibold, design: .rounded)).foregroundStyle(Palette.periwinkle)
-                        .offset(x: 26, y: -18)
+                    LiveDot(state: .error, size: 10).offset(x: 4, y: -4)
                 }
-            Text(store.environments.isEmpty ? "No computers yet" : "Can\u{2019}t reach \(names)").font(.system(size: 24, design: .serif)).foregroundStyle(Palette.moon)
+            Text(store.environments.isEmpty ? "No computers yet" : "Can\u{2019}t reach \(names)").font(.system(size: 24, weight: .semibold)).foregroundStyle(Palette.moon)
             Text(store.environments.isEmpty ? "Add a computer running the bridge in Settings." : "Shed couldn\u{2019}t connect to \(store.environments.count == 1 ? "its bridge" : "their bridges").")
                 .font(.system(size: 14)).foregroundStyle(.secondary)
             HStack(spacing: 10) {
                 Button("Settings…") { showSettings = true }.buttonStyle(QuietButton())
-                Button { store.connect() } label: { Label("Retry", systemImage: "arrow.clockwise") }.buttonStyle(AmberButton())
+                Button { store.connect() } label: { Label("Retry", systemImage: "arrow.clockwise") }.buttonStyle(PrimaryButton())
             }
             .padding(.top, 6)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background { ZStack { Velvet(); Fireflies(count: 5, warm: 0.2, seed: 11) } }
+        .background { Backdrop(beam: 0.7, anchor: UnitPoint(x: 0.55, y: 0.18)) }
     }
 
     private var names: String {
@@ -141,17 +95,18 @@ struct Unreachable: View {
     }
 }
 
-/// The primary action: warm amber, lit from within.
-struct AmberButton: ButtonStyle {
+/// The primary action: electric blue, lit from within.
+struct PrimaryButton: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Palette.canvas)
+            .foregroundStyle(.white)
             .padding(.horizontal, 18).frame(height: 36)
-            .background(LinearGradient(colors: [Palette.moon.opacity(0.25), .clear], startPoint: .top, endPoint: .center), in: Capsule())
-            .background(Palette.amber, in: Capsule())
+            .background(LinearGradient(colors: [Color.white.opacity(0.28), .clear], startPoint: .top, endPoint: .center), in: Capsule())
+            .background(LinearGradient(colors: [Palette.accent, Palette.accentDeep], startPoint: .top, endPoint: .bottom), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.18)))
             .glow(radius: configuration.isPressed ? 4 : 10, on: enabled)
             .opacity(enabled ? 1 : 0.45)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
@@ -159,14 +114,14 @@ struct AmberButton: ButtonStyle {
     }
 }
 
-/// A secondary action: a quiet velvet capsule.
+/// A secondary action: a quiet glass capsule.
 struct QuietButton: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(Palette.moon)
             .padding(.horizontal, 16).frame(height: 36)
-            .card(radius: 18, fill: configuration.isPressed ? Palette.raised : Palette.surface)
+            .card(radius: 18, fill: configuration.isPressed ? Palette.raised : Palette.surface.opacity(0.85))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.6), value: configuration.isPressed)
     }
@@ -209,9 +164,9 @@ private struct Line: View {
                 case .connected:
                     EmptyView()
                 case .connecting:
-                    bar(Text("Connecting to \(env.name)\u{2026}"), color: Palette.amber)
+                    bar(Text("Connecting to \(env.name)\u{2026}"), dot: .attention)
                 case .disconnected(let reason):
-                    bar(Text("Can\u{2019}t reach \(env.name)") + Text(reason.map { ": \($0)" } ?? ""), color: Palette.danger)
+                    bar(Text("Can\u{2019}t reach \(env.name)") + Text(reason.map { ": \($0)" } ?? ""), dot: .error)
                 }
             }
         }
@@ -225,18 +180,23 @@ private struct Line: View {
         }
     }
 
-    private func bar(_ text: Text, color: Color) -> some View {
-        HStack {
-            Circle().fill(color).frame(width: 8, height: 8)
-            text.font(.callout).lineLimit(1)
+    private func bar(_ text: Text, dot: LiveDot.Kind) -> some View {
+        HStack(spacing: 8) {
+            LiveDot(state: dot)
+            text.font(.callout).foregroundStyle(Palette.moon).lineLimit(1)
             Spacer()
-            if let showSettings { Button("Settings\u{2026}") { showSettings.wrappedValue = true } }
-            Button("Retry") { store.connect(env.id) }
+            if let showSettings {
+                Button("Settings\u{2026}") { showSettings.wrappedValue = true }.buttonStyle(.plain).foregroundStyle(Palette.ice)
+            }
+            Button("Retry") { store.connect(env.id) }.buttonStyle(.plain).foregroundStyle(Palette.ice).fontWeight(.medium)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Palette.sidebar)
+        .font(.callout)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+        .background(Palette.sidebar.opacity(0.6))
         .overlay(alignment: .top) { Rectangle().fill(Palette.border).frame(height: 1) }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }
 
@@ -289,13 +249,13 @@ struct EnvironmentSettings: View {
 
     private func row(_ env: BridgeEnvironment) -> some View {
         let state = store.connection(of: env.id)
-        let (color, status): (Color, String) = switch state {
-        case .connected: (Palette.ice, "Connected")
-        case .connecting: (Palette.amber, "Connecting\u{2026}")
-        case .disconnected(let reason): (Palette.danger, reason ?? "Not connected")
+        let (dot, status): (LiveDot.Kind, String) = switch state {
+        case .connected: (.waiting, "Connected")
+        case .connecting: (.attention, "Connecting\u{2026}")
+        case .disconnected(let reason): (.error, reason ?? "Not connected")
         }
         return HStack(spacing: 10) {
-            Circle().fill(color).frame(width: 8, height: 8)
+            LiveDot(state: dot)
             VStack(alignment: .leading, spacing: 2) {
                 Text(env.name).foregroundStyle(Palette.moon)
                 Text(env.url).font(.mono(11.5)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)

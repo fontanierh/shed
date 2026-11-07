@@ -18,7 +18,7 @@ enum SiteOpener {
               let root = scene.keyWindow?.rootViewController
         else { return }
         let sheet = SFSafariViewController(url: url)
-        sheet.preferredControlTintColor = UIColor(Palette.amber)
+        sheet.preferredControlTintColor = UIColor(Palette.accent)
         root.topMost.present(sheet, animated: true)
     }
     #else
@@ -146,7 +146,7 @@ struct SitesPanel: View {
             if entries.isEmpty {
                 VStack(spacing: 8) {
                     Spacer()
-                    Text("No sites").font(.system(size: 16, design: .serif)).foregroundStyle(Palette.moon)
+                    Text("No sites").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
                     Text(empty).font(.caption).foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 300)
@@ -164,7 +164,7 @@ struct SitesPanel: View {
                 }
             }
         }
-        .background(Velvet(base: Palette.surface))
+        .background(Palette.surface)
     }
 }
 
@@ -198,7 +198,7 @@ private struct SiteRow: View {
                     if site.exposed {
                         Label("on your LAN too", systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 11))
-                            .foregroundStyle(Palette.amber)
+                            .foregroundStyle(Palette.accent)
                             .help("The server listens on every interface, so devices on your local network can reach it, not just your tailnet.")
                     }
                 }

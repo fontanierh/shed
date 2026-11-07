@@ -51,9 +51,9 @@ struct ScrollRail: View {
                     .frame(width: hovering || dragging ? 5 : 3, height: thumb)
                     .overlay {
                         Circle()
-                            .fill(Palette.amber)
+                            .fill(Palette.accent)
                             .frame(width: 4, height: 4)
-                            .shadow(color: Palette.amber.opacity(0.9), radius: 4)
+                            .shadow(color: Palette.accent.opacity(0.9), radius: 4)
                             .opacity(active ? 1 : 0)
                     }
                     .shadow(color: Palette.ice.opacity(active ? 0.55 : 0), radius: 6)

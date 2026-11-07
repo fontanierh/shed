@@ -180,9 +180,10 @@ struct Band: Equatable {
     var content: Int
     var container: CGFloat
 
-    /// What is drawn: two screens above the one shown and three below it. A block collapsing or growing by less than
-    /// that moves nothing drawn into empty space; by more, the content changes by a screen and this is drawn again.
-    var near: Range<CGFloat> { CGFloat(screen - 2) * container..<CGFloat(screen + 4) * container }
+    /// What is drawn: a screen above the one shown and two below it (the view spans up to two screens). Every drawn
+    /// block costs on each frame of a scroll (its layout, its display list, the accessibility and focus walks over
+    /// its text), so the band stays tight; a block collapsing or growing by more than a screen redraws it.
+    var near: Range<CGFloat> { CGFloat(screen - 1) * container..<CGFloat(screen + 3) * container }
 }
 
 /// Collapsing a block that starts above the top of the screen would leave the reader somewhere further down: this
@@ -283,8 +284,11 @@ struct TranscriptView: View, Equatable {
     /// to draw changes only when one of them does.
     @State private var band: Band?
 
-    /// Blocks laid out when a session opens, and added each time the reader nears the top.
+    /// Blocks laid out when a session opens.
     private static let window = 40
+    /// Blocks added each time the reader nears the top. Few at a time: each new block lays out in full before it can be
+    /// held as a space, and a big batch landing mid-scroll is a visible stutter.
+    private static let step = 12
 
     /// Blocks just added above the reader: where they were before, as the scroll view measures the new ones.
     private struct Reveal {
@@ -451,8 +455,9 @@ struct TranscriptView: View, Equatable {
                 revealing = reveal
                 return
             }
-            // Reading up toward the top: bring in the blocks before it, a couple of screens ahead.
-            if new.offset < old.offset, new.offset < new.container * 2, revealing == nil, !loadingEarlier { showEarlier() }
+            // Reading up toward the top: bring in the blocks before it, a few screens ahead, so the smaller batches
+            // land before the reader gets there.
+            if new.offset < old.offset, new.offset < new.container * 4, revealing == nil, !loadingEarlier { showEarlier() }
             // A scroll toward the end that landed short: when the content grows twice in a row, the second request can be
             // dropped while the first is still being applied.
             #if os(iOS)
@@ -516,9 +521,9 @@ struct TranscriptView: View, Equatable {
                 } label: {
                     Label(session.status.isBusy ? "New activity" : "Jump to latest", systemImage: "arrow.down")
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(session.status.isBusy ? Palette.amber : Palette.moon)
+                        .foregroundStyle(session.status.isBusy ? Palette.accent : Palette.moon)
                         .padding(.horizontal, 14).frame(height: 32)
-                        .card(radius: 16, fill: Palette.raised, border: session.status.isBusy ? Palette.amber.opacity(0.5) : Palette.border)
+                        .card(radius: 16, fill: Palette.raised, border: session.status.isBusy ? Palette.accent.opacity(0.5) : Palette.border)
                         .glow(radius: 10, on: session.status.isBusy)
                         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
                 }
@@ -556,7 +561,7 @@ struct TranscriptView: View, Equatable {
     private func reveal() {
         let all = Activity.blocks(items, busy: session.status.isBusy)
         let start = Self.start(of: all, from: shownFrom)
-        guard start > 0, let first = all[max(0, start - Self.window)].firstItemId else { return }
+        guard start > 0, let first = all[max(0, start - Self.step)].firstItemId else { return }
         revealing = Reveal(offset: metrics.offset, content: metrics.content)
         shownFrom = first
     }
@@ -605,10 +610,11 @@ struct EmptyTranscript: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Spirit(color: Palette.agent(session.agent), size: 64, working: session.status.isBusy)
+            AgentMark(agent: session.agent, size: 60, working: session.status.isBusy)
                 .padding(.bottom, 6)
             Text(session.isSubagent ? "Waiting for the subagent to start" : "What would you like to work on?")
-                .font(.system(size: 24, design: .serif))
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.4)
                 .foregroundStyle(Palette.moon)
             Text("\(session.agent.displayName) in \(Format.path(session.cwd))")
                 .font(.system(size: 13.5)).foregroundStyle(.secondary)
@@ -657,7 +663,7 @@ struct IdleLine: Identifiable, Equatable {
 struct WorkingIndicator: View {
     let text: String
     var systemImage: String? = nil
-    var tint: Color = Palette.amber
+    var tint: Color = Palette.accent
     var live = true
 
     var body: some View {
@@ -841,10 +847,10 @@ struct ActivityView: View {
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .frame(width: 14)
             if activity.live {
-                Spirit(color: Palette.amber, size: 18, working: true)
+                AgentMark(symbol: "sparkle", color: Palette.accent, size: 18, working: true)
             }
             Text(headline).font(.system(size: 13, weight: .medium))
-                .foregroundStyle(activity.live ? Palette.amber : Palette.moon)
+                .foregroundStyle(activity.live ? Palette.accent : Palette.moon)
                 .lineLimit(1)
                 .shimmer(activity.live)
                 .contentTransition(.opacity)
@@ -862,7 +868,7 @@ struct ActivityView: View {
         .padding(.horizontal, 12)
         .frame(height: 38)
         .card(radius: 12, fill: Palette.surface.opacity(isExpanded ? 0.95 : 0.7),
-              border: activity.live ? Palette.amber.opacity(0.4) : Palette.border.opacity(isExpanded ? 1 : 0.8))
+              border: activity.live ? Palette.accent.opacity(0.5) : Palette.lit.opacity(isExpanded ? 1 : 0.85))
         .glow(radius: 8, on: activity.live)
         .animation(.easeOut(duration: 0.3), value: activity.live)
     }
@@ -917,7 +923,7 @@ struct Timeline: View {
         .padding(.leading, 6)
         .background(alignment: .topLeading) {
             Rectangle()
-                .fill(LinearGradient(colors: [Palette.ice.opacity(0.55), Palette.rail, live ? Palette.amber.opacity(0.7) : Palette.rail.opacity(0.4)],
+                .fill(LinearGradient(colors: [Palette.ice.opacity(0.55), Palette.rail, live ? Palette.accent.opacity(0.7) : Palette.rail.opacity(0.4)],
                                      startPoint: .top, endPoint: .bottom))
                 .frame(width: 1.5)
                 .padding(.vertical, 18)
@@ -933,13 +939,17 @@ struct StepNode: View {
     var body: some View {
         let tint = self.tint
         ZStack {
-            Circle().fill(Palette.canvas)
-            Circle().fill(tint.opacity(0.14))
-            Circle().strokeBorder(tint.opacity(0.6), lineWidth: 1)
+            // A halo drawn as a gradient, not a shadow: a shadow is a second render pass on every row while scrolling.
+            if item.status == .running || item.status == .pending {
+                Circle().fill(RadialGradient(colors: [tint.opacity(0.45), tint.opacity(0)], center: .center, startRadius: 8, endRadius: 17))
+                    .frame(width: 34, height: 34)
+            }
+            Circle().fill(Palette.canvas).frame(width: 22, height: 22)
+            Circle().fill(tint.opacity(0.14)).frame(width: 22, height: 22)
+            Circle().strokeBorder(tint.opacity(0.6), lineWidth: 1).frame(width: 22, height: 22)
             symbol.foregroundStyle(tint)
         }
         .frame(width: 22, height: 22)
-        .shadow(color: item.status == .running || item.status == .pending ? tint.opacity(0.8) : .clear, radius: 5)
         .padding(.top, 7)
         .accessibilityHidden(true)
         .transition(.scale.combined(with: .opacity))
@@ -951,7 +961,7 @@ struct StepNode: View {
         switch item.status {
         case .error: return Palette.danger
         case .done: return Palette.ice
-        default: return Palette.amber
+        default: return Palette.accent
         }
     }
 
@@ -1186,7 +1196,7 @@ struct ToolRow: View {
                     ForEach(description.spawned, id: \.self) { name in
                         Button { openChild(name) } label: {
                             HStack(spacing: 6) {
-                                Spirit(color: Palette.avatar(name), size: 18)
+                                AgentMark(name: name, size: 18)
                                 Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon)
                                 Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
                             }
@@ -1223,10 +1233,10 @@ struct ToolRow: View {
                             Button { confirmingRestart = true } label: {
                                 Label("Restart Python Kernel", systemImage: "arrow.clockwise")
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(Palette.amber)
+                                    .foregroundStyle(Palette.accent)
                                     .padding(.horizontal, 12).frame(height: 28)
-                                    .background(Palette.amber.opacity(0.14), in: Capsule())
-                                    .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                                    .background(Palette.accent.opacity(0.14), in: Capsule())
+                                    .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.45)))
                                     .contentShape(Capsule())
                             }
                             .buttonStyle(PressStyle())
@@ -1242,10 +1252,10 @@ struct ToolRow: View {
                                 Button { confirmingStop = true } label: {
                                     Label("Stop", systemImage: "stop.fill")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(Palette.amber)
+                                        .foregroundStyle(Palette.accent)
                                         .padding(.horizontal, 10).frame(height: 24)
-                                        .background(Palette.amber.opacity(0.14), in: Capsule())
-                                        .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                                        .background(Palette.accent.opacity(0.14), in: Capsule())
+                                        .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.45)))
                                         .contentShape(Capsule())
                                 }
                                 .buttonStyle(PressStyle())
@@ -1441,7 +1451,7 @@ enum Syntax {
         }
         let strings = #"("""[\s\S]*?"""|'''[\s\S]*?'''|"(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*')"#
         let patterns: [(String, Color)] = [
-            (#"\b\d+(\.\d+)?\b"#, Palette.amber),
+            (#"\b\d+(\.\d+)?\b"#, Palette.accent),
             (#"\b(\#(words.joined(separator: "|")))\b"#, Palette.lilac),
             // Strings and comments in one pass, so whichever starts first wins: `"https://…"` stays a string, `# it's`
             // stays a comment.
@@ -1464,7 +1474,7 @@ struct Avatar: View {
     let name: String
     var size: CGFloat = 26
 
-    var body: some View { Spirit(color: Palette.avatar(name), size: size) }
+    var body: some View { AgentMark(name: name, size: size) }
 }
 
 // MARK: Notes
@@ -1602,7 +1612,7 @@ struct ReportCard: View {
                 .padding(.horizontal, 10)
                 .frame(height: 36)
                 .card(radius: 11, fill: hovering || expanded ? Palette.raised : Palette.surface.opacity(0.7),
-                      border: expanded ? tint.opacity(0.45) : Palette.border)
+                      border: expanded ? tint.opacity(0.45) : Palette.lit.opacity(0.85))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1626,10 +1636,8 @@ struct ReportCard: View {
                 }
                 .padding(16)
                 .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
-                .shadow(color: tint.opacity(0.12), radius: 14)
                 .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.8)).frame(width: 2).padding(.vertical, 14)
-                        .shadow(color: tint, radius: 4)
+                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
                 }
                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
             }
@@ -1637,7 +1645,7 @@ struct ReportCard: View {
         .trackTop(top)
     }
 
-    private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.periwinkle }
+    private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.accent }
 
     @ViewBuilder private var badge: some View {
         if let icon {
@@ -1645,7 +1653,7 @@ struct ReportCard: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 18, height: 18)
-                .background(Palette.periwinkle.gradient, in: Circle())
+                .background(Palette.accent.gradient, in: Circle())
         } else {
             Avatar(name: name, size: 22)
         }
@@ -1709,10 +1717,9 @@ private struct AttachedImage: View {
                 Text(name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             .padding(.horizontal, 7).frame(height: 20)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Palette.canvas.opacity(0.82), in: Capsule())
             .padding(6)
         }
-        .shadow(color: Palette.lilac.opacity(loaded ? 0.18 : 0), radius: 8)
         .contentShape(shape)
         .onTapGesture {
             guard let image, let request else { return }

@@ -1,0 +1,9 @@
+UI component reference sheet for "Shed" (macOS + iOS app for AI coding agents): CONTROLS AND PRIMITIVES, each with a caption.
+Rows of components: 
+1) Agent marks: three 28px rounded-square glass tiles with a soft inner glow in the agent's hue: Pi (lilac, "π"), Prime (ice blue, sparkle glyph), DeepSeek (periwinkle, wave glyph); plus subagent avatars as small colored circles with initials.
+2) Status dots: running (blue with ripple ring), needs you (orange), idle (grey), error (red), compacting (violet), done (dim blue).
+3) Pills/chips (capsules, glass, 30px tall): folder "~/src/shed" with folder icon, agent "Pi", model "GPT-5.5 · OpenAI" with chevron, reasoning "High" with chevron, cost "$0.31/min", context "142K / 400K" with a tiny ring gauge, sites "2" with globe, branch "main ↑2" with branch icon.
+4) Buttons: primary (solid electric-blue capsule "Start session"), secondary (glass capsule "Settings…"), destructive (red text glass "Delete"), icon buttons (round glass 32px: mic, paperclip, stop square), the send button (white circle with arrow up), the stop button (glass circle with a filled square, blue ring progress).
+5) Inputs: search field, text field focused (blue hairline), toggle switch on/off, segmented control "Pi | Prime | DeepSeek".
+6) Menus: a dark glass dropdown menu with sections "OpenAI", "Mistral", items with checkmark, keyboard hints.
+7) Badges: count badge, "NEW", keyboard key caps "⌘N", "esc".

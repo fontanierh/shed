@@ -1,0 +1,3 @@
+UI motion reference, 1.8 s loop: the composer's round send button (white circle with an up arrow) is pressed: it dips to 94% scale, springs up a few pixels, then morphs into a glass stop button (filled white square in a glass circle) with a thin blue ring spinning around its edge; then morphs back to the send arrow.
+
+Style: dark UI on near-black with a fine dithered halftone dot texture, frosted-glass elements with 1px hairlines, electric blue #4C9BFF accent, orange #FF8A3D for attention, Inter-like type. Smooth, premium motion like Apple system UI; the loop must be seamless (last frame flows into the first). Show it large and centered so the motion is easy to read.
