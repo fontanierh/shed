@@ -1,0 +1,13 @@
+UI design for the SESSION VIEW of "Shed", a macOS app that drives AI coding agents. Wide window area (no sidebar), dithered beam subdued to about 30% so text stays readable.
+Top bar (transparent over the background): session title "Fix streaming flicker" with a pencil-on-hover, beneath it the folder "~/src/shed · main". Right side pills: agent mark + "Pi", "GPT-5.5 · High" model pill, "$0.31/min", a context ring "142K / 400K", a globe with "2", a background commands hourglass "1", and a "…" menu.
+Transcript column 760px wide centered:
+- A user message as a right-aligned glass bubble with a blue tint: "The stream flickers when I switch tabs. Find the cause and fix it."
+- An assistant reply in plain white text (no bubble), with a "## Cause" heading, a short paragraph with `SessionStore.flush()` inline code, a bulleted list of 3 items.
+- Tool call rows: compact glass rows with an icon, verb and target, grey duration at right: "Read  SessionStore.swift  0.2s", "Ran  swift test  ✓ passed  14s" (green check), "Edited  2 files  +38 −12" (green/red numbers), one row "Running  cargo build" with a blue progress shimmer.
+- One expanded tool call: header row plus a sunken black terminal panel in monospace with 6 lines of output and a "Copy" button.
+- A code block card: language label "swift", copy icon, 8 lines of syntax-highlighted Swift.
+- A collapsed "Thought for 12s" row with a sparkle icon.
+- A subagent note: small card "Subagent reviewer finished · 3 findings" with a violet avatar.
+- A divider "Earlier conversation" with a "Load earlier" button.
+- An error card with red hairline: "Tool call failed: permission denied".
+- A "Compacting context" row with a violet shimmer.

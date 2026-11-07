@@ -6,6 +6,7 @@ public struct PhoneRootView: View {
     @Bindable var store: SessionStore
     @State private var path: [String] = []
     @State private var showNewSession = false
+    @State private var newSession = NewSessionDraft()
     @State private var showSettings = false
     @State private var lightbox = Lightbox()
     @State private var activities = LiveActivities()
@@ -20,7 +21,12 @@ public struct PhoneRootView: View {
                 PhoneConnect(store: store)
             } else {
                 NavigationStack(path: $path) {
-                    SessionSidebar(store: store, newSession: { showNewSession = true }, openSettings: { showSettings = true })
+                    SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true },
+                                   openSettings: { showSettings = true },
+                                   start: { message, folder in
+                                       newSession = NewSessionDraft(message: message, folder: folder)
+                                       showNewSession = true
+                                   })
                         .toolbar(.hidden, for: .navigationBar)
                         .navigationDestination(for: String.self) { id in
                             if let session = store.sessions[id] {
@@ -36,10 +42,12 @@ public struct PhoneRootView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .tint(Palette.amber)
+        .tint(Palette.accent)
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
-        .sheet(isPresented: $showNewSession) { NewSessionSheet(store: store) }
+        .sheet(isPresented: $showNewSession) {
+            NewSessionSheet(store: store, initialMessage: newSession.message, initialFolder: newSession.folder)
+        }
         .sheet(isPresented: $showSettings) { NavigationStack { EnvironmentSettings(store: store) } }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
@@ -80,21 +88,20 @@ struct PhoneConnect: View {
         ScrollView {
             VStack(spacing: 22) {
                 HStack(spacing: 8) {
-                    Sprout(size: 28)
-                    Text("Shed").font(.system(size: 30, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
+                    ShedMark(size: 28)
+                    Text("Shed").font(.system(size: 30, weight: .semibold)).foregroundStyle(Palette.moon)
                     Spacer()
                 }
                 .padding(.top, 8)
 
-                ZStack {
-                    Sprig().fill(Palette.ice.opacity(0.16)).frame(width: 120, height: 170).offset(x: 70, y: -6)
-                    Spirit(color: Palette.ice, size: 120, working: true)
-                }
-                .frame(height: 190)
-                .padding(.top, 12)
+                ShedMark(size: 96)
+                    .frame(width: 168, height: 168)
+                    .card(radius: 44, fill: Palette.surface.opacity(0.55))
+                    .shadow(color: Palette.accent.opacity(0.25), radius: 30)
+                    .padding(.top, 12)
 
                 VStack(spacing: 8) {
-                    Text("Connect to your Mac").font(.system(size: 30, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
+                    Text("Connect to your Mac").font(.system(size: 28, weight: .semibold)).foregroundStyle(Palette.moon)
                     Text("Shed talks to the bridge on your Mac over Tailscale.")
                         .font(.system(size: 16)).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
@@ -120,22 +127,23 @@ struct PhoneConnect: View {
                 } label: {
                     Label("Connect", systemImage: "arrow.right").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(AmberButton())
+                .buttonStyle(PrimaryButton())
                 .disabled(url.isEmpty || token.isEmpty)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 30)
         }
         .scrollDismissesKeyboard(.interactively)
-        .background { ZStack { Velvet(); Fireflies(count: 7, warm: 0.45, seed: 5) }.ignoresSafeArea() }
+        .background { Backdrop(beam: 1, anchor: UnitPoint(x: 0.5, y: 0.3)) }
     }
 
     private func step(_ number: Int, _ icon: String, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Text("\(number)")
-                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.ice)
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.accent)
                 .frame(width: 26, height: 26)
-                .background(Circle().strokeBorder(Palette.ice.opacity(0.5)))
+                .background(Circle().fill(Palette.accent.opacity(0.12)))
+                .background(Circle().strokeBorder(Palette.accent.opacity(0.5)))
             Image(systemName: icon).font(.system(size: 17)).foregroundStyle(Palette.moon)
                 .frame(width: 34, height: 34).card(radius: 9, fill: Palette.raised)
             VStack(alignment: .leading, spacing: 3) {
@@ -157,7 +165,7 @@ struct PhoneConnect: View {
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .padding(.horizontal, 14).frame(height: 48)
-            .card(radius: 14, fill: Palette.sunken)
+            .card(radius: 14, fill: Palette.surface.opacity(0.75))
         }
     }
 }

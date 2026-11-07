@@ -3,6 +3,8 @@
 mod dsh;
 mod cost;
 mod files;
+mod git;
+mod github;
 mod history;
 mod jobs;
 mod media;

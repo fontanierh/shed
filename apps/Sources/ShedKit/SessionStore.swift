@@ -320,6 +320,13 @@ public final class SessionStore {
         session.parentId.flatMap { sessions[$0] }
     }
 
+    /// The computer with the most top-level sessions: where the work happens.
+    public var busiestEnvironment: BridgeEnvironment? {
+        let counts = Dictionary(sessions.values.filter { !$0.isSubagent }.compactMap { Self.split($0.id)?.env }.map { ($0, 1) },
+                                uniquingKeysWith: +)
+        return environments.max { counts[$0.id, default: 0] < counts[$1.id, default: 0] }
+    }
+
     /// Every subagent still at work (running, or idle with background jobs), across all sessions.
     public var activeSubagents: [SessionSummary] {
         sessions.values.filter { $0.isSubagent && $0.isActive }.sorted { $0.createdAt < $1.createdAt }
@@ -659,6 +666,16 @@ public final class SessionStore {
         var fields: [String: Any] = ["hidden": hidden]
         if let path { fields["path"] = path }
         return try await client(env).call("list_dir", fields, as: DirListing.self)
+    }
+
+    /// The git repositories an environment's sessions work in, read with that computer's `git`. `folders` adds more.
+    /// The GitHub account signed in with `gh` on that computer: contributions and open pull requests.
+    public func githubOverview(in env: String) async throws -> GitHubOverview {
+        try await client(env).call("github_overview", [:], as: GitHubOverview.self)
+    }
+
+    public func gitOverview(in env: String, folders: [String] = []) async throws -> GitOverview {
+        try await client(env).call("git_overview", ["paths": folders], as: GitOverview.self)
     }
 
     // MARK: Background commands

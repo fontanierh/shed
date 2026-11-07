@@ -181,7 +181,7 @@ struct PhoneModelPicker: View {
             .onAppear { if let current { open.insert(current.groupLabel) } }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Velvet(base: Palette.sidebar).ignoresSafeArea())
+            .background(Palette.sidebar.ignoresSafeArea())
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
             .navigationTitle("Model")
             .navigationBarTitleDisplayMode(.inline)
@@ -203,7 +203,7 @@ struct PhoneModelPicker: View {
                         HStack(spacing: 12) {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(model.shortName).font(.system(size: 16, weight: selected ? .semibold : .regular))
-                                    .foregroundStyle(selected ? Palette.amber : Palette.moon)
+                                    .foregroundStyle(selected ? Palette.accent : Palette.moon)
                                 Text(model.id).font(.system(size: 12)).foregroundStyle(Palette.moon.opacity(0.5)).lineLimit(1).truncationMode(.middle)
                             }
                             Spacer(minLength: 8)
@@ -212,11 +212,11 @@ struct PhoneModelPicker: View {
                             }
                             if model.reasoning { Image(systemName: "brain").font(.system(size: 13)).foregroundStyle(.tertiary) }
                             Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Palette.amber).opacity(selected ? 1 : 0)
+                                .foregroundStyle(Palette.accent).opacity(selected ? 1 : 0)
                         }
                         .contentShape(Rectangle())
                     }
-                    .listRowBackground(selected ? Palette.amber.opacity(0.08) : Palette.surface.opacity(0.6))
+                    .listRowBackground(selected ? Palette.accent.opacity(0.08) : Palette.surface.opacity(0.6))
     }
 }
 #endif

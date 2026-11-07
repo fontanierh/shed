@@ -99,62 +99,13 @@ extension AmbientLayers {
     }
 }
 
-/// Fireflies drifting and twinkling: each one a soft halo around a bright core, on its own slow loops.
-struct FireflyField: AmbientLayers {
-    struct Fly: Hashable {
-        let x, y, dx, dy, speed, phase, size: Double
-        let color: CGColor
-    }
-
-    let flies: [Fly]
-    /// A centered band to keep clear: the flies keep to the margins either side.
-    let clear: CGFloat?
-    /// Reduce Motion: hold still.
-    let still: Bool
-
-    func install(on host: CALayer, size: CGSize, scale: CGFloat) {
-        let margin = clear.map { (size.width - $0) / 2 }
-        for fly in flies {
-            let glow = fly.size * 5
-            if let margin, margin <= glow * 2 + 8 { continue }
-            func x(_ angle: Double) -> Double {
-                guard let margin else { return fly.x * size.width + sin(angle) * fly.dx }
-                let inner = margin - glow * 2
-                let along = (fly.x < 0.5 ? fly.x * 2 : (fly.x - 0.5) * 2) * inner + glow + sin(angle) * min(fly.dx, inner / 4)
-                let clamped = min(max(along, glow), margin - glow)
-                return fly.x < 0.5 ? clamped : size.width - clamped
-            }
-            func y(_ angle: Double) -> Double { fly.y * size.height + cos(angle * 0.8) * fly.dy }
-            let rate = 0.6 + fly.speed * 4
-            func twinkle(_ t: Double) -> Double { 0.45 + 0.55 * (0.5 + 0.5 * sin(t * rate + fly.phase * 3)) }
-
-            let body = CALayer()
-            body.bounds = CGRect(x: 0, y: 0, width: glow * 2, height: glow * 2)
-            body.position = CGPoint(x: x(fly.phase), y: y(fly.phase))
-            body.opacity = Float(twinkle(0))
-            let halo = glowLayer(fly.color, alpha: 0.35, diameter: glow * 2, scale: scale)
-            halo.position = CGPoint(x: glow, y: glow)
-            let core = dotLayer(fly.color.copy(alpha: 0.9) ?? fly.color, diameter: fly.size)
-            core.position = CGPoint(x: glow, y: glow)
-            body.addSublayer(halo)
-            body.addSublayer(core)
-            host.addSublayer(body)
-
-            guard !still else { continue }
-            body.add(loop("position.x", period: 2 * .pi / fly.speed) { t in x(t * fly.speed + fly.phase) }, forKey: "x")
-            body.add(loop("position.y", period: 2 * .pi / (0.8 * fly.speed)) { t in y(t * fly.speed + fly.phase) }, forKey: "y")
-            body.add(loop("opacity", period: 2 * .pi / rate, value: twinkle), forKey: "twinkle")
-        }
-    }
-}
-
-/// A faint line with a firefly gliding along it, back and forth.
+/// A faint line with a spark of light gliding along it, back and forth.
 struct TrailField: AmbientLayers {
     let still: Bool
 
     func install(on host: CALayer, size: CGSize, scale: CGFloat) {
         let ice = Palette.ice.resolve(in: EnvironmentValues()).cgColor
-        let amber = Palette.amber.resolve(in: EnvironmentValues()).cgColor
+        let amber = Palette.accent.resolve(in: EnvironmentValues()).cgColor
         let moon = Palette.moon.resolve(in: EnvironmentValues()).cgColor
         let mid = size.height / 2
 
@@ -188,7 +139,7 @@ struct TrailField: AmbientLayers {
     }
 }
 
-/// A soft glow breathing behind something at work: a working spirit, a lit lantern.
+/// A soft glow breathing behind something at work.
 struct PulseField: AmbientLayers {
     let color: Color
     /// Seconds per breath.
@@ -206,17 +157,20 @@ struct PulseField: AmbientLayers {
     }
 }
 
-/// A ring rippling out from a point and fading, again and again: an ember at work.
+/// A ring rippling out from a point and fading, again and again: something at work.
 struct RippleField: AmbientLayers {
     let color: Color
-    /// The ember's diameter; the ring starts there.
+    /// The dot's or tile's size; the ring starts there.
     let diameter: CGFloat
+    /// The ring's corners: a circle by default, a rounded square around an agent's tile.
+    var cornerRadius: CGFloat? = nil
     var still = false
 
     func install(on host: CALayer, size: CGSize, scale: CGFloat) {
         guard !still else { return }
         let ring = CAShapeLayer()
-        ring.path = CGPath(ellipseIn: CGRect(x: 0, y: 0, width: diameter, height: diameter), transform: nil)
+        let corner = min(diameter / 2, cornerRadius ?? diameter / 2)
+        ring.path = CGPath(roundedRect: CGRect(x: 0, y: 0, width: diameter, height: diameter), cornerWidth: corner, cornerHeight: corner, transform: nil)
         ring.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
         ring.position = CGPoint(x: size.width / 2, y: size.height / 2)
         ring.fillColor = nil
@@ -226,7 +180,7 @@ struct RippleField: AmbientLayers {
         host.addSublayer(ring)
         let grow = CABasicAnimation(keyPath: "transform.scale")
         grow.fromValue = 1
-        grow.toValue = 2.6
+        grow.toValue = cornerRadius == nil ? 2.6 : 1.7
         let fade = CABasicAnimation(keyPath: "opacity")
         fade.fromValue = 0.7
         fade.toValue = 0
@@ -299,11 +253,6 @@ struct SweepField: AmbientLayers {
 }
 
 #if os(macOS)
-extension FireflyField: NSViewRepresentable {
-    func makeNSView(context: Context) -> AmbientView { AmbientView() }
-    func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
-}
-
 extension TrailField: NSViewRepresentable {
     func makeNSView(context: Context) -> AmbientView { AmbientView() }
     func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
@@ -329,11 +278,6 @@ extension SweepField: NSViewRepresentable {
     func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
 }
 #else
-extension FireflyField: UIViewRepresentable {
-    func makeUIView(context: Context) -> AmbientView { AmbientView() }
-    func updateUIView(_ view: AmbientView, context: Context) { configure(view) }
-}
-
 extension TrailField: UIViewRepresentable {
     func makeUIView(context: Context) -> AmbientView { AmbientView() }
     func updateUIView(_ view: AmbientView, context: Context) { configure(view) }

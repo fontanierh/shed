@@ -192,11 +192,11 @@ public struct ShedLiveActivityWidget: Widget {
             let live = state.phase != "done" && state.phase != "error"
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    IslandSpirit(phase: state.phase, size: 40).padding(.leading, 4)
+                    IslandMark(phase: state.phase, size: 40).padding(.leading, 4)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     VStack(alignment: .trailing, spacing: 2) {
-                        Spend(state: state).font(.system(size: 15, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.amber)
+                        Spend(state: state).font(.system(size: 15, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.accent)
                         Elapsed(state: state).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
                     }
                     .padding(.trailing, 4)
@@ -220,37 +220,38 @@ public struct ShedLiveActivityWidget: Widget {
                     }
                 }
             } compactLeading: {
-                IslandSpirit(phase: state.phase, size: 22, glow: false)
+                IslandMark(phase: state.phase, size: 22, glow: false)
             } compactTrailing: {
                 if live {
-                    Spend(state: state).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.amber)
+                    Spend(state: state).font(.system(size: 13, weight: .semibold).monospacedDigit()).foregroundStyle(Palette.accent)
                         .minimumScaleFactor(0.7).lineLimit(1).frame(maxWidth: 64)
                 } else {
                     Image(systemName: state.phase == "error" ? "exclamationmark" : "checkmark").foregroundStyle(state.phase == "error" ? Palette.danger : Palette.ice)
                 }
             } minimal: {
-                IslandSpirit(phase: state.phase, size: 22, glow: false)
+                IslandMark(phase: state.phase, size: 22, glow: false)
             }
             .widgetURL(URL(string: "shed://session/\(context.attributes.sessionId)"))
-            .keylineTint(Palette.amber)
+            .keylineTint(Palette.accent)
         }
     }
 }
 
-/// A still spirit: amber while it works, ice once done, rose on an error. Without a glow in the compact island, which
+/// A still agent mark: blue while it works, green once done, red on an error. Without a glow in the compact island, which
 /// clips each side to its frame.
-struct IslandSpirit: View {
+struct IslandMark: View {
     let phase: String
     var size: CGFloat
     var glow = true
 
     var body: some View {
         let color = switch phase {
-        case "done": Palette.ice
+        case "done": Palette.success
         case "error": Palette.danger
-        default: Palette.amber
+        default: Palette.accent
         }
-        Spirit(color: color, size: size, working: false, glow: glow)
+        AgentMark(symbol: phase == "done" ? "checkmark" : phase == "error" ? "exclamationmark" : "sparkle",
+                  color: color, size: size, glow: glow)
             .shadow(color: color.opacity(glow ? 0.6 : 0), radius: size / 4)
     }
 }
@@ -328,9 +329,9 @@ struct ActivityButtons: View {
                 Label("Stop", systemImage: "stop.fill")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(maxWidth: .infinity).frame(height: 36)
-                    .background(Capsule().fill(Palette.amber.opacity(0.14)))
-                    .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.6)))
-                    .foregroundStyle(Palette.amber)
+                    .background(Capsule().fill(Palette.accent.opacity(0.14)))
+                    .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.6)))
+                    .foregroundStyle(Palette.accent)
             }
         }
     }
@@ -344,7 +345,7 @@ struct LockScreenActivity: View {
         let live = state.phase != "done" && state.phase != "error"
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
-                IslandSpirit(phase: state.phase, size: 44)
+                IslandMark(phase: state.phase, size: 44)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(live ? "\(context.attributes.agent) is working" : (state.phase == "done" ? "\(context.attributes.agent) finished" : "\(context.attributes.agent) stopped"))
                         .font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
@@ -354,7 +355,7 @@ struct LockScreenActivity: View {
                 Spacer(minLength: 6)
                 VStack(alignment: .trailing, spacing: 3) {
                     Spend(state: state).font(.system(size: 17, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(live ? Palette.amber : Palette.ice)
+                        .foregroundStyle(live ? Palette.accent : Palette.ice)
                     Text(Spend.caption(state)).font(.system(size: 11)).foregroundStyle(.secondary)
                     if live {
                         Elapsed(state: state).font(.system(size: 12).monospacedDigit()).foregroundStyle(.secondary)
@@ -381,7 +382,7 @@ struct SubagentCount: View {
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "person.2.fill").font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(active > 0 ? Palette.amber : Color.secondary)
+                .foregroundStyle(active > 0 ? Palette.accent : Color.secondary)
             Text(active > 0 ? "\(active) of \(total) subagent\(total == 1 ? "" : "s") working" : "\(total) subagent\(total == 1 ? "" : "s"), all finished")
                 .font(.system(size: 13, weight: .medium).monospacedDigit())
                 .foregroundStyle(active > 0 ? Palette.moon : Color.secondary)

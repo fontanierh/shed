@@ -139,10 +139,10 @@ struct FileCard: View {
                 HStack(spacing: 12) {
                     Image(systemName: kind.symbol)
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(Palette.amber)
+                        .foregroundStyle(Palette.accent)
                         .frame(width: 38, height: 38)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.amber.opacity(0.12)))
-                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Palette.amber.opacity(0.25)))
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.accent.opacity(0.12)))
+                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Palette.accent.opacity(0.25)))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(url.lastPathComponent)
                             .font(.system(size: 14, weight: .medium))
@@ -230,7 +230,7 @@ struct FileViewer: View {
 
     private func header(_ kind: FileKind) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: kind.symbol).font(.system(size: 14, weight: .medium)).foregroundStyle(Palette.amber)
+            Image(systemName: kind.symbol).font(.system(size: 14, weight: .medium)).foregroundStyle(Palette.accent)
             VStack(alignment: .leading, spacing: 1) {
                 Text(file.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.moon).lineLimit(1).truncationMode(.middle)
                 Text((file.url.path as NSString).deletingLastPathComponent)

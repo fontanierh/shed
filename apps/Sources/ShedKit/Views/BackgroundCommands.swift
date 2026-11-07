@@ -47,7 +47,7 @@ struct BackgroundCommandsPanel: View {
                 Text("Background commands").font(.system(size: 15, weight: .medium)).foregroundStyle(Palette.moon)
                 let running = jobs?.filter(\.isRunning).count ?? 0
                 if running > 0 {
-                    Text("· \(running) running").font(.system(size: 13.5)).foregroundStyle(Palette.amber).contentTransition(.numericText())
+                    Text("· \(running) running").font(.system(size: 13.5)).foregroundStyle(Palette.accent).contentTransition(.numericText())
                 }
                 Spacer()
             }
@@ -56,7 +56,7 @@ struct BackgroundCommandsPanel: View {
             content
         }
         .frame(width: 640, height: 420)
-        .background(Velvet(base: Palette.surface))
+        .background(Palette.surface)
         .task(id: session.id) {
             while !Task.isCancelled {
                 do {
@@ -96,12 +96,9 @@ struct BackgroundCommandsPanel: View {
                 } else if jobs == nil {
                     ProgressView().controlSize(.small)
                 } else {
-                    ZStack(alignment: .bottomTrailing) {
-                        Spirit(color: Palette.ice, size: 54)
-                        Lantern().scaleEffect(0.7).offset(x: 26, y: 8)
-                    }
-                    .padding(.bottom, 8)
-                    Text("No background commands").font(.system(size: 16, design: .serif)).foregroundStyle(Palette.moon)
+                    AgentMark(symbol: "terminal", color: Palette.accent, size: 48, asleep: true)
+                        .padding(.bottom, 8)
+                    Text("No background commands").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
                     Text(session.agent == .pi ? "Commands the agent starts with bash_background appear here."
                          : "Commands the agent leaves running with bash() appear here.")
                         .font(.caption).foregroundStyle(.tertiary)
@@ -143,14 +140,14 @@ struct PhoneBackgroundCommands: View {
                         } else if jobs == nil {
                             ProgressView()
                         } else {
-                            Text("No background commands").font(.system(size: 16, design: .serif)).foregroundStyle(Palette.moon)
+                            Text("No background commands").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
                             Text("Commands the agent leaves running appear here.").font(.caption).foregroundStyle(.tertiary)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            .background(Velvet(base: Palette.sidebar).ignoresSafeArea())
+            .background(Palette.sidebar.ignoresSafeArea())
             .navigationTitle("Background Commands")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -159,7 +156,7 @@ struct PhoneBackgroundCommands: View {
             .navigationDestination(for: String.self) { id in
                 if let job = jobs?.first(where: { $0.id == id }) {
                     JobDetail(store: store, sessionId: session.id, job: job)
-                        .background(Velvet(base: Palette.surface).ignoresSafeArea())
+                        .background(Palette.surface.ignoresSafeArea())
                         .navigationTitle(job.isRunning ? "Running" : JobDetail.outcome(job))
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -243,7 +240,7 @@ private struct JobTiming: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 Text((job.stuck == nil ? "Running · " : "Looks stuck · ")
                      + Format.duration(ms: max(0, context.date.timeIntervalSince(started)) * 1000))
-                    .foregroundStyle(job.stuck == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Palette.amber))
+                    .foregroundStyle(job.stuck == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Palette.accent))
             }
         } else {
             Text([JobDetail.outcome(job), job.durationMs.map { Format.duration(ms: $0) }].compactMap { $0 }.joined(separator: " · "))
@@ -321,7 +318,7 @@ private struct StuckNote: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle").foregroundStyle(Palette.amber).padding(.top, 1)
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(Palette.accent).padding(.top, 1)
             Text(StuckBanner.phrase(reason, on: computer) + " Cancel it to let the agent carry on: it sees the command fail.")
                 .font(.caption)
                 .foregroundStyle(Palette.moon.opacity(0.85))
@@ -329,7 +326,7 @@ private struct StuckNote: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(radius: 10, fill: Palette.amber.opacity(0.08), border: Palette.amber.opacity(0.35))
+        .card(radius: 10, fill: Palette.accent.opacity(0.08), border: Palette.accent.opacity(0.35))
     }
 }
 
@@ -504,8 +501,8 @@ struct Spinner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        SpinField(color: Palette.amber, still: reduceMotion)
-            .shadow(color: Palette.amber.opacity(0.7), radius: 3)
+        SpinField(color: Palette.accent, still: reduceMotion)
+            .shadow(color: Palette.accent.opacity(0.7), radius: 3)
             .allowsHitTesting(false)
     }
 }
