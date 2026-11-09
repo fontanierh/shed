@@ -152,18 +152,27 @@ struct SessionSidebar: View {
             .scrollIndicators(.never)
             #if os(iOS)
             .scrollDismissesKeyboard(.interactively)
+            // The list stops at the composer rather than running on under it and the beam below: off the edge by a
+            // hair, so the scroll view doesn't stretch into the composer's inset.
+            .padding(.bottom, 1)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                // The composer sits under the thumb, above the home indicator; the list fades out behind it.
+                // The composer sits under the thumb, above the home indicator, on the same soft pool of dark as a
+                // conversation's: the beam stays lit all around it, as it does there.
                 if let start, !searchOpen {
                     HomeComposer(store: store, start: start, compact: true)
                         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
                         .background {
-                            LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
-                                                   .init(color: Palette.canvas.opacity(0.7), location: 0.35),
-                                                   .init(color: Palette.canvas.opacity(0.85), location: 1)],
-                                           startPoint: .top, endPoint: .bottom)
-                                .padding(.top, -24)
-                                .ignoresSafeArea(edges: .bottom)
+                            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                .fill(Palette.canvas.opacity(0.9))
+                                .padding(.horizontal, 6)
+                                .padding(.top, -6)
+                                .padding(.bottom, 0)
+                                // Room around it for the blur, so its edges aren't cut off; rasterised once.
+                                .padding(40)
+                                .blur(radius: 16)
+                                .drawingGroup()
+                                .padding(-40)
+                                .allowsHitTesting(false)
                         }
                         .transition(.opacity.combined(with: .move(edge: .bottom)))
                 }

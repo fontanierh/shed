@@ -14,10 +14,20 @@ struct BeamPose: Hashable, Sendable {
     var anchor: UnitPoint
     var shape: BeamShape
 
-    /// The session list: rising behind the composer at the bottom left.
-    static let list = BeamPose(beam: 0.8, anchor: UnitPoint(x: 0.15, y: 0.86), shape: .sweep)
     /// A conversation: low along the bottom edge, with a faint haze of dots behind the text.
-    static let conversation = BeamPose(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+    static let conversation = BeamPose(beam: 0.62, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+    /// The session list: exactly the conversation's beam, mirrored to rise to the left. Opening a session, it tips
+    /// through level to the other side, the same beam the whole way.
+    static let list = conversation.mirrored
+
+    /// The same beam reflected left to right: the anchor across the middle, the angle negated. The bend and the warm
+    /// side follow, since both are measured across the beam.
+    var mirrored: BeamPose {
+        var pose = self
+        pose.anchor.x = 1 - anchor.x
+        pose.shape.angle = -shape.angle
+        return pose
+    }
 
     func spec(width: Int, height: Int, scale: CGFloat, base: UInt32) -> DitherSpec {
         DitherSpec(width: width, height: height, scale: scale, beam: beam, anchorX: anchor.x, anchorY: anchor.y, base: base, shape: shape)
@@ -64,6 +74,8 @@ final class BeamStageView: UIView {
     /// In-between renderings per move, and how long it takes.
     nonisolated private static let frames = 12
     private static let duration: CFTimeInterval = 0.65
+    /// Back to the list, a little quicker, in step with the conversation gliding away.
+    private static let back: CFTimeInterval = 0.45
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -208,7 +220,7 @@ final class BeamStageView: UIView {
         let end = to.spec(width: m.width, height: m.height, scale: m.scale, base: m.base)
         let start = image.contents.map { $0 as! CGImage }
         if let middle = Self.middles(m), let last = Dither.cached(end) {
-            play([start].compactMap { $0 } + middle + [last], end: end)
+            play([start].compactMap { $0 } + middle + [last], end: end, duration: to == .list ? Self.back : Self.duration)
             return
         }
         let target = Ref(self)
@@ -217,19 +229,19 @@ final class BeamStageView: UIView {
             guard let last = Dither.cached(end) else { return }
             await MainActor.run {
                 guard let view = target.view, view.generation == mine else { return }
-                view.play([start].compactMap { $0 } + middle + [last], end: end)
+                view.play([start].compactMap { $0 } + middle + [last], end: end, duration: to == .list ? Self.back : Self.duration)
             }
         }
     }
 
-    private func play(_ frames: [CGImage], end: DitherSpec) {
+    private func play(_ frames: [CGImage], end: DitherSpec, duration: CFTimeInterval) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         set(frames[frames.count - 1], spec: end)
         CATransaction.commit()
         let animation = CAKeyframeAnimation(keyPath: "contents")
         animation.values = frames
-        animation.duration = Self.duration
+        animation.duration = duration
         animation.calculationMode = .linear
         // Off at once, settling slowly: the beam answers the tap, then glides into place.
         animation.timingFunction = CAMediaTimingFunction(controlPoints: 0.15, 0.6, 0.3, 1)

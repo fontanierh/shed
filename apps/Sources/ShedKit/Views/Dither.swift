@@ -101,6 +101,12 @@ enum Dither {
         return t * t * (3 - 2 * t)
     }
 
+    /// The beam's colour at `t` across it (0: its hot edge, 1: the far cool side), for drawing in its palette elsewhere.
+    static func color(_ t: Double) -> Color {
+        let c = ramp(min(1, max(0, t)))
+        return Color(.sRGB, red: c.r, green: c.g, blue: c.b)
+    }
+
     private static func ramp(_ t: Double) -> RGB {
         var previous = stops[0]
         for stop in stops.dropFirst() {

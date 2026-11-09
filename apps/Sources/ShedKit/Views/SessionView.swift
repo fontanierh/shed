@@ -61,6 +61,10 @@ struct SessionView: View {
 
     private var hasJobs: Bool { session.hasBackgroundCommands }
 
+    /// Connected and waiting for the conversation: the phone's dither rain plays.
+    private var raining: Bool { beamStage && !reduceMotion && store.connection == .connected && !store.transcriptLoaded }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     /// A phone in portrait: the text runs edge to edge.
     private var narrow: Bool {
         #if os(iOS)
@@ -69,6 +73,8 @@ struct SessionView: View {
         false
         #endif
     }
+    /// The conversation kept out of sight while it materialises.
+    @State private var veiled = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.beamStage) private var beamStage
@@ -81,10 +87,14 @@ struct SessionView: View {
             #if os(macOS)
             SessionHeader(store: store, session: session) { renaming = session }
             #endif
+            // The transcript and, on the phone, the dither it materialises out of: a sibling, so the transcript
+            // changing identity as it arrives doesn't start the effect over.
+            ZStack {
             TranscriptView(
                 items: store.transcript,
                 session: session,
-                pending: pendingTranscript,
+                // The rain says it is loading; the line stays for a connection that isn't there.
+                pending: raining ? "" : pendingTranscript,
                 idle: idleLines,
                 openChild: { name in store.child(of: session.id, named: name).map { store.select($0.id) } },
                 openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
@@ -93,16 +103,44 @@ struct SessionView: View {
                 loadEarlier: { await store.loadEarlier() }
             )
             .equatable()
+            .opacity(veiled ? 0 : 1)
             // Each session opens at its end, following new output. The conversation arriving replaces the waiting
             // line with a cross-fade, not a cut.
             .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
-            .transition(.opacity)
-            .animation(.easeOut(duration: 0.35), value: store.transcriptLoaded)
+            // On the phone the rain brings it in; a fade as well would leave it faint when the rain reads it.
+            .transition(beamStage ? .identity : .opacity)
+            // On the phone nothing animates as it arrives: the rain prints it, and an animation there laid the whole
+            // conversation out again under it.
+            .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
+            // On the phone the conversation materialises out of the beam's dither instead of a loading line.
+            if beamStage {
+                Materialize(loading: raining, veiled: $veiled)
+                // The phone's own fade under the navigation bar, in place of the system's soft edge: dark under the
+                // bar, easing out over a line's height below it.
+                GeometryReader { geometry in
+                    let top = geometry.safeAreaInsets.top, fade: CGFloat = 26
+                    LinearGradient(stops: [.init(color: Palette.canvas.opacity(0.94), location: 0),
+                                           .init(color: Palette.canvas.opacity(0.84), location: top / (top + fade)),
+                                           .init(color: Palette.canvas.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top + fade)
+                        .ignoresSafeArea(edges: .top)
+                }
+                .allowsHitTesting(false)
+            }
+            }
             .fillsProposal()
+            // On the phone the conversation stops at the composer rather than running on under it and the beam below:
+            // off the edge by a hair, so the scroll view doesn't stretch into the composer's inset. The composer's
+            // soft pool covers where it ends.
+            .padding(.bottom, beamStage ? 1 : 0)
             #if os(iOS)
             // Reading, not typing: a tap or a drag on the conversation puts the keyboard away. Simultaneous, so the
             // blocks' own buttons still work.
             .scrollDismissesKeyboard(.interactively)
+            // A plain rectangle: otherwise each touch first works out the shape of everything in the conversation to
+            // see whether it lands on this gesture, which held the start of a scroll.
+            .contentShape(.interaction, Rectangle())
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
@@ -137,10 +175,25 @@ struct SessionView: View {
                 .padding(.bottom, 14)
                 .padding(.top, 4)
                 .background {
+                    if narrow {
+                        // On a phone: a soft, rounded pool of dark under the bar and its chips, its edges blurred
+                        // away into the beam on every side, so no line or corner shows. Rasterised once, so scrolling
+                        // under it costs nothing.
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(Palette.canvas.opacity(0.9))
+                            .padding(.horizontal, 6)
+                            .padding(.top, -16)
+                            .padding(.bottom, 6)
+                            // Room around it for the blur, so its edges aren't cut off.
+                            .padding(40)
+                            .blur(radius: 16)
+                            .drawingGroup()
+                            .padding(-40)
+                            .allowsHitTesting(false)
+                    } else {
                     // The transcript slides under the composer: a fade into the field's own dark, so no row shows
                     // through between the bar and its chips, and no hard band either. A plain gradient, not a mask
                     // or a blur, so scrolling under it costs nothing.
-                    // On a phone it thins out again below the chips, where the beam lies along the bottom edge.
                     LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
                                            .init(color: Palette.canvas.opacity(0.94), location: 0.3),
                                            .init(color: Palette.canvas.opacity(0.97), location: narrow ? 0.62 : 1),
@@ -154,6 +207,7 @@ struct SessionView: View {
                                              startPoint: .leading, endPoint: .trailing))
                         .ignoresSafeArea(edges: .bottom)
                         .allowsHitTesting(false)
+                    }
                 }
                 .frame(maxWidth: .infinity)
             }
@@ -179,7 +233,7 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
                                                   showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
-        .modifier(SoftTopEdge())
+        .modifier(SoftTopEdge(off: beamStage))
         .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         .sheet(isPresented: $showingSites) {
@@ -215,11 +269,15 @@ struct SessionView: View {
 #if os(iOS)
 /// The conversation fades out under the navigation bar rather than meeting a hard-edged bar.
 private struct SoftTopEdge: ViewModifier {
+    /// Off on the phone, which draws a plain fade instead: the system's soft edge blurs what's under the bar again on
+    /// every frame of a scroll, and draws it apart from the conversation, so it can't come in with the rain.
+    var off = false
     func body(content: Content) -> some View {
         if #available(iOS 26, *) {
             content
                 .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
                 .scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectHidden(off, for: .top)
         } else {
             content.toolbarBackground(Palette.surface.opacity(0.85), for: .navigationBar)
         }

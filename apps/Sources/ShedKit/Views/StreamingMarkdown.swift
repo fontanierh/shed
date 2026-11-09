@@ -48,6 +48,7 @@ struct StreamingMarkdown: View {
                 .textSelection(.disabled)
             } else {
                 Settled(blocks: blocks).equatable()
+                    .textSelection(.enabled)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

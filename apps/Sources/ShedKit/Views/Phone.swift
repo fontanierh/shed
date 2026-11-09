@@ -6,6 +6,18 @@ public struct PhoneRootView: View {
     @Bindable var store: SessionStore
     /// The session on screen, following the store's selection inside one animation.
     @State private var shown: String?
+    /// How far a swipe back has pulled the conversation away, 0 to 1: it follows the finger.
+    @State private var pull: CGFloat = 0
+    /// The list about to come back, laid out (all but invisible) a frame before it shows: hidden, it lays out only
+    /// when it first shows, and that late first frame made the way back start with a jump.
+    @State private var warming = false
+    /// The conversation on its way back into the beam, as a picture; the live one is hidden underneath until it is
+    /// let go. Shrinking, blurring or fading the live one made SwiftUI rehost its navigation stack, which laid it out
+    /// again (its scroll shifting) and held the first frames.
+    @State private var leaving: NavigationViewHandle.Picture?
+    /// Set once the way back is under way, inside its animation.
+    @State private var going = false
+    @State private var sessionView = NavigationViewHandle()
     @State private var showNewSession = false
     @State private var newSession = NewSessionDraft()
     @State private var showSettings = false
@@ -38,9 +50,10 @@ public struct PhoneRootView: View {
                                 ConnectionBar(store: store, showSettings: $showSettings)
                             }
                     }
-                    .opacity(shown == nil ? 1 : 0)
-                    .scaleEffect(shown == nil ? 1 : 0.97)
-                    .blur(radius: shown == nil ? 0 : 6)
+                    // Under a swipe back, the list condenses into focus as the conversation dissolves: from a little
+                    // larger and soft, settling sharp. Nothing slides.
+                    .opacity(shown == nil || going ? 1 : max(pull, warming ? 0.002 : 0))
+                    .scaleEffect(shown == nil || going ? 1 : 1.03 - 0.03 * pull)
                     .allowsHitTesting(shown == nil)
                     .accessibilityHidden(shown != nil)
 
@@ -54,6 +67,7 @@ public struct PhoneRootView: View {
                                 }
                             }
                             .containerBackground(.clear, for: .navigation)
+                            .background { NavigationViewFinder(handle: sessionView) }
                             .toolbar {
                                 ToolbarItem(placement: .topBarLeading) {
                                     Button(action: back) { Image(systemName: "chevron.left") }
@@ -61,20 +75,55 @@ public struct PhoneRootView: View {
                                 }
                             }
                         }
+                        // Its picture stands in for it on the way back.
+                        .opacity(leaving == nil ? 1 : 0)
                         // Another session (a subagent, say) replaces this one the same way.
                         .id(id)
                         .transition(.asymmetric(
                             insertion: .opacity.combined(with: .scale(scale: 1.03)),
-                            removal: .opacity.combined(with: .scale(scale: 1.03))))
-                        // Back: a swipe in from the left edge, as with a pushed page.
-                        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { drag in
-                            if drag.startLocation.x < 28, drag.translation.width > 70,
-                               abs(drag.translation.height) < drag.translation.width { back() }
-                        })
+                            removal: leaving == nil ? .opacity : .identity))
+                        // Back: a swipe in from the left edge. The conversation follows the finger; let go far enough
+                        // along, or with a flick, and it glides away, otherwise it settles back.
+                        .simultaneousGesture(DragGesture(minimumDistance: 10)
+                            .onChanged { drag in
+                                guard shown != nil, !going, drag.startLocation.x < 28 else { return }
+                                if !warming { warming = true }
+                                if leaving == nil { leaving = sessionView.snapshot() }
+                                pull = min(1, max(0, drag.translation.width) / 320)
+                            }
+                            .onEnded { drag in
+                                guard shown != nil, !going, drag.startLocation.x < 28 else { return }
+                                if pull > 0.3 || drag.predictedEndTranslation.width > 220 {
+                                    back()
+                                } else {
+                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { pull = 0 } completion: {
+                                        guard !going else { return }
+                                        warming = false
+                                        leaving = nil
+                                    }
+                                }
+                            })
+                    }
+
+                    // The conversation going back: pulled, it sinks into the beam (smaller toward the composer, softer,
+                    // fainter) and, let go, dissolves the rest of the way.
+                    if let leaving {
+                        // Exactly where the conversation was on screen.
+                        GeometryReader { geometry in
+                            let origin = geometry.frame(in: .global).origin
+                            Image(uiImage: leaving.image)
+                                .resizable()
+                                .frame(width: leaving.frame.width, height: leaving.frame.height)
+                                .modifier(Dissolve(amount: going ? 1 : pull * 0.6))
+                                .offset(x: leaving.frame.minX - origin.x, y: leaving.frame.minY - origin.y)
+                        }
+                        .ignoresSafeArea()
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                     }
                 }
                 .environment(\.beamStage, true)
-                .background { BeamStage(pose: shown == nil ? .list : .conversation, poses: [.list, .conversation]).ignoresSafeArea() }
+                .background { BeamStage(pose: shown == nil || going ? .list : .conversation, poses: [.list, .conversation]).ignoresSafeArea() }
             }
         }
         .preferredColorScheme(.dark)
@@ -94,6 +143,7 @@ public struct PhoneRootView: View {
         .onChange(of: store.selectedId, initial: true) { _, id in
             // Nil while going back is the end of `back()`, already shown.
             guard id != shown, !(id == nil && shown == nil) else { return }
+            pull = 0
             withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { shown = id }
         }
         .onChange(of: store.sessions, initial: true) { _, sessions in activities.sync(sessions, store: store) }
@@ -104,8 +154,26 @@ public struct PhoneRootView: View {
     /// Back to the list: the conversation dissolves first, then the session is let go. Deselecting clears the
     /// transcript, which would otherwise flash its loading line while it fades.
     private func back() {
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { shown = nil } completion: {
-            if shown == nil { store.select(nil) }
+        guard shown != nil, !going else { return }
+        let ready = warming && leaving != nil
+        warming = true
+        if leaving == nil { leaving = sessionView.snapshot() }
+        Task { @MainActor in
+            // The list and the picture land first, then the animation starts: its clock runs from a frame drawn.
+            if !ready { try? await Task.sleep(for: .milliseconds(16)) }
+            // One soft, unhurried settle from wherever a swipe left it.
+            withAnimation(.spring(response: 0.5, dampingFraction: 1)) {
+                going = true
+                // No picture: the live conversation fades as it goes.
+                if leaving == nil { shown = nil }
+            } completion: {
+                shown = nil
+                leaving = nil
+                going = false
+                pull = 0
+                warming = false
+                store.select(nil)
+            }
         }
     }
 
@@ -116,6 +184,68 @@ public struct PhoneRootView: View {
         if URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.contains(where: { $0.name == "stop" }) == true {
             Task { try? await Task.sleep(for: .milliseconds(400)); store.abort() }
         }
+    }
+}
+
+/// The phone's navigation stack around a view, for a picture of it.
+final class NavigationViewHandle {
+    weak var view: UIView?
+
+    struct Picture {
+        var image: UIImage
+        /// Where the stack was, in the window.
+        var frame: CGRect
+    }
+
+    /// What the stack shows, its clear background left clear. Nil if it isn't on screen.
+    func snapshot() -> Picture? {
+        guard let view, view.window != nil, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat(for: view.traitCollection)
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
+        }
+        return Picture(image: image, frame: view.convert(view.bounds, to: nil))
+    }
+}
+
+/// Zero-sized, inside a navigation stack: finds the stack's own view once it is in a window.
+private struct NavigationViewFinder: UIViewRepresentable {
+    let handle: NavigationViewHandle
+
+    final class Finder: UIView {
+        var handle: NavigationViewHandle?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            var view = superview
+            while let v = view, !(v.next is UINavigationController) { view = v.superview }
+            handle?.view = view
+        }
+    }
+
+    func makeUIView(context: Context) -> Finder {
+        let finder = Finder()
+        finder.handle = handle
+        finder.isUserInteractionEnabled = false
+        return finder
+    }
+
+    func updateUIView(_ finder: Finder, context: Context) { finder.handle = handle }
+}
+
+/// The conversation going back into the beam, 0 (there) to 1 (gone): it shrinks toward the composer at the bottom,
+/// blurs and fades, with no sideways motion.
+private struct Dissolve: ViewModifier {
+    var amount: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(1 - 0.07 * amount, anchor: .bottom)
+            // Even a point of blur softens text at once: it comes in slowly, then gathers.
+            .blur(radius: 12 * amount * amount)
+            .opacity(1 - amount)
     }
 }
 
