@@ -4,7 +4,8 @@ import SwiftUI
 
 public struct PhoneRootView: View {
     @Bindable var store: SessionStore
-    @State private var path: [String] = []
+    /// The session on screen, following the store's selection inside one animation.
+    @State private var shown: String?
     @State private var showNewSession = false
     @State private var newSession = NewSessionDraft()
     @State private var showSettings = false
@@ -20,25 +21,60 @@ public struct PhoneRootView: View {
             if store.environments.isEmpty {
                 PhoneConnect(store: store)
             } else {
-                NavigationStack(path: $path) {
-                    SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true },
-                                   openSettings: { showSettings = true },
-                                   start: { message, folder in
-                                       newSession = NewSessionDraft(message: message, folder: folder)
-                                       showNewSession = true
-                                   })
-                        .toolbar(.hidden, for: .navigationBar)
-                        .navigationDestination(for: String.self) { id in
-                            if let session = store.sessions[id] {
-                                SessionView(store: store, session: session)
-                            } else {
-                                Unreachable(store: store, showSettings: $showSettings)
+                // One screen, not a stack of pages: opening a session, the list's rows dissolve and the conversation
+                // condenses in their place while the beam travels underneath to its new pose. Both composers sit at
+                // the bottom, so the one under your thumb stays put. The list stays alive below, keeping its scroll.
+                ZStack {
+                    NavigationStack {
+                        SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true },
+                                       openSettings: { showSettings = true },
+                                       start: { message, folder in
+                                           newSession = NewSessionDraft(message: message, folder: folder)
+                                           showNewSession = true
+                                       })
+                            .toolbar(.hidden, for: .navigationBar)
+                            .containerBackground(.clear, for: .navigation)
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                ConnectionBar(store: store, showSettings: $showSettings)
+                            }
+                    }
+                    .opacity(shown == nil ? 1 : 0)
+                    .scaleEffect(shown == nil ? 1 : 0.97)
+                    .blur(radius: shown == nil ? 0 : 6)
+                    .allowsHitTesting(shown == nil)
+                    .accessibilityHidden(shown != nil)
+
+                    if let id = shown {
+                        NavigationStack {
+                            Group {
+                                if let session = store.sessions[id] {
+                                    SessionView(store: store, session: session)
+                                } else {
+                                    Unreachable(store: store, showSettings: $showSettings)
+                                }
+                            }
+                            .containerBackground(.clear, for: .navigation)
+                            .toolbar {
+                                ToolbarItem(placement: .topBarLeading) {
+                                    Button(action: back) { Image(systemName: "chevron.left") }
+                                        .accessibilityLabel("Sessions")
+                                }
                             }
                         }
-                        .safeAreaInset(edge: .top, spacing: 0) {
-                            ConnectionBar(store: store, showSettings: $showSettings)
-                        }
+                        // Another session (a subagent, say) replaces this one the same way.
+                        .id(id)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 1.03)),
+                            removal: .opacity.combined(with: .scale(scale: 1.03))))
+                        // Back: a swipe in from the left edge, as with a pushed page.
+                        .simultaneousGesture(DragGesture(minimumDistance: 20).onEnded { drag in
+                            if drag.startLocation.x < 28, drag.translation.width > 70,
+                               abs(drag.translation.height) < drag.translation.width { back() }
+                        })
+                    }
                 }
+                .environment(\.beamStage, true)
+                .background { BeamStage(pose: shown == nil ? .list : .conversation, poses: [.list, .conversation]).ignoresSafeArea() }
             }
         }
         .preferredColorScheme(.dark)
@@ -54,17 +90,23 @@ public struct PhoneRootView: View {
         } message: {
             Text(store.errorMessage ?? "")
         }
-        // The list selects; the stack follows. Going back deselects.
-        .onChange(of: store.selectedId) { _, id in
-            let wanted = id.map { [$0] } ?? []
-            if path != wanted { path = wanted }
-        }
-        .onChange(of: path) { _, now in
-            if now.last != store.selectedId { store.select(now.last) }
+        // The list selects; the screen follows, morphing in step with the beam's move.
+        .onChange(of: store.selectedId, initial: true) { _, id in
+            // Nil while going back is the end of `back()`, already shown.
+            guard id != shown, !(id == nil && shown == nil) else { return }
+            withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { shown = id }
         }
         .onChange(of: store.sessions, initial: true) { _, sessions in activities.sync(sessions, store: store) }
         .onOpenURL { url in open(url) }
         .task { if !store.environments.isEmpty { store.start() } }
+    }
+
+    /// Back to the list: the conversation dissolves first, then the session is let go. Deselecting clears the
+    /// transcript, which would otherwise flash its loading line while it fades.
+    private func back() {
+        withAnimation(.spring(response: 0.6, dampingFraction: 0.9)) { shown = nil } completion: {
+            if shown == nil { store.select(nil) }
+        }
     }
 
     /// `shed://session/<id>`, optionally `?stop=1`: from the Live Activity and notifications.

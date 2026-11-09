@@ -13,6 +13,11 @@ struct SessionSidebar: View {
     @State private var expanded: Set<String> = []
     @State private var renaming: SessionSummary?
     @FocusState private var searching: Bool
+    /// The phone's search: a quiet icon on the title's row until it is tapped.
+    @State private var searchOpen = false
+    #if os(iOS)
+    @Environment(\.beamStage) private var beamStage
+    #endif
     @Namespace private var selection
     /// Off until the first session list has been drawn: the sidebar appears as it is, without its rows sliding in.
     @State private var settled = false
@@ -27,21 +32,29 @@ struct SessionSidebar: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 9) {
-                Button { withAnimation(.easeOut(duration: 0.2)) { store.select(nil) } } label: {
-                    HStack(spacing: 9) {
-                        ShedMark(size: 24)
-                        Text("Shed").font(.system(size: 24, weight: .semibold)).foregroundStyle(Palette.moon)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Home")
                 #if os(iOS)
-                // On the phone search shares the title's row: the list starts higher, under the composer.
-                searchField.padding(.leading, 6)
+                if searchOpen {
+                    // Search takes the title's row while it is open; Cancel gives the row back.
+                    searchField.transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .trailing)))
+                    Button("Cancel") { closeSearch() }
+                        .font(.system(size: 15)).foregroundStyle(Palette.accent)
+                        .transition(.opacity)
+                } else {
+                    homeButton
+                    Spacer()
+                    Button { withAnimation(.easeOut(duration: 0.2)) { searchOpen = true }; searching = true } label: {
+                        Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.7))
+                            .frame(width: Self.control, height: Self.control)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Search sessions")
+                }
                 #else
+                homeButton
                 Spacer()
                 #endif
+                if !searchOpen {
                 if store.sessions.values.contains(where: \.hasSites) { AllSitesButton(store: store) }
                 Button(action: openSettings) {
                     Image(systemName: "network").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.75))
@@ -52,7 +65,9 @@ struct SessionSidebar: View {
                 .buttonStyle(.plain)
                 .keyboardShortcut(",")
                 .help("Computers")
+                }
             }
+            .frame(height: Self.control)
             .padding(.leading, 18).padding(.trailing, 10)
             #if os(macOS)
             // Below the window's traffic lights.
@@ -76,12 +91,6 @@ struct SessionSidebar: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    #if os(iOS)
-                    if let start, query.isEmpty {
-                        HomeComposer(store: store, start: start, compact: true)
-                            .padding(.horizontal, 2).padding(.bottom, 14)
-                    }
-                    #endif
                     if !query.isEmpty {
                         SectionTitle("Results")
                         ForEach(matches) { session in row(session, depth: 0) }
@@ -141,6 +150,25 @@ struct SessionSidebar: View {
                 .animation(settled ? Self.spring : nil, value: layout)
             }
             .scrollIndicators(.never)
+            #if os(iOS)
+            .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // The composer sits under the thumb, above the home indicator; the list fades out behind it.
+                if let start, !searchOpen {
+                    HomeComposer(store: store, start: start, compact: true)
+                        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+                        .background {
+                            LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
+                                                   .init(color: Palette.canvas.opacity(0.7), location: 0.35),
+                                                   .init(color: Palette.canvas.opacity(0.85), location: 1)],
+                                           startPoint: .top, endPoint: .bottom)
+                                .padding(.top, -24)
+                                .ignoresSafeArea(edges: .bottom)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            #endif
             .onAppear { if !store.sessions.isEmpty { settle() } }
             .onChange(of: store.snapshots) { settle() }
             .overlay {
@@ -159,8 +187,9 @@ struct SessionSidebar: View {
             // Solid beside the beam, so the list reads calmly.
             Palette.sidebar.ignoresSafeArea()
             #else
-            // The phone's list is its whole screen: the beam low behind it, soft enough that rows over it still read.
-            Backdrop(beam: 0.7, anchor: UnitPoint(x: 0.2, y: 1.0))
+            // The phone's list is its whole screen: the beam rising behind the composer, soft enough that rows over it
+            // still read. Drawn by the shared stage behind the navigation stack when there is one (`BeamPose.list`).
+            if !beamStage { Backdrop(beam: 0.8, anchor: UnitPoint(x: 0.15, y: 0.86)) }
             #endif
         }
         #if os(macOS)
@@ -182,6 +211,24 @@ struct SessionSidebar: View {
     private static let searchHeight: CGFloat = 32
     private static let searchRadius: CGFloat = 10
     #endif
+
+    private var homeButton: some View {
+        Button { withAnimation(.easeOut(duration: 0.2)) { store.select(nil) } } label: {
+            HStack(spacing: 9) {
+                ShedMark(size: 24)
+                Text("Shed").font(.system(size: 24, weight: .semibold)).foregroundStyle(Palette.moon)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Home")
+    }
+
+    private func closeSearch() {
+        query = ""
+        searching = false
+        withAnimation(.easeOut(duration: 0.2)) { searchOpen = false }
+    }
 
     private var searchField: some View {
         HStack(spacing: 8) {

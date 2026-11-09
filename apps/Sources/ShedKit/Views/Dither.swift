@@ -38,11 +38,17 @@ struct BeamShape: Hashable, Sendable {
     var length: Double = 0.75
     /// Above 1, the yellows, oranges and reds take more of the width.
     var heat: Double = 1
+    /// Above 0, a faint print of dim blue dots over the whole field, densest near the beam and fading out away
+    /// from it: texture behind text, never enough to compete with it.
+    var haze: Double = 0
 
     /// Through the middle of the window, falling left to right, warm side below: the home page.
     static let sweep = BeamShape(angle: 0.5, bend: 0.22, spread: 0.36)
     /// Down the right edge, cool side toward the content, warm side against the edge: behind a conversation.
     static let edge = BeamShape(angle: -1.86, bend: 0.3, spread: 0.15, warm: 0.045, length: 1.4, heat: 1.7)
+    /// Low across the bottom, rising to the right, warm side below, cool light rising behind the composer: a conversation on a phone,
+    /// whose text runs edge to edge and has no margin for `edge`.
+    static let floor = BeamShape(angle: -0.3, bend: 0.35, spread: 0.16, warm: 0.04, length: 1.4, heat: 1.7, haze: 1)
 }
 
 enum Dither {
@@ -175,6 +181,15 @@ enum Dither {
                     let jitter = RGB(r: c.r + (random() - 0.5) * 0.05, g: c.g + (random() - 0.5) * 0.05, b: c.b + (random() - 0.5) * 0.05)
                     let ink = jitter.mix(RGB(r: 1, g: 0.97, b: 0.9), 0.35 * shine) * (1 + 0.12 * shine)
                     lit = gap.mix(ink, dotted)
+                }
+                if lit == nil, spec.shape.haze > 0 {
+                    // The haze: a sparse dim dot here and there, thinning with distance from the beam to almost none.
+                    let far = max(0, -across)
+                    let fade = exp(-far / (spec.shape.spread * 2.2))
+                    let density = spec.shape.haze * (0.1 + 0.45 * fade)
+                    if random() < density {
+                        lit = gap.mix(ramp(0.75), 0.05 + 0.13 * fade)
+                    }
                 }
                 func bytes(_ c: RGB) -> (UInt8, UInt8, UInt8) {
                     (UInt8(min(255, max(0, c.r * 255))), UInt8(min(255, max(0, c.g * 255))), UInt8(min(255, max(0, c.b * 255))))

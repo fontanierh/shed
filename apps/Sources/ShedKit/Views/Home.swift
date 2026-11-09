@@ -66,18 +66,35 @@ struct HomeComposer: View {
             TextField("Ask an agent", text: $message, prompt: Text(compact ? "Ask an agent…" : "Ask an agent to build, fix or explore in a folder"),
                       axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: compact ? 15 : 17))
+                .font(.system(size: compact ? 16 : 17))
                 .foregroundStyle(Palette.moon)
-                .lineLimit(1...6)
+                // Two lines' room on the phone: a place to write, not a search box.
+                .lineLimit(compact ? 2...6 : 1...6)
                 .focused($focused)
                 .onSubmit(send)
                 .padding(.top, compact ? 2 : 4)
 
             HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
+                if compact { chips } else { ScrollView(.horizontal, showsIndicators: false) { chips } }
+                Spacer(minLength: 4)
+                SendButton(enabled: store.connection == .connected, kick: 0, action: send)
+            }
+        }
+        .padding(.horizontal, compact ? 14 : 18).padding(.vertical, compact ? 16 : 18)
+        .card(radius: compact ? 22 : 20, fill: Palette.surface.opacity(0.7), border: focused ? Palette.accent.opacity(0.55) : Palette.border, frost: true)
+        .shadow(color: focused ? Palette.accent.opacity(0.18) : .black.opacity(0.35), radius: 22, y: 8)
+        .animation(.easeOut(duration: 0.18), value: focused)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+    }
+
+    /// The folder, agent and model. On the phone they never scroll or clip: the folder shows its own name and the
+    /// model's name gives way in the middle, so every chip ends in a whole capsule.
+    private var chips: some View {
                     HStack(spacing: compact ? 6 : 8) {
                         // Always there: where the agent works is the first thing to choose.
-                        chip(folder.map { Format.path($0) } ?? "Choose folder", icon: "folder")
+                        chip(folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder", icon: "folder")
+                            .fixedSize()
                         Button { start(message, nil) } label: {
                             HStack(spacing: 6) {
                                 AgentMark(agent: agent, size: 16, glow: false)
@@ -86,20 +103,10 @@ struct HomeComposer: View {
                             .chipStyle(compact: compact)
                         }
                         .buttonStyle(PressStyle())
+                        .fixedSize()
                         chip(modelLabel, icon: "cube", menu: true)
-                        if !thinking.isEmpty { chip(thinking == "xhigh" ? "Max" : thinking.capitalized, icon: "dial.medium", menu: true) }
+                        if !thinking.isEmpty { chip(thinking == "xhigh" ? "Max" : thinking.capitalized, icon: "dial.medium", menu: true).fixedSize() }
                     }
-                }
-                Spacer(minLength: 4)
-                SendButton(enabled: store.connection == .connected, kick: 0, action: send)
-            }
-        }
-        .padding(.horizontal, compact ? 12 : 18).padding(.vertical, compact ? 14 : 18)
-        .card(radius: compact ? 18 : 20, fill: Palette.surface.opacity(0.7), border: focused ? Palette.accent.opacity(0.55) : Palette.border, frost: true)
-        .shadow(color: focused ? Palette.accent.opacity(0.18) : .black.opacity(0.35), radius: 22, y: 8)
-        .animation(.easeOut(duration: 0.18), value: focused)
-        .contentShape(Rectangle())
-        .onTapGesture { focused = true }
     }
 
     private var modelLabel: String {
@@ -112,7 +119,7 @@ struct HomeComposer: View {
         Button { start(message, nil) } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
-                Text(text).lineLimit(1)
+                Text(text).lineLimit(1).truncationMode(.middle)
                 // No chevron on the phone: every chip opens the same sheet anyway, and the row has to fit.
                 if menu, !compact { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary) }
             }

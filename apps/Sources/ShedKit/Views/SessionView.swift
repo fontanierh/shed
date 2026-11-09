@@ -61,6 +61,21 @@ struct SessionView: View {
 
     private var hasJobs: Bool { session.hasBackgroundCommands }
 
+    /// A phone in portrait: the text runs edge to edge.
+    private var narrow: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.beamStage) private var beamStage
+    #else
+    private let beamStage = false
+    #endif
+
     var body: some View {
         VStack(spacing: 0) {
             #if os(macOS)
@@ -78,8 +93,11 @@ struct SessionView: View {
                 loadEarlier: { await store.loadEarlier() }
             )
             .equatable()
-            // Each session opens at its end, following new output.
-            .id(session.id)
+            // Each session opens at its end, following new output. The conversation arriving replaces the waiting
+            // line with a cross-fade, not a cut.
+            .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
+            .transition(.opacity)
+            .animation(.easeOut(duration: 0.35), value: store.transcriptLoaded)
             .fillsProposal()
             #if os(iOS)
             // Reading, not typing: a tap or a drag on the conversation puts the keyboard away. Simultaneous, so the
@@ -122,9 +140,11 @@ struct SessionView: View {
                     // The transcript slides under the composer: a fade into the field's own dark, so no row shows
                     // through between the bar and its chips, and no hard band either. A plain gradient, not a mask
                     // or a blur, so scrolling under it costs nothing.
+                    // On a phone it thins out again below the chips, where the beam lies along the bottom edge.
                     LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
                                            .init(color: Palette.canvas.opacity(0.94), location: 0.3),
-                                           .init(color: Palette.canvas.opacity(0.97), location: 1)],
+                                           .init(color: Palette.canvas.opacity(0.97), location: narrow ? 0.62 : 1),
+                                           .init(color: Palette.canvas.opacity(narrow ? 0.2 : 0.97), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                         .padding(.top, -28)
                         // Only under the column, its sides fading out, so the beam beside it stays lit.
@@ -140,8 +160,16 @@ struct SessionView: View {
         }
         .background {
             // One plain dark field behind the whole session, and the beam running
-            // down the right edge, beside the text rather than under it.
-            Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
+            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
+            // there the beam lies along the bottom, under the composer, where no text runs.
+            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
+            if beamStage {
+                Color.clear
+            } else if narrow {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+            } else {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
+            }
         }
         .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
         #if os(macOS)
