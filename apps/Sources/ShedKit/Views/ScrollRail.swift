@@ -28,6 +28,10 @@ struct ScrollRail: View {
     @State private var hovering = false
     @State private var dragging = false
     @State private var dragStart: CGFloat = 0
+    /// When the transcript last moved: not state, so a scroll doesn't run the rail's body twice a frame.
+    @State private var lastMove = LastMove()
+
+    private final class LastMove { var at = Date.distantPast }
 
     private var active: Bool { awake || hovering || dragging }
 
@@ -51,9 +55,9 @@ struct ScrollRail: View {
                     .frame(width: hovering || dragging ? 5 : 3, height: thumb)
                     .overlay {
                         Circle()
-                            .fill(Palette.amber)
+                            .fill(Palette.accent)
                             .frame(width: 4, height: 4)
-                            .shadow(color: Palette.amber.opacity(0.9), radius: 4)
+                            .shadow(color: Palette.accent.opacity(0.9), radius: 4)
                             .opacity(active ? 1 : 0)
                     }
                     .shadow(color: Palette.ice.opacity(active ? 0.55 : 0), radius: 6)
@@ -79,11 +83,20 @@ struct ScrollRail: View {
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: hovering || dragging)
         }
         .frame(width: 14)
-        .task(id: metrics.moved) {
-            guard metrics.moved > 0 else { return }
+        // Awake while scrolling, resting 1.2 s after the last move: one waiting task per scroll, not one per frame.
+        .onChange(of: metrics.moved) { _, moved in
+            guard moved > 0 else { return }
+            lastMove.at = .now
+            guard !awake else { return }
             awake = true
-            try? await Task.sleep(for: .seconds(1.2))
-            if !Task.isCancelled { awake = false }
+            Task { @MainActor in
+                while true {
+                    let left = lastMove.at.addingTimeInterval(1.2).timeIntervalSinceNow
+                    if left <= 0 { break }
+                    try? await Task.sleep(for: .seconds(left))
+                }
+                awake = false
+            }
         }
     }
 }

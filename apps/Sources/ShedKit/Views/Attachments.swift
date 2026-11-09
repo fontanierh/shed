@@ -106,7 +106,7 @@ struct AttachmentStrip: View {
                             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.danger)
                         } else {
                             Image(systemName: MediaKind(URL(fileURLWithPath: attachment.name)) == .image ? "photo" : "doc")
-                                .foregroundStyle(Palette.amber.opacity(0.9))
+                                .foregroundStyle(Palette.accent.opacity(0.9))
                         }
                         Text(attachment.name).lineLimit(1).truncationMode(.middle).frame(maxWidth: 180)
                         Button { remove(attachment) } label: {

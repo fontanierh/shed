@@ -417,7 +417,7 @@ struct MediaAudio: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Palette.sunken)
                     .frame(width: 34, height: 34)
-                    .background(Circle().fill(Palette.amber))
+                    .background(Circle().fill(Palette.accent))
                     .glow(radius: 8, on: playing)
                     .contentTransition(.symbolEffect(.replace))
             }
@@ -439,7 +439,7 @@ struct MediaAudio: View {
                     let fraction = duration > 0 ? min(time / duration, 1) : 0
                     ZStack(alignment: .leading) {
                         Capsule().fill(Palette.rail.opacity(0.6))
-                        Capsule().fill(LinearGradient(colors: [Palette.ember, Palette.amber], startPoint: .leading, endPoint: .trailing))
+                        Capsule().fill(LinearGradient(colors: [Palette.accentDeep, Palette.accent], startPoint: .leading, endPoint: .trailing))
                             .frame(width: max(4, proxy.size.width * fraction))
                     }
                     .frame(height: 4)

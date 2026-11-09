@@ -1,0 +1,7 @@
+UI component reference sheet for the COMPOSER area of "Shed" (macOS app for AI coding agents), with captions, on the dithered background.
+1) Idle composer: wide glass card (radius 18): placeholder "Message Pi…  ( / for commands )", bottom row: paperclip, image attachment chip "screenshot.png ×", spacer, model pill "GPT-5.5", reasoning pill "High", mic icon, white circular send button.
+2) Composer while the agent works: same card, send button becomes a stop button (glass circle, filled white square, a thin blue ring spinning around it); above the card a "Queued" stack of two small glass chips: "Steer: use the existing timer" and "Next: run the tests", each with an × to remove.
+3) "Agent asks" question card docked above the composer: orange hairline border and small orange dot, header "Pi asks", question "Which branch should I base the fix on?", three option buttons as glass rows with radio circles: "main", "fix/stream-timer (recommended)", "Something else…", and buttons "Skip" (quiet) and "Answer" (blue).
+4) Goal banner: slim glass strip with a target icon: "Goal: make streaming smooth on iPhone" and an × "Clear goal".
+5) Slash command popup: dark glass list above the composer: "/compact  Summarize the conversation", "/new  Start fresh in this folder", "/model  Switch model".
+6) Drag-and-drop state: the composer with a dashed blue border and "Drop files to attach".

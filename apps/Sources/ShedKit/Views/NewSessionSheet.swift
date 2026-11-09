@@ -3,6 +3,11 @@ import SwiftUI
 
 struct NewSessionSheet: View {
     let store: SessionStore
+    /// What to send once the session starts, from the home page's composer.
+    var initialMessage = ""
+    /// A folder to start in instead of the last one, from the home page.
+    var initialFolder: String? = nil
+    @State private var message = ""
     @Environment(\.dismiss) private var dismiss
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
     @AppStorage("newSession.environment") private var chosenEnv = ""
@@ -64,13 +69,15 @@ struct NewSessionSheet: View {
 
     @ViewBuilder private var environmentPicker: some View {
         if store.environments.count > 1 {
+            #if os(macOS)
+            GlassSegments(options: store.environments.map { ($0.id, $0.name) },
+                          selection: Binding(get: { env }, set: { chosenEnv = $0 }))
+                .fixedSize()
+            #else
             Picker("Computer", selection: Binding(get: { env }, set: { chosenEnv = $0 })) {
                 ForEach(store.environments) { e in Text(e.name).tag(e.id) }
             }
             .labelsHidden()
-            #if os(macOS)
-            .pickerStyle(.segmented)
-            .fixedSize()
             #endif
         }
     }
@@ -150,7 +157,12 @@ struct NewSessionSheet: View {
             mac
             #endif
         }
-        .onAppear { restoreFolder(); fitModel() }
+        .onAppear {
+            restoreFolder()
+            if let initialFolder { cwd = initialFolder }
+            if message.isEmpty { message = initialMessage }
+            fitModel()
+        }
         .onChange(of: env) { restoreFolder() }
         .onChange(of: agent) { fitModel() }
         .task(id: "\(env) \(agent.rawValue)") { await loadModels(); fitModel() }
@@ -172,9 +184,9 @@ struct NewSessionSheet: View {
     private var mac: some View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
-                Sprout(size: 34)
+                ShedMark(size: 34)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("New session").font(.system(size: 26, design: .serif)).foregroundStyle(Palette.moon)
+                    Text("New session").font(.system(size: 24, weight: .semibold)).foregroundStyle(Palette.moon)
                     Text(store.environments.count > 1 ? "Choose a computer, an agent and a folder to work in." : "Choose an agent and a folder to work in.")
                         .font(.system(size: 13.5)).foregroundStyle(.secondary)
                 }
@@ -204,6 +216,8 @@ struct NewSessionSheet: View {
                     section("Model") { modelField(height: 32) }
                     section("Reasoning effort") { effortPicker }
                 }
+
+                section("First message", note: "Optional") { messageField }
             }
             .padding(.horizontal, 32)
             .padding(.bottom, 24)
@@ -228,20 +242,14 @@ struct NewSessionSheet: View {
                 Button(action: start) {
                     Label(creating ? "Starting…" : "Start session", systemImage: "arrow.up")
                 }
-                .buttonStyle(AmberButton())
+                .buttonStyle(PrimaryButton())
                 .keyboardShortcut(.defaultAction)
                 .disabled(cwd.isEmpty || creating)
             }
             .padding(.horizontal, 32).padding(.vertical, 16)
         }
         .frame(width: 920)
-        .background {
-            ZStack(alignment: .bottomLeading) {
-                Velvet(base: Palette.sidebar)
-                Sprig().fill(Palette.ice.opacity(0.06)).frame(width: 130, height: 200).offset(x: -10, y: -40)
-                Fireflies(count: 6, warm: 0.4, seed: 21)
-            }
-        }
+        .background { Backdrop(beam: 0.4, base: Palette.sidebar, anchor: UnitPoint(x: 0.2, y: 0.95)) }
         .disabled(creating)
     }
 
@@ -284,14 +292,19 @@ struct NewSessionSheet: View {
         .card(radius: 10, fill: Palette.sunken)
     }
 
+    /// What the agent gets as soon as it starts; empty starts it waiting.
+    private var messageField: some View {
+        TextField("First message", text: $message, prompt: Text("What should \(agent.displayName) do?"), axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(2...6)
+            .font(.system(size: 14))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .card(radius: 12, fill: Palette.sunken)
+    }
+
     private var effortPicker: some View {
-        Picker("Effort", selection: $thinking) {
-            Text("Default").tag("")
-            ForEach(["low", "medium", "high", "xhigh"], id: \.self) { Text($0 == "xhigh" ? "Max" : $0.capitalized).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .controlSize(.large)
+        GlassSegments(options: [("", "Default")] + ["low", "medium", "high", "xhigh"].map { ($0, $0 == "xhigh" ? "Max" : $0.capitalized) },
+                      selection: $thinking, height: 32)
     }
 
     #if os(iOS)
@@ -340,13 +353,14 @@ struct NewSessionSheet: View {
 
                     section("Model") { modelField(height: 44) }
                     section("Reasoning effort") { effortPicker }
+                    section("First message") { messageField }
                     startErrorBanner
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
             .scrollDismissesKeyboard(.interactively)
-            .background { ZStack { Velvet(base: Palette.sidebar); Fireflies(count: 5, warm: 0.4, seed: 21) }.ignoresSafeArea() }
+            .background { Backdrop(beam: 0.4, base: Palette.sidebar, anchor: UnitPoint(x: 0.1, y: 0.98)) }
             .navigationTitle("New session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -380,11 +394,12 @@ struct NewSessionSheet: View {
         let folder = cwd
         let chosenModel = model
         let env = env
+        let message = message
         startError = nil
         Task {
             do {
                 try await store.createSession(in: env, agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
-                                              firstMessage: "")
+                                              firstMessage: message.trimmingCharacters(in: .whitespacesAndNewlines))
                 creating = false
                 func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
                 let others = folders(recentFolders).filter { $0.env != env }
@@ -409,7 +424,7 @@ struct NewSessionSheet: View {
     }
 }
 
-/// An agent to pick: its spirit, what it is, and a lantern glow when chosen. The chosen spirit hops.
+/// An agent to pick: its mark, what it is, and a blue edge and glow when chosen. The chosen mark hops.
 struct AgentCard: View {
     let kind: AgentKind
     let selected: Bool
@@ -421,7 +436,7 @@ struct AgentCard: View {
     var body: some View {
         Button(action: action) {
             HStack(alignment: .center, spacing: 16) {
-                Spirit(color: Palette.agent(kind), size: 52)
+                AgentMark(agent: kind, size: 44)
                     .offset(y: hop ? -8 : 0)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(kind == .prime ? "Prime Agent" : kind.displayName).font(.system(size: 16, weight: .medium)).foregroundStyle(Palette.moon)
@@ -429,15 +444,15 @@ struct AgentCard: View {
                 }
                 Spacer(minLength: 0)
                 Circle()
-                    .fill(selected ? Palette.amber : Palette.rail)
+                    .fill(selected ? Palette.accent : Palette.rail)
                     .frame(width: 10, height: 10)
-                    .shadow(color: selected ? Palette.amber : .clear, radius: 5)
+                    .shadow(color: selected ? Palette.accent : .clear, radius: 5)
                     .frame(maxHeight: .infinity, alignment: .top)
             }
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .card(radius: 16, fill: selected ? Palette.raised : Palette.surface.opacity(hovering ? 0.95 : 0.75),
-                  border: selected ? Palette.amber.opacity(0.75) : Palette.border)
+                  border: selected ? Palette.accent.opacity(0.75) : Palette.border)
             .glow(radius: 14, on: selected)
             .scaleEffect(selected ? 1 : 0.985)
             .opacity(selected ? 1 : 0.8)
@@ -610,13 +625,13 @@ struct FolderBrowser: View {
             selection = path
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(current ? Palette.amber : Palette.ice).frame(width: 16)
+                Image(systemName: icon).font(.system(size: 11)).foregroundStyle(current ? Palette.accent : Palette.ice).frame(width: 16)
                 Text(name).font(.system(size: 12.5)).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8).frame(height: 26)
-            .background(current ? Palette.amber.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(current ? Palette.amber.opacity(0.45) : .clear))
+            .background(current ? Palette.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(current ? Palette.accent.opacity(0.45) : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -691,7 +706,7 @@ struct FolderBrowser: View {
         HStack(spacing: 10) {
             Image(systemName: "folder.fill")
                 .font(.system(size: 13))
-                .foregroundStyle(LinearGradient(colors: [Palette.ice, Palette.periwinkle], startPoint: .top, endPoint: .bottom))
+                .foregroundStyle(LinearGradient(colors: [Palette.ice, Palette.accent], startPoint: .top, endPoint: .bottom))
                 .frame(width: 18)
             Text(entry.name).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
             if entry.git {
@@ -764,7 +779,7 @@ struct PhoneFolderPicker: View {
                 Section {
                     Button { selection = listing.path; dismiss() } label: {
                         Label("Use \(listing.path == listing.home ? "home folder" : "“\((listing.path as NSString).lastPathComponent)”")", systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(Palette.amber)
+                            .foregroundStyle(Palette.accent)
                     }
                     if let parent = listing.parent {
                         Button { load(parent) } label: { Label("Enclosing folder", systemImage: "arrow.up") }
@@ -830,7 +845,7 @@ struct PhoneFolderPicker: View {
     private func row(_ entry: DirListing.Entry) -> some View {
         HStack(spacing: 12) {
             Image(systemName: "folder.fill")
-                .foregroundStyle(LinearGradient(colors: [Palette.ice, Palette.periwinkle], startPoint: .top, endPoint: .bottom))
+                .foregroundStyle(LinearGradient(colors: [Palette.ice, Palette.accent], startPoint: .top, endPoint: .bottom))
             Text(entry.name).foregroundStyle(Palette.moon).lineLimit(1).truncationMode(.middle)
             if entry.git {
                 HStack(spacing: 3) {

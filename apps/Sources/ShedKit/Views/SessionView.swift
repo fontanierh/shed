@@ -18,13 +18,13 @@ struct SessionView: View {
         var lines: [IdleLine] = []
         // One short line each, naming the thing when there is one; the list is a tap away.
         if let waiting = session.activityText() {
-            lines.append(IdleLine(id: "jobs", text: waiting.sentenceCased, systemImage: "apple.terminal", tint: Palette.amber, action: openJobs))
+            lines.append(IdleLine(id: "jobs", text: waiting.sentenceCased, systemImage: "apple.terminal", tint: Palette.accent, action: openJobs))
         }
         let total = store.activeDescendants(of: session.id)
         if total > 0 {
             let working = store.children(of: session.id).filter(\.isActive)
             let what = total == 1 && working.count == 1 ? "subagent " + (working[0].name ?? "") : "\(total) subagents"
-            lines.append(IdleLine(id: "subagents", text: "Waiting on " + what, systemImage: "person.2", tint: Palette.amber, action: openSubagents))
+            lines.append(IdleLine(id: "subagents", text: "Waiting on " + what, systemImage: "person.2", tint: Palette.accent, action: openSubagents))
         }
         // Said quietly, but said: an agent that claims to be waiting while nothing runs is stuck, not busy.
         if lines.isEmpty {
@@ -61,15 +61,40 @@ struct SessionView: View {
 
     private var hasJobs: Bool { session.hasBackgroundCommands }
 
+    /// Connected and waiting for the conversation: the phone's dither rain plays.
+    private var raining: Bool { beamStage && !reduceMotion && store.connection == .connected && !store.transcriptLoaded }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// A phone in portrait: the text runs edge to edge.
+    private var narrow: Bool {
+        #if os(iOS)
+        sizeClass == .compact
+        #else
+        false
+        #endif
+    }
+    /// The conversation kept out of sight while it materialises.
+    @State private var veiled = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.beamStage) private var beamStage
+    #else
+    private let beamStage = false
+    #endif
+
     var body: some View {
         VStack(spacing: 0) {
             #if os(macOS)
             SessionHeader(store: store, session: session) { renaming = session }
             #endif
+            // The transcript and, on the phone, the dither it materialises out of: a sibling, so the transcript
+            // changing identity as it arrives doesn't start the effect over.
+            ZStack {
             TranscriptView(
                 items: store.transcript,
                 session: session,
-                pending: pendingTranscript,
+                // The rain says it is loading; the line stays for a connection that isn't there.
+                pending: raining ? "" : pendingTranscript,
                 idle: idleLines,
                 openChild: { name in store.child(of: session.id, named: name).map { store.select($0.id) } },
                 openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
@@ -78,13 +103,44 @@ struct SessionView: View {
                 loadEarlier: { await store.loadEarlier() }
             )
             .equatable()
-            // Each session opens at its end, following new output.
-            .id(session.id)
+            .opacity(veiled ? 0 : 1)
+            // Each session opens at its end, following new output. The conversation arriving replaces the waiting
+            // line with a cross-fade, not a cut.
+            .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
+            // On the phone the rain brings it in; a fade as well would leave it faint when the rain reads it.
+            .transition(beamStage ? .identity : .opacity)
+            // On the phone nothing animates as it arrives: the rain prints it, and an animation there laid the whole
+            // conversation out again under it.
+            .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
+            // On the phone the conversation materialises out of the beam's dither instead of a loading line.
+            if beamStage {
+                Materialize(loading: raining, veiled: $veiled)
+                // The phone's own fade under the navigation bar, in place of the system's soft edge: dark under the
+                // bar, easing out over a line's height below it.
+                GeometryReader { geometry in
+                    let top = geometry.safeAreaInsets.top, fade: CGFloat = 26
+                    LinearGradient(stops: [.init(color: Palette.canvas.opacity(0.94), location: 0),
+                                           .init(color: Palette.canvas.opacity(0.84), location: top / (top + fade)),
+                                           .init(color: Palette.canvas.opacity(0), location: 1)],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: top + fade)
+                        .ignoresSafeArea(edges: .top)
+                }
+                .allowsHitTesting(false)
+            }
+            }
             .fillsProposal()
+            // On the phone the conversation stops at the composer rather than running on under it and the beam below:
+            // off the edge by a hair, so the scroll view doesn't stretch into the composer's inset. The composer's
+            // soft pool covers where it ends.
+            .padding(.bottom, beamStage ? 1 : 0)
             #if os(iOS)
             // Reading, not typing: a tap or a drag on the conversation puts the keyboard away. Simultaneous, so the
             // blocks' own buttons still work.
             .scrollDismissesKeyboard(.interactively)
+            // A plain rectangle: otherwise each touch first works out the shape of everything in the conversation to
+            // see whether it lands on this gesture, which held the start of a scroll.
+            .contentShape(.interaction, Rectangle())
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
@@ -118,19 +174,55 @@ struct SessionView: View {
                 .padding(.horizontal, Layout.gutter)
                 .padding(.bottom, 14)
                 .padding(.top, 4)
-                .frame(maxWidth: .infinity)
                 .background {
-                    // Fade the transcript out under the composer.
-                    LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0), .init(color: Palette.canvas.opacity(0.92), location: 0.35)],
+                    if narrow {
+                        // On a phone: a soft, rounded pool of dark under the bar and its chips, its edges blurred
+                        // away into the beam on every side, so no line or corner shows. Rasterised once, so scrolling
+                        // under it costs nothing.
+                        RoundedRectangle(cornerRadius: 30, style: .continuous)
+                            .fill(Palette.canvas.opacity(0.9))
+                            .padding(.horizontal, 6)
+                            .padding(.top, -16)
+                            .padding(.bottom, 6)
+                            // Room around it for the blur, so its edges aren't cut off.
+                            .padding(40)
+                            .blur(radius: 16)
+                            .drawingGroup()
+                            .padding(-40)
+                            .allowsHitTesting(false)
+                    } else {
+                    // The transcript slides under the composer: a fade into the field's own dark, so no row shows
+                    // through between the bar and its chips, and no hard band either. A plain gradient, not a mask
+                    // or a blur, so scrolling under it costs nothing.
+                    LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
+                                           .init(color: Palette.canvas.opacity(0.94), location: 0.3),
+                                           .init(color: Palette.canvas.opacity(0.97), location: narrow ? 0.62 : 1),
+                                           .init(color: Palette.canvas.opacity(narrow ? 0.2 : 0.97), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
+                        .padding(.top, -28)
+                        // Only under the column, its sides fading out, so the beam beside it stays lit.
+                        .padding(.horizontal, -90)
+                        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.16),
+                                                     .init(color: .black, location: 0.84), .init(color: .clear, location: 1)],
+                                             startPoint: .leading, endPoint: .trailing))
                         .ignoresSafeArea(edges: .bottom)
+                        .allowsHitTesting(false)
+                    }
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .background {
-            ZStack {
-                Velvet()
-                Fireflies(count: 6, warm: 0.4, seed: UInt64(abs(session.id.hashValue % 997)) + 1, clear: Layout.column + 2 * Layout.gutter)
+            // One plain dark field behind the whole session, and the beam running
+            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
+            // there the beam lies along the bottom, under the composer, where no text runs.
+            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
+            if beamStage {
+                Color.clear
+            } else if narrow {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+            } else {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
             }
         }
         .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
@@ -141,7 +233,7 @@ struct SessionView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
                                                   showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
-        .modifier(SoftTopEdge())
+        .modifier(SoftTopEdge(off: beamStage))
         .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         .sheet(isPresented: $showingSites) {
@@ -177,11 +269,15 @@ struct SessionView: View {
 #if os(iOS)
 /// The conversation fades out under the navigation bar rather than meeting a hard-edged bar.
 private struct SoftTopEdge: ViewModifier {
+    /// Off on the phone, which draws a plain fade instead: the system's soft edge blurs what's under the bar again on
+    /// every frame of a scroll, and draws it apart from the conversation, so it can't come in with the rain.
+    var off = false
     func body(content: Content) -> some View {
         if #available(iOS 26, *) {
             content
                 .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
                 .scrollEdgeEffectStyle(.soft, for: .top)
+                .scrollEdgeEffectHidden(off, for: .top)
         } else {
             content.toolbarBackground(Palette.surface.opacity(0.85), for: .navigationBar)
         }
@@ -247,10 +343,10 @@ struct PhoneSessionToolbar: ToolbarContent {
     @ViewBuilder private var stop: some View {
         if session.status.isBusy, !session.readOnly {
             Button { store.abort() } label: {
-                Image(systemName: "stop.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.amber)
+                Image(systemName: "stop.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.accent)
                     .frame(width: 32, height: 32)
-                    .background(Palette.amber.opacity(0.14), in: Circle())
-                    .overlay(Circle().strokeBorder(Palette.amber.opacity(0.5)))
+                    .background(Palette.accent.opacity(0.14), in: Circle())
+                    .overlay(Circle().strokeBorder(Palette.accent.opacity(0.5)))
                     .contentShape(Circle())
             }
             .buttonStyle(PressStyle())
@@ -267,7 +363,7 @@ struct PhoneSessionToolbar: ToolbarContent {
                 Text("\(session.backgroundJobs)").font(.system(size: 13, weight: .semibold).monospacedDigit())
                     .contentTransition(.numericText())
             }
-            .foregroundStyle(Palette.amber)
+            .foregroundStyle(Palette.accent)
             .padding(.horizontal, 4)
             .frame(height: 32)
             .contentShape(Rectangle())
@@ -337,7 +433,7 @@ struct PhoneSessionToolbar: ToolbarContent {
     }
 }
 
-/// The subagents as a few overlapping spirits and how many are working. Opens the full list.
+/// The subagents as a few overlapping marks and how many are working. Opens the full list.
 struct PhoneSubagentsButton: View {
     let store: SessionStore
     let children: [SessionSummary]
@@ -349,13 +445,13 @@ struct PhoneSubagentsButton: View {
             HStack(spacing: 6) {
                 HStack(spacing: -7) {
                     ForEach(children.suffix(3)) { child in
-                        Spirit(color: Palette.avatar(child.name ?? "s"), size: 18, working: child.status.isBusy)
+                        AgentMark(name: child.name ?? "s", size: 18, working: child.status.isBusy)
                             .overlay(Circle().strokeBorder(Palette.canvas, lineWidth: 1.5))
                     }
                 }
                 Text(active > 0 ? "\(active)/\(children.count)" : "\(children.count)")
                     .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(active > 0 ? Palette.amber : Palette.moon.opacity(0.7))
+                    .foregroundStyle(active > 0 ? Palette.accent : Palette.moon.opacity(0.7))
                     .contentTransition(.numericText())
                     .lineLimit(1)
                     .fixedSize()
@@ -396,7 +492,7 @@ struct PhoneSubagentList: View {
             }
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
-            .background(Velvet(base: Palette.sidebar).ignoresSafeArea())
+            .background(Palette.sidebar.ignoresSafeArea())
             .animation(.spring(response: 0.4, dampingFraction: 0.85), value: working.map(\.id))
             .navigationTitle("Subagents")
             .navigationBarTitleDisplayMode(.inline)
@@ -414,7 +510,7 @@ struct PhoneSubagentList: View {
             store.select(child.id)
         } label: {
             HStack(spacing: 12) {
-                Spirit(color: Palette.avatar(child.name ?? "s"), size: 30, working: child.status.isBusy)
+                AgentMark(name: child.name ?? "s", size: 30, working: child.status.isBusy)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(child.name ?? "Subagent").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
                         .lineLimit(1)
@@ -428,7 +524,7 @@ struct PhoneSubagentList: View {
                 VStack(alignment: .trailing, spacing: 3) {
                     Text(child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized)
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(child.isActive ? Palette.amber : child.status == .error ? Palette.danger : Palette.moon.opacity(0.5))
+                        .foregroundStyle(child.isActive ? Palette.accent : child.status == .error ? Palette.danger : Palette.moon.opacity(0.5))
                     if child.cost > 0 {
                         Text(child.cost.formatted(.currency(code: "USD").precision(.fractionLength(2))))
                             .font(.system(size: 12).monospacedDigit()).foregroundStyle(.tertiary)
@@ -450,18 +546,18 @@ struct ModelTag: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "cube.transparent").font(.system(size: size - 1.5, weight: .semibold)).foregroundStyle(Palette.amber.opacity(0.9))
+            Image(systemName: "cube.transparent").font(.system(size: size - 1.5, weight: .semibold)).foregroundStyle(Palette.accent.opacity(0.9))
             Text(model.name).font(.system(size: size, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.85)).lineLimit(1)
         }
         .padding(.horizontal, 6).padding(.vertical, 2)
-        .background(Palette.amber.opacity(0.1), in: Capsule())
-        .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.25)))
+        .background(Palette.accent.opacity(0.1), in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.25)))
         .fixedSize()
         .accessibilityLabel("Model \(model.name)")
     }
 }
 
-/// The subagents as overlapping spirits and a count; the menu lists each with its status and opens it.
+/// The subagents as overlapping marks and a count; the menu lists each with its status and opens it.
 struct SubagentMenu: View {
     let store: SessionStore
     let children: [SessionSummary]
@@ -482,14 +578,14 @@ struct SubagentMenu: View {
             HStack(spacing: 7) {
                 HStack(spacing: -6) {
                     ForEach(children.prefix(4)) { child in
-                        Spirit(color: Palette.avatar(child.name ?? "s"), size: 20, working: child.status.isBusy)
+                        AgentMark(name: child.name ?? "s", size: 20, working: child.status.isBusy)
                             .overlay(Circle().strokeBorder(Palette.surface, lineWidth: 1.5))
                             .transition(.scale(scale: 0.4).combined(with: .opacity))
                     }
                 }
                 Text(active > 0 ? "\(active)/\(children.count) working" : children.count == 1 ? "1 subagent" : "\(children.count) subagents")
                     .font(.system(size: 12.5))
-                    .foregroundStyle(active > 0 ? AnyShapeStyle(Palette.amber) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(active > 0 ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.secondary))
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
@@ -510,6 +606,8 @@ struct SessionHeader: View {
     let session: SessionSummary
     let rename: () -> Void
     @State private var restartingKernel = false
+    /// The branch of the repository the session works in, from its computer's `git`.
+    @State private var branch: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -530,7 +628,7 @@ struct SessionHeader: View {
                         .buttonStyle(.plain)
                         .help("Open the parent session")
                     }
-                    if session.isSubagent { Spirit(color: Palette.avatar(session.name ?? "s"), size: 22, working: session.status.isBusy) }
+                    if session.isSubagent { AgentMark(name: session.name ?? "s", size: 22, working: session.status.isBusy) }
                     Text(session.isSubagent ? (session.name ?? "Subagent") : session.title)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Palette.moon)
@@ -542,13 +640,16 @@ struct SessionHeader: View {
                 StatusLabel(session: session, activeSubagents: 0)
                     .fixedSize()
                 // The folder, not the whole path: the path is in its tooltip and the … menu.
-                Label(session.folderName, systemImage: "folder")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .help(session.cwd)
-                    .contextMenu { Button("Copy Path") { Clipboard.copy(session.cwd) } }
-                    .layoutPriority(-1)
+                HStack(spacing: 6) {
+                    Label(session.folderName, systemImage: "folder")
+                        .lineLimit(1)
+                    if let branch { BranchChip(branch: branch).transition(.opacity) }
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .help(session.cwd)
+                .contextMenu { Button("Copy Path") { Clipboard.copy(session.cwd) } }
+                .layoutPriority(-1)
             }
 
             Spacer(minLength: 8)
@@ -600,6 +701,11 @@ struct SessionHeader: View {
             }
         }
         .confirmRestartKernel($restartingKernel) { store.restartKernel() }
+        .task(id: session.cwd) {
+            guard let env = store.environment(of: session.id)?.id,
+                  let overview = try? await store.gitOverview(in: env, folders: [session.cwd]) else { return }
+            withAnimation(.easeOut(duration: 0.2)) { branch = overview.repo(containing: session.cwd)?.branch }
+        }
         .padding(.leading, 20)
         .padding(.trailing, 12)
         .frame(height: 52)
@@ -608,12 +714,14 @@ struct SessionHeader: View {
         .background { WindowDragArea().ignoresSafeArea(edges: .top) }
         #endif
         .background {
-            LinearGradient(colors: [Palette.surface.opacity(0.9), Palette.surface.opacity(0.75)], startPoint: .top, endPoint: .bottom)
+            // Glass over the beam: frosted, darkened, a hairline under it.
+            Rectangle().fill(.ultraThinMaterial)
+                .overlay(Palette.canvas.opacity(0.55))
                 .overlay(alignment: .bottom) {
-                    LinearGradient(colors: [Palette.border.opacity(0.2), Palette.rail.opacity(0.9), Palette.border.opacity(0.2)], startPoint: .leading, endPoint: .trailing)
+                    LinearGradient(colors: [Palette.border.opacity(0), Palette.border.mix(with: .white, by: 0.15, in: .perceptual), Palette.border.opacity(0)],
+                                   startPoint: .leading, endPoint: .trailing)
                         .frame(height: 1)
                 }
-                .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
                 .ignoresSafeArea(edges: .top)
         }
     }
@@ -628,7 +736,7 @@ struct StatusLabel: View {
             ActivityIcon(session: session)
             Text(text)
                 .font(.system(size: 12.5))
-                .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.amber) : AnyShapeStyle(.secondary))
+                .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.secondary))
                 .shimmer(session.status.isBusy)
                 .contentTransition(.opacity)
         }
@@ -645,16 +753,16 @@ struct StatusLabel: View {
     }
 }
 
-/// A ring with the share of the context window in use: moonlight, warming to amber, then red near the limit.
+/// A ring with the share of the context window in use: blue, turning orange, then red near the limit.
 struct ContextGauge: View {
     let context: ContextUsage
 
     var body: some View {
         let fraction = min(1, max(0, (context.percent ?? 0) / 100))
-        let tint: Color = fraction > 0.9 ? Palette.danger : fraction > 0.7 ? Palette.amber : Palette.ice
+        let tint: Color = fraction > 0.9 ? Palette.danger : fraction > 0.7 ? Palette.attention : Palette.accent
         HStack(spacing: 7) {
             ZStack {
-                Circle().stroke(Palette.border, lineWidth: 2.5)
+                Circle().stroke(Palette.rail, lineWidth: 2.5)
                 Circle().trim(from: 0, to: fraction)
                     .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
                     .rotationEffect(.degrees(-90))
@@ -722,7 +830,7 @@ struct ModelPicker: View {
             }
         }
         .frame(width: 360, height: 420)
-        .background(Velvet(base: Palette.surface))
+        .background(Palette.sidebar)
         .onAppear { if let current { open.insert(current.groupLabel) } }
         .task { await store.loadModels() }
     }
@@ -740,11 +848,11 @@ struct ModelPicker: View {
                     Text(ContextWindowMenu.short(window)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
                 }
                 if model.reasoning { Image(systemName: "brain").foregroundStyle(.tertiary).help("Reasoning") }
-                if selected { Image(systemName: "checkmark").foregroundStyle(Palette.amber) }
+                if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
             }
             .padding(.leading, 28).padding(.trailing, 10).padding(.vertical, 6)
-            .background(selected ? Palette.amber.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Palette.amber.opacity(0.45) : .clear))
+            .background(selected ? Palette.accent.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 9))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(selected ? Palette.accent.opacity(0.45) : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -773,16 +881,16 @@ struct StuckBanner: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.amber).padding(.top, 2)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.attention).padding(.top, 2)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(stuck.isToolCall ? "This tool call looks stuck" : "A background command looks stuck")
                         .font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.moon)
                     if let probability = stuck.probability {
                         Text("\(Int((probability * 100).rounded()))% sure")
-                            .font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(Palette.amber)
+                            .font(.caption2.weight(.medium).monospacedDigit()).foregroundStyle(Palette.attention)
                             .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Palette.amber.opacity(0.14), in: Capsule())
+                            .background(Palette.attention.opacity(0.14), in: Capsule())
                             .help("How likely the stall check judged it stuck")
                     }
                 }
@@ -796,10 +904,10 @@ struct StuckBanner: View {
                 Button { confirming = true } label: {
                     Text(stuck.isToolCall ? "Stop" : "Cancel")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Palette.amber)
+                        .foregroundStyle(Palette.attention)
                         .padding(.horizontal, 12).frame(height: 28)
-                        .background(Palette.amber.opacity(0.14), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                        .background(Palette.attention.opacity(0.14), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Palette.attention.opacity(0.45)))
                         .contentShape(Capsule())
                 }
                 .buttonStyle(PressStyle())
@@ -815,7 +923,7 @@ struct StuckBanner: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(radius: 12, fill: Palette.amber.opacity(0.08), border: Palette.amber.opacity(0.4))
+        .card(radius: 12, fill: Palette.attention.opacity(0.08), border: Palette.attention.opacity(0.4))
     }
 
     private func act() {
@@ -843,10 +951,10 @@ struct ComposerArea: View {
                 .card(radius: 16)
         } else if session.status == .stopped {
             HStack {
-                Spirit(color: Palette.agent(session.agent), size: 22, asleep: true)
+                AgentMark(agent: session.agent, size: 22, asleep: true)
                 Text("This session is stopped.").foregroundStyle(.secondary)
                 Spacer()
-                Button("Resume") { store.resume() }.buttonStyle(AmberButton())
+                Button("Resume") { store.resume() }.buttonStyle(PrimaryButton())
             }
             .padding(12)
             .card(radius: 16)
@@ -952,7 +1060,7 @@ struct Composer: View {
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(Palette.moon)
                             .frame(width: 34, height: 34)
-                            .card(radius: 17, fill: Palette.raised)
+                            .card(radius: 17, fill: Palette.raised.opacity(0.8))
                     }
                     .buttonStyle(PressStyle())
                     .disabled(!canSend)
@@ -963,10 +1071,10 @@ struct Composer: View {
                     Button(action: send) {
                         Label("Steer", systemImage: "arrow.up.right")
                             .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Palette.amber)
+                            .foregroundStyle(Palette.accent)
                             .padding(.horizontal, 14).frame(height: 34)
-                            .background(Palette.amber.opacity(0.12), in: Capsule())
-                            .overlay(Capsule().strokeBorder(Palette.amber.opacity(canSend ? 0.75 : 0.3)))
+                            .background(Palette.accent.opacity(0.12), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Palette.accent.opacity(canSend ? 0.75 : 0.3)))
                             .glow(radius: 8, on: canSend)
                     }
                     .buttonStyle(PressStyle())
@@ -975,13 +1083,7 @@ struct Composer: View {
                     .help("Steer: deliver now, while the agent works")
                     .transition(.scale.combined(with: .opacity))
 
-                    Button { store.abort() } label: {
-                        Label("Stop", systemImage: "stop.fill")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Palette.moon)
-                            .padding(.horizontal, 14).frame(height: 34)
-                            .card(radius: 17, fill: Palette.raised)
-                    }
+                    Button { store.abort() } label: { StopGlyph() }
                     .buttonStyle(PressStyle())
                     .keyboardShortcut(".", modifiers: .command)
                     .help("Stop the current run (⌘.)")
@@ -994,20 +1096,24 @@ struct Composer: View {
             .padding(.leading, 16)
             .padding(.trailing, 7)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Palette.surface.opacity(0.95)))
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(dropping ? Palette.amber.opacity(0.8) : focused || busy ? Palette.ice.opacity(0.45) : Palette.border,
-                                  lineWidth: dropping ? 1.5 : 1)
-            )
-            .shadow(color: focused ? Palette.ice.opacity(0.12) : .black.opacity(0.3), radius: focused ? 16 : 14, y: focused ? 0 : 6)
+            // Opaque: the transcript scrolls under it, and its text mustn't show through what's being typed.
+            .card(radius: 22, fill: Palette.composer,
+                  border: dropping ? Palette.accent.opacity(0.85) : focused || busy ? Palette.accent.opacity(0.6) : Palette.accent.opacity(0.32))
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Palette.canvas))
+            .overlay {
+                if dropping {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .strokeBorder(Palette.accent.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                }
+            }
+            .shadow(color: Palette.accent.opacity(focused ? 0.28 : 0.14), radius: focused ? 20 : 16)
             .contentShape(Rectangle())
             .onTapGesture { focused = true }
 
             HStack(spacing: 8) {
                 Button { showModels = true } label: {
                     ChipLabel(text: session.model?.name ?? "No model", menu: true) {
-                        Image(systemName: "cube.transparent").foregroundStyle(Palette.amber.opacity(0.9))
+                        Image(systemName: "cube").foregroundStyle(Palette.moon.opacity(0.75))
                     }
                 }
                 .buttonStyle(PressStyle())
@@ -1156,7 +1262,8 @@ struct Composer: View {
     }
 }
 
-/// The round amber send button. It lights up when there's something to send, and kicks up when it goes.
+/// The round send button: a white disc when there's something to send, dim glass otherwise. It kicks up when it
+/// goes.
 struct SendButton: View {
     let enabled: Bool
     let kick: Int
@@ -1170,11 +1277,12 @@ struct SendButton: View {
                 .foregroundStyle(enabled ? Palette.canvas : Color.secondary)
                 .frame(width: 36, height: 36)
                 .background {
-                    Circle().fill(enabled ? AnyShapeStyle(Palette.amber.gradient) : AnyShapeStyle(Palette.raised))
-                    Circle().fill(LinearGradient(colors: [Color.white.opacity(enabled ? 0.35 : 0.05), .clear], startPoint: .top, endPoint: .center))
+                    Circle().fill(enabled ? AnyShapeStyle(LinearGradient(colors: [.white, Palette.moon.mix(with: Palette.ice, by: 0.25, in: .perceptual)],
+                                                                         startPoint: .top, endPoint: .bottom))
+                                          : AnyShapeStyle(Palette.raised))
                 }
-                .overlay(Circle().strokeBorder(enabled ? Color.clear : Palette.border))
-                .glow(radius: lift ? 18 : 10, on: enabled)
+                .overlay(Circle().strokeBorder(enabled ? Color.white.opacity(0.6) : Palette.border))
+                .glow(Palette.accent, radius: lift ? 18 : 9, on: enabled)
                 .offset(y: lift ? -5 : 0)
                 .scaleEffect(enabled ? 1 : 0.92)
         }
@@ -1192,7 +1300,7 @@ struct SendButton: View {
     }
 }
 
-/// Signal bars for the reasoning effort; the lit ones glow amber.
+/// Signal bars for the reasoning effort; the lit ones glow blue.
 struct EffortBars: View {
     let level: Double
 
@@ -1201,7 +1309,7 @@ struct EffortBars: View {
         HStack(alignment: .bottom, spacing: 1.5) {
             ForEach(0..<4, id: \.self) { index in
                 RoundedRectangle(cornerRadius: 1)
-                    .fill(index < lit ? Palette.amber : Palette.rail)
+                    .fill(index < lit ? Palette.accent : Palette.rail)
                     .frame(width: 2.5, height: 4 + CGFloat(index) * 2.5)
             }
         }
@@ -1226,7 +1334,7 @@ struct ChipLabel<Icon: View>: View {
         }
         .font(.system(size: 12.5, weight: .medium))
         .padding(.horizontal, 12).frame(height: 30)
-        .card(radius: 15, fill: Palette.surface.opacity(0.85))
+        .card(radius: 15, fill: Palette.surface.opacity(0.85), border: Palette.lit.opacity(0.8))
         .contentShape(Capsule())
     }
 }
@@ -1239,6 +1347,8 @@ struct QuestionCard: View {
     let question: AgentQuestion
     @State private var picked: [String: [String]] = [:]
     @State private var sending = false
+    /// Options come in one after another when the card arrives.
+    @State private var shown = false
 
     /// One question to pick one option for: a tap answers it.
     private var answersOnTap: Bool {
@@ -1252,12 +1362,9 @@ struct QuestionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Image(systemName: "questionmark.bubble.fill")
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.periwinkle)
-                    .frame(width: 22, height: 22)
-                    .background(Palette.periwinkle.opacity(0.14), in: Circle())
+                LiveDot(state: .attention, size: 8)
                 Text("\(session.agent.displayName) asks")
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.periwinkle)
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.attention)
                 if question.continued == true {
                     Text("Carried on meanwhile")
                         .font(.caption2.weight(.medium)).foregroundStyle(Palette.moon.opacity(0.55))
@@ -1291,13 +1398,15 @@ struct QuestionCard: View {
                 HStack {
                     Spacer()
                     Button("Answer") { answer(picked) }
-                        .buttonStyle(AmberButton())
+                        .buttonStyle(PrimaryButton())
                         .disabled(!complete || sending)
                 }
             }
         }
         .padding(12)
-        .card(radius: 14, fill: Palette.surface.opacity(0.95), border: Palette.periwinkle.opacity(0.4))
+        .card(radius: 16, fill: Palette.surface.opacity(0.95), border: Palette.attention.opacity(0.55))
+        .shadow(color: Palette.attention.opacity(0.14), radius: 16)
+        .onAppear { shown = true }
     }
 
     @ViewBuilder
@@ -1320,8 +1429,11 @@ struct QuestionCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .card(radius: 10, fill: Palette.raised.opacity(0.6))
             }
-            ForEach(item.options ?? [], id: \.label) { option in
+            ForEach(Array((item.options ?? []).enumerated()), id: \.element.label) { index, option in
                 optionRow(option, of: item)
+                    .opacity(shown ? 1 : 0)
+                    .offset(y: shown ? 0 : 6)
+                    .animation(.spring(response: 0.4, dampingFraction: 0.85).delay(0.08 + Double(index) * 0.06), value: shown)
             }
         }
     }
@@ -1342,7 +1454,7 @@ struct QuestionCard: View {
         } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: multi ? (on ? "checkmark.square.fill" : "square") : (on ? "largecircle.fill.circle" : "circle"))
-                    .font(.system(size: 14)).foregroundStyle(on ? Palette.periwinkle : Palette.moon.opacity(0.4))
+                    .font(.system(size: 14)).foregroundStyle(on ? Palette.attention : Palette.moon.opacity(0.4))
                     .padding(.top, 1)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(option.label).font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.moon)
@@ -1356,9 +1468,9 @@ struct QuestionCard: View {
             .padding(.horizontal, 10).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(on ? Palette.periwinkle.opacity(0.12) : Palette.raised.opacity(0.5)))
+                .fill(on ? Palette.attention.opacity(0.12) : Palette.raised.opacity(0.5)))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(on ? Palette.periwinkle.opacity(0.5) : Palette.border))
+                .strokeBorder(on ? Palette.attention.opacity(0.55) : Palette.border))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
@@ -1383,7 +1495,7 @@ struct GoalCard: View {
     /// The objective a cancel was sent for, until the goal goes away (a running turn takes it at its next step).
     @State private var cancelling: String?
 
-    private var tint: Color { goal.status == "active" ? Palette.periwinkle : Palette.amber }
+    private var tint: Color { goal.status == "active" ? Palette.accent : Palette.attention }
 
     private var state: String {
         if cancelling == goal.objective { return "Cancelling…" }
@@ -1445,7 +1557,7 @@ struct GoalCard: View {
                     Text(goal.objective).font(.system(size: 12.5)).foregroundStyle(Palette.moon).textSelection(.enabled)
                     Text(usage).font(.system(size: 11.5).monospacedDigit()).foregroundStyle(Palette.moon.opacity(0.5))
                     if let reason = goal.lastReason, goal.status != "active" {
-                        Text(reason).font(.system(size: 11.5)).foregroundStyle(Palette.amber.opacity(0.8))
+                        Text(reason).font(.system(size: 11.5)).foregroundStyle(Palette.attention.opacity(0.85))
                     }
                 }
                 .padding(.leading, 30).padding(.top, 6).padding(.bottom, 2)
@@ -1497,7 +1609,7 @@ struct QueuedMessages: View {
             } label: {
                 HStack(spacing: 8) {
                     icon(steering: !queue.steering.isEmpty)
-                    Text(summary).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.amber)
+                    Text(summary).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.accent)
                         .monospacedDigit().contentTransition(.numericText())
                     if !expanded, let last = entries.last {
                         Text(last.text).font(.system(size: 12.5)).foregroundStyle(Palette.moon.opacity(0.7)).lineLimit(1)
@@ -1517,7 +1629,7 @@ struct QueuedMessages: View {
                         ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Image(systemName: entry.steering ? "arrow.up.right" : "text.append")
-                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.amber.opacity(0.8))
+                                    .font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.accent.opacity(0.8))
                                     .frame(width: 22)
                                 Text(entry.text).font(.system(size: 12.5)).foregroundStyle(Palette.moon).lineLimit(3)
                                 Spacer(minLength: 0)
@@ -1547,25 +1659,26 @@ struct QueuedMessages: View {
     private func icon(steering: Bool) -> some View {
         Image(systemName: steering ? "arrow.up.right" : "text.append")
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(Palette.amber)
+            .foregroundStyle(Palette.accent)
             .frame(width: 22, height: 22)
-            .background(Palette.amber.opacity(0.14), in: Circle())
+            .background(Palette.accent.opacity(0.14), in: Circle())
     }
 }
 
-/// While the agent works: its spirit, what it's doing now, and for how long, along a firefly trail.
+/// While the agent works: its mark, what it's doing now, and for how long, along a trail of light.
 struct WorkingStrip: View {
     let store: SessionStore
     let session: SessionSummary
 
     var body: some View {
         HStack(spacing: 10) {
-            Spirit(color: Palette.agent(session.agent), size: 20, working: true)
+            AgentMark(agent: session.agent, size: 20, working: true)
             Text(session.status == .compacting ? "Compacting context" : "\(session.agent.displayName) is working")
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(Palette.moon)
+                .shimmer(color: session.status == .compacting ? Palette.lilac : Palette.accent)
                 .fixedSize()
-            FireflyTrail()
+            LightTrail()
                 .frame(height: 10)
                 .frame(minWidth: 40)
             if let step = currentStep {
@@ -1599,12 +1712,35 @@ struct WorkingStrip: View {
     private var turnStart: Date? { store.items.last { $0.kind == .user }?.date }
 }
 
-/// A faint line with a firefly gliding along it, back and forth.
-struct FireflyTrail: View {
+/// A faint line with a spark of light gliding along it, back and forth.
+struct LightTrail: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TrailField(still: reduceMotion)
             .accessibilityHidden(true)
+    }
+}
+
+/// Stop: a filled square in a glass circle, with a blue arc spinning round its edge while the agent works.
+struct StopGlyph: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+            .fill(Palette.moon)
+            .frame(width: 11, height: 11)
+            .frame(width: 34, height: 34)
+            .card(radius: 17, fill: hovering ? Palette.raised : Palette.raised.opacity(0.75))
+            .overlay {
+                SpinField(color: Palette.accent, lineWidth: 2, still: reduceMotion)
+                    .frame(width: 36, height: 36)
+                    .allowsHitTesting(false)
+            }
+            .glow(Palette.accent, radius: 8)
+            .contentShape(Circle())
+            .onHover { hovering = $0 }
+            .accessibilityLabel("Stop")
     }
 }

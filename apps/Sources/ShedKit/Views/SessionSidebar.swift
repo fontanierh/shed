@@ -6,17 +6,24 @@ struct SessionSidebar: View {
     var newSession: () -> Void = {}
     /// The computers Shed controls.
     var openSettings: () -> Void = {}
+    /// The home page's composer on iPhone, which has no home page of its own: a first message and a folder.
+    var start: ((_ message: String, _ folder: String?) -> Void)? = nil
     @State private var query = ""
     /// Sessions whose subagents are shown.
     @State private var expanded: Set<String> = []
     @State private var renaming: SessionSummary?
     @FocusState private var searching: Bool
+    /// The phone's search: a quiet icon on the title's row until it is tapped.
+    @State private var searchOpen = false
+    #if os(iOS)
+    @Environment(\.beamStage) private var beamStage
+    #endif
     @Namespace private var selection
     /// Off until the first session list has been drawn: the sidebar appears as it is, without its rows sliding in.
     @State private var settled = false
 
     /// The one spring every change in the list moves with.
-    static let spring = Animation.spring(response: 0.36, dampingFraction: 0.86)
+    static let spring = Animation.spring(response: 0.4, dampingFraction: 0.8)
 
     var body: some View {
         list.renameSession($renaming, store: store)
@@ -24,19 +31,43 @@ struct SessionSidebar: View {
 
     private var list: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Sprout(size: 26)
-                Text("Shed").font(.system(size: 26, weight: .medium, design: .serif)).foregroundStyle(Palette.moon)
+            HStack(spacing: 9) {
+                #if os(iOS)
+                if searchOpen {
+                    // Search takes the title's row while it is open; Cancel gives the row back.
+                    searchField.transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .trailing)))
+                    Button("Cancel") { closeSearch() }
+                        .font(.system(size: 15)).foregroundStyle(Palette.accent)
+                        .transition(.opacity)
+                } else {
+                    homeButton
+                    Spacer()
+                    Button { withAnimation(.easeOut(duration: 0.2)) { searchOpen = true }; searching = true } label: {
+                        Image(systemName: "magnifyingglass").font(.system(size: 17, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.7))
+                            .frame(width: Self.control, height: Self.control)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Search sessions")
+                }
+                #else
+                homeButton
                 Spacer()
+                #endif
+                if !searchOpen {
                 if store.sessions.values.contains(where: \.hasSites) { AllSitesButton(store: store) }
                 Button(action: openSettings) {
-                    Image(systemName: "network").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
-                        .frame(width: 30, height: 30).contentShape(Rectangle())
+                    Image(systemName: "network").font(.system(size: 13, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.75))
+                        .frame(width: Self.control, height: Self.control)
+                        .card(radius: Self.control / 2, fill: Palette.raised.opacity(0.5))
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(",")
                 .help("Computers")
+                }
             }
+            .frame(height: Self.control)
             .padding(.leading, 18).padding(.trailing, 10)
             #if os(macOS)
             // Below the window's traffic lights.
@@ -48,7 +79,15 @@ struct SessionSidebar: View {
             #endif
             .padding(.bottom, 14)
 
+            #if os(macOS)
             searchField.padding(.horizontal, 12).padding(.bottom, 12)
+            #endif
+
+            #if os(macOS)
+            // The way back to the home page from any session; ⌘0 does the same.
+            HomeRow(selected: store.selectedId == nil) { withAnimation(.easeOut(duration: 0.2)) { store.select(nil) } }
+                .padding(.horizontal, 7).padding(.bottom, 8)
+            #endif
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
@@ -90,6 +129,18 @@ struct SessionSidebar: View {
                             SectionTitle("Sessions")
                             ForEach(store.tree) { node in tree(node, depth: 0) }
                         }
+                        #if os(iOS)
+                        // The phone's home page lives at the end of its list: the open pull requests. (No contributions
+                        // calendar: on a phone the room goes to asking an agent.)
+                        if store.connection == .connected {
+                            GitHubCards(store: store, compact: true) { _, pulls in
+                                if let pulls {
+                                    SectionTitle("Pull requests").padding(.top, 14)
+                                    pulls.padding(.horizontal, 2)
+                                }
+                            }
+                        }
+                        #endif
                     }
                 }
                 .padding(.horizontal, 10)
@@ -99,26 +150,56 @@ struct SessionSidebar: View {
                 .animation(settled ? Self.spring : nil, value: layout)
             }
             .scrollIndicators(.never)
+            #if os(iOS)
+            .scrollDismissesKeyboard(.interactively)
+            // The list stops at the composer rather than running on under it and the beam below: off the edge by a
+            // hair, so the scroll view doesn't stretch into the composer's inset.
+            .padding(.bottom, 1)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                // The composer sits under the thumb, above the home indicator, on the same soft pool of dark as a
+                // conversation's: the beam stays lit all around it, as it does there.
+                if let start, !searchOpen {
+                    HomeComposer(store: store, start: start, compact: true)
+                        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+                        .background {
+                            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                .fill(Palette.canvas.opacity(0.9))
+                                .padding(.horizontal, 6)
+                                .padding(.top, -6)
+                                .padding(.bottom, 0)
+                                // Room around it for the blur, so its edges aren't cut off; rasterised once.
+                                .padding(40)
+                                .blur(radius: 16)
+                                .drawingGroup()
+                                .padding(-40)
+                                .allowsHitTesting(false)
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+            }
+            #endif
             .onAppear { if !store.sessions.isEmpty { settle() } }
             .onChange(of: store.snapshots) { settle() }
             .overlay {
                 if store.sessions.isEmpty && store.connection == .connected { EmptySidebar() }
             }
 
+            #if os(macOS)
+            // The phone starts sessions from the composer at the top of its list instead.
             NewSessionButton(action: newSession)
                 .disabled(store.connection != .connected)
                 .padding(12)
+            #endif
         }
         .background {
-            ZStack(alignment: .bottomLeading) {
-                Velvet(base: Palette.sidebar, light: .top)
-                Sprig()
-                    .fill(Palette.ice.opacity(0.07))
-                    .frame(width: 110, height: 170)
-                    .offset(x: -8, y: -64)
-                Fireflies(count: 4, warm: 0.5, seed: 7)
-            }
-            .ignoresSafeArea()
+            #if os(macOS)
+            // Solid beside the beam, so the list reads calmly.
+            Palette.sidebar.ignoresSafeArea()
+            #else
+            // The phone's list is its whole screen: the beam rising behind the composer, soft enough that rows over it
+            // still read. Drawn by the shared stage behind the navigation stack when there is one (`BeamPose.list`).
+            if !beamStage { Backdrop(beam: 0.8, anchor: UnitPoint(x: 0.15, y: 0.86)) }
+            #endif
         }
         #if os(macOS)
         .overlay(alignment: .trailing) { Rectangle().fill(Palette.border.opacity(0.7)).frame(width: 1).ignoresSafeArea() }
@@ -127,6 +208,35 @@ struct SessionSidebar: View {
             // ⌘K focuses search.
             Button("") { searching = true }.keyboardShortcut("k").hidden()
         }
+    }
+
+    #if os(iOS)
+    /// The header's buttons and search field: one height, all round, on the title's row.
+    private static let control: CGFloat = 36
+    private static let searchHeight: CGFloat = 36
+    private static let searchRadius: CGFloat = 18
+    #else
+    private static let control: CGFloat = 30
+    private static let searchHeight: CGFloat = 32
+    private static let searchRadius: CGFloat = 10
+    #endif
+
+    private var homeButton: some View {
+        Button { withAnimation(.easeOut(duration: 0.2)) { store.select(nil) } } label: {
+            HStack(spacing: 9) {
+                ShedMark(size: 24)
+                Text("Shed").font(.system(size: 24, weight: .semibold)).foregroundStyle(Palette.moon)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Home")
+    }
+
+    private func closeSearch() {
+        query = ""
+        searching = false
+        withAnimation(.easeOut(duration: 0.2)) { searchOpen = false }
     }
 
     private var searchField: some View {
@@ -143,8 +253,9 @@ struct SessionSidebar: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 32)
-        .card(radius: 9, fill: Palette.sunken.opacity(0.7), border: searching ? Palette.ice.opacity(0.45) : Palette.border)
+        .frame(height: Self.searchHeight)
+        .card(radius: Self.searchRadius, fill: Palette.surface.opacity(0.6), border: searching ? Palette.accent.opacity(0.6) : Palette.border)
+        .shadow(color: searching ? Palette.accent.opacity(0.18) : .clear, radius: 8)
         .animation(.easeOut(duration: 0.15), value: searching)
     }
 
@@ -234,7 +345,7 @@ private struct EnvironmentTitle: View {
             Text(env.name).font(.system(size: 11.5, weight: .medium))
             switch state {
             case .connected: EmptyView()
-            case .connecting: Circle().fill(Palette.amber).frame(width: 6, height: 6)
+            case .connecting: Circle().fill(Palette.accent).frame(width: 6, height: 6)
             case .disconnected: Circle().fill(Palette.danger).frame(width: 6, height: 6)
             }
         }
@@ -258,7 +369,8 @@ private struct SectionTitle: View {
     }
 }
 
-/// A session: its spirit, title, what it's doing, and its state. The selected row carries the lantern.
+/// A session: its agent's mark, title, what it's doing, and its state. The selected row carries the blue highlight,
+/// which glides from row to row.
 struct SidebarRow: View {
     let session: SessionSummary
     let depth: Int
@@ -289,8 +401,14 @@ struct SidebarRow: View {
             } else {
                 Spacer().frame(width: 10)
             }
-            Spirit(color: session.isSubagent ? Palette.avatar(session.name ?? "s") : Palette.agent(session.agent),
-                   size: depth > 0 ? 22 : 28, working: session.status.isBusy)
+            Group {
+                if session.isSubagent {
+                    AgentMark(name: session.name ?? "s", size: 22, working: session.status.isBusy)
+                } else {
+                    AgentMark(agent: session.agent, size: depth > 0 ? 22 : 28, working: session.status.isBusy,
+                              asleep: session.status == .stopped)
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(session.isSubagent ? (session.name ?? "subagent") : session.title)
@@ -306,7 +424,8 @@ struct SidebarRow: View {
                 TimelineView(.periodic(from: .now, by: session.waitingOn == nil ? 3600 : 30)) { context in
                     Text(detail ?? secondary(at: context.date))
                         .font(.system(size: 11.5))
-                        .foregroundStyle(session.status.isBusy ? AnyShapeStyle(Palette.amber.opacity(0.9)) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(session.question != nil ? AnyShapeStyle(Palette.attention)
+                                         : session.status.isBusy ? AnyShapeStyle(Palette.accent) : AnyShapeStyle(.secondary))
                         .lineLimit(1)
                         .contentTransition(.identity)
                 }
@@ -316,8 +435,9 @@ struct SidebarRow: View {
                 Text("\(activeBelow)")
                     .font(.system(size: 10.5, weight: .semibold).monospacedDigit())
                     .frame(minWidth: 18, minHeight: 18)
-                    .background(Palette.amber.opacity(0.16), in: Circle())
-                    .foregroundStyle(Palette.amber)
+                    .background(Palette.accent.opacity(0.16), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.35)))
+                    .foregroundStyle(Palette.accent)
                     .contentTransition(.numericText())
                     .help("\(activeBelow) subagent(s) at work")
                     .transition(.opacity.combined(with: .scale(scale: 0.6)))
@@ -330,15 +450,15 @@ struct SidebarRow: View {
         .background {
             if selected {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(Palette.raised)
+                    .fill(LinearGradient(colors: [Palette.accent.opacity(0.16), Palette.raised.opacity(0.9)], startPoint: .leading, endPoint: .trailing))
                     .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [Palette.amber.opacity(0.75), Palette.amber.opacity(0.35)],
-                                                     startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
-                    .shadow(color: Palette.amber.opacity(0.18), radius: 10)
+                        .strokeBorder(LinearGradient(colors: [Palette.accent.opacity(0.8), Palette.accent.opacity(0.12)],
+                                                     startPoint: .leading, endPoint: .trailing), lineWidth: 1))
+                    .shadow(color: Palette.accent.opacity(0.22), radius: 12)
                     // A second lit row matches nothing, rather than a second source fighting the first over the lantern.
                     .matchedGeometryEffect(id: lanternSource ? "lantern" : "lantern " + session.id, in: selection)
             } else if hovering {
-                RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Palette.raised.opacity(0.55))
+                RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.white.opacity(0.045))
             }
         }
         .contentShape(Rectangle())
@@ -349,6 +469,7 @@ struct SidebarRow: View {
     }
 
     private func secondary(at now: Date) -> String {
+        if session.question != nil { return "Waiting for you" }
         if let activity = session.activityText(at: now) { return activity.sentenceCased }
         if session.isSubagent { return session.title }
         return "\(session.agent.displayName) · \(session.folderName)"
@@ -365,9 +486,9 @@ struct NewSessionButton: View {
             HStack(spacing: 10) {
                 Image(systemName: "plus")
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Palette.canvas)
+                    .foregroundStyle(.white)
                     .frame(width: 24, height: 24)
-                    .background(Palette.amber.gradient, in: Circle())
+                    .background(LinearGradient(colors: [Palette.accent, Palette.accentDeep], startPoint: .top, endPoint: .bottom), in: Circle())
                     .glow(radius: hovering ? 10 : 5)
                     .rotationEffect(.degrees(hovering ? 90 : 0))
                 Text("New Session").font(.system(size: 13.5, weight: .medium)).foregroundStyle(Palette.moon)
@@ -378,7 +499,7 @@ struct NewSessionButton: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 44)
-            .card(radius: 12, fill: hovering ? Palette.raised : Palette.surface)
+            .card(radius: 12, fill: hovering ? Palette.raised : Palette.surface.opacity(0.8), border: hovering ? Palette.accent.opacity(0.4) : Palette.border)
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
@@ -401,30 +522,33 @@ struct PressStyle: ButtonStyle {
 private struct EmptySidebar: View {
     var body: some View {
         VStack(spacing: 10) {
-            Spirit(color: Palette.ice, size: 48, asleep: true)
-                .overlay(alignment: .topTrailing) {
-                    Text("z").font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Palette.periwinkle)
-                        .offset(x: 12, y: -14)
-                }
+            ShedMark(size: 40, color: Palette.moon.opacity(0.25))
             Text("No sessions yet").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.moon)
+            #if os(macOS)
             Text("Start one with New Session.").font(.callout).foregroundStyle(.secondary)
+            #else
+            Text("Ask an agent above to start one.").font(.callout).foregroundStyle(.secondary)
+            #endif
         }
         .padding(.bottom, 60)
     }
 }
 
-/// An ember that breathes while working, an hourglass while waiting on background commands, otherwise a status dot.
+/// A rippling blue dot while working, orange while it waits for you, an hourglass while waiting on background
+/// commands, otherwise a status dot.
 struct ActivityIcon: View {
     let session: SessionSummary
 
     var body: some View {
-        if session.status.isBusy {
-            Ember(color: session.status == .compacting ? Palette.lilac : Palette.amber)
+        if session.question != nil {
+            LiveDot(state: .attention, size: 7).frame(width: 12).help("Waiting for your answer").transition(.opacity)
+        } else if session.status.isBusy {
+            Ember(color: session.status == .compacting ? Palette.lilac : Palette.accent)
                 .transition(.opacity)
         } else if session.backgroundJobs > 0 {
             Image(systemName: "hourglass")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Palette.amber)
+                .foregroundStyle(Palette.accent)
                 .frame(width: 12)
                 .help("\(session.backgroundJobs) background command(s) running; it wakes when they finish")
                 .transition(.opacity)
@@ -436,7 +560,7 @@ struct ActivityIcon: View {
 
 /// A live dot: a warm core with a ring that keeps rippling out.
 struct Ember: View {
-    var color: Color = Palette.amber
+    var color: Color = Palette.accent
     var size: CGFloat = 7
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -491,11 +615,11 @@ struct StatusDot: View {
 
     private var color: Color {
         switch status {
-        case .running, .starting: Palette.amber
+        case .running, .starting: Palette.accent
         case .compacting: Palette.lilac
-        case .idle: Palette.ice
-        case .done: Palette.periwinkle.opacity(0.6)
-        case .stopped: Color.secondary.opacity(0.6)
+        case .idle: Palette.moon.opacity(0.4)
+        case .done: Palette.success.opacity(0.75)
+        case .stopped: Palette.moon.opacity(0.2)
         case .error: Palette.danger
         }
     }
@@ -506,7 +630,7 @@ struct AgentBadge: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Spirit(color: Palette.agent(agent), size: 16)
+            AgentMark(agent: agent, size: 16, glow: false)
             Text(agent.displayName).font(.system(size: 12.5, weight: .medium))
         }
         .padding(.leading, 4).padding(.trailing, 11).frame(height: 26)
@@ -515,3 +639,45 @@ struct AgentBadge: View {
         .foregroundStyle(Palette.agent(agent))
     }
 }
+
+#if os(macOS)
+/// "Home" at the top of the Mac sidebar, lit while the home page shows.
+private struct HomeRow: View {
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Spacer().frame(width: 10)
+                Image(systemName: "house")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(selected ? Palette.ice : Palette.moon.opacity(0.75))
+                    .frame(width: 28, height: 28)
+                Text("Home")
+                    .font(.system(size: 13, weight: selected ? .medium : .regular))
+                    .foregroundStyle(Palette.moon)
+                Spacer()
+                Text("⌘0").font(.system(size: 11)).foregroundStyle(.tertiary).opacity(hovering ? 1 : 0)
+            }
+            .padding(.horizontal, 6).frame(height: 36)
+            .background {
+                if selected {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.raised.opacity(0.9))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.lit, lineWidth: 1))
+                } else if hovering {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.raised.opacity(0.45))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .keyboardShortcut("0", modifiers: .command)
+        .onHover { hovering = $0 }
+        .help("Home (⌘0)")
+        .accessibilityLabel("Home")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+#endif

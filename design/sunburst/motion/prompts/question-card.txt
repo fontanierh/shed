@@ -1,0 +1,3 @@
+UI motion reference, 1.8 s loop: a question card with an orange hairline slides up from behind a composer at the bottom: it rises 20px while fading in, its three option rows appear staggered 60ms apart, and the orange dot in its header pulses once. Then it fades away to restart.
+
+Style: dark UI on near-black with a fine dithered halftone dot texture, frosted-glass elements with 1px hairlines, electric blue #4C9BFF accent, orange #FF8A3D for attention, Inter-like type. Smooth, premium motion like Apple system UI; the loop must be seamless (last frame flows into the first). Show it large and centered so the motion is easy to read.

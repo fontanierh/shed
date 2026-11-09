@@ -1,0 +1,3 @@
+UI motion reference, 1.8 s: a dashboard appearing. Four glass cards on the dithered beam background rise 12px and fade in one after the other (staggered 80ms), then the small blue squares of a commit heatmap inside the first card light up column by column from left to right.
+
+Style: dark UI on near-black with a fine dithered halftone dot texture, frosted-glass elements with 1px hairlines, electric blue #4C9BFF accent, orange #FF8A3D for attention, Inter-like type. Smooth, premium motion like Apple system UI; the loop must be seamless (last frame flows into the first). Show it large and centered so the motion is easy to read.

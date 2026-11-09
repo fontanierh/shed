@@ -174,15 +174,55 @@ final class BlockFrames {
     func moved(_ id: String, to y: CGFloat) { frames[id]?.frame.origin.y = y }
 }
 
-/// The screen the transcript shows and how tall its content is, in screens.
+/// The stretch of the transcript's content that is drawn, in its content's coordinates; measured blocks outside it are
+/// held as spaces. Every drawn block costs on each frame of a scroll (its layout, its display list, the accessibility
+/// and focus walks over its text), and drawing one again costs its whole layout at once, so the band moves half a
+/// screen at a time and a reader hovering at a boundary swaps nothing.
 struct Band: Equatable {
-    var screen: Int
+    var near: Range<CGFloat>
+    /// How tall the content is, in screens: a change re-checks which blocks are far enough to hold.
     var content: Int
-    var container: CGFloat
 
-    /// What is drawn: two screens above the one shown and three below it. A block collapsing or growing by less than
-    /// that moves nothing drawn into empty space; by more, the content changes by a screen and this is drawn again.
-    var near: Range<CGFloat> { CGFloat(screen - 2) * container..<CGFloat(screen + 4) * container }
+    /// How far behind the reader, in screens, the band lets go while they scroll. On iPhone the band is trimmed back
+    /// while they rest instead, so a fling only ever adds blocks.
+    #if os(iOS)
+    private static let behind: CGFloat = 4
+    #else
+    private static let behind: CGFloat = 2
+    #endif
+
+    /// While the reader scrolls: grows toward where they are heading once they come within a screen of its edge.
+    static func following(_ band: Band?, offset: CGFloat, container: CGFloat, content: CGFloat) -> Band {
+        let unit = container / 2
+        let ahead = container, behind = Self.behind * container
+        let top = offset, bottom = offset + container
+        var near = band?.near ?? (top - ahead)..<(bottom + ahead)
+        while near.lowerBound > top - ahead { near = (near.lowerBound - unit)..<near.upperBound }
+        while near.upperBound < bottom + ahead { near = near.lowerBound..<(near.upperBound + unit) }
+        while near.lowerBound + unit <= top - behind { near = (near.lowerBound + unit)..<near.upperBound }
+        while near.upperBound - unit >= bottom + behind { near = near.lowerBound..<(near.upperBound - unit) }
+        return Band(near: near, content: Int(content / container))
+    }
+
+    /// While the reader rests, one step at a time: draws three screens above them and two below, ready for their next
+    /// move, and lets go of what is further. Nil once there is nothing left to do.
+    func settling(offset: CGFloat, container: CGFloat, height: CGFloat) -> Band? {
+        let unit = container / 2
+        let top = offset, bottom = offset + container
+        var near = self.near
+        if near.lowerBound > max(0, top - 3 * container) {
+            near = (near.lowerBound - unit)..<near.upperBound
+        } else if near.upperBound < min(height, bottom + 2 * container) {
+            near = near.lowerBound..<(near.upperBound + unit)
+        } else if near.lowerBound + unit <= top - 4 * container {
+            near = (near.lowerBound + unit)..<near.upperBound
+        } else if near.upperBound - unit >= bottom + 3 * container {
+            near = near.lowerBound..<(near.upperBound - unit)
+        } else {
+            return nil
+        }
+        return Band(near: near, content: content)
+    }
 }
 
 /// Collapsing a block that starts above the top of the screen would leave the reader somewhere further down: this
@@ -233,6 +273,69 @@ extension View {
     }
 }
 
+#if os(iOS)
+/// The UIScrollView behind the transcript's ScrollView. A class, so finding it never re-renders the transcript.
+@MainActor final class ScrollViewHandle {
+    weak var view: UIScrollView? {
+        didSet { if view !== oldValue { watch() } }
+    }
+    /// Counts the reader's rests: work done while they rest stops when a newer rest takes over.
+    var rest = 0
+    /// Blocks are going in above the reader: what they are looking at stays put as the content grows.
+    var placing = false
+    /// The reader follows the end, and nothing is moving the scroll view: the end stays put.
+    var following = true
+    private var watching: NSKeyValueObservation?
+
+    /// Moves the offset as the scroll view takes the content's new height, in that same pass. Moved from SwiftUI's
+    /// report of the change instead, a frame was sometimes drawn with the new height and the old offset, which showed as
+    /// the conversation jumping for a frame and back.
+    private func watch() {
+        watching = view?.observe(\.contentSize, options: [.old, .new]) { [weak self] view, change in
+            guard let old = change.oldValue?.height, let new = change.newValue?.height, old != new else { return }
+            MainActor.assumeIsolated { self?.resized(view, by: new - old) }
+        }
+    }
+
+    private func resized(_ view: UIScrollView, by change: CGFloat) {
+        if placing {
+            // By exactly what was added, so a fling or a finger carries on: `scrollTo` would end it.
+            view.contentOffset.y += change
+        } else if following {
+            let inset = view.adjustedContentInset
+            view.contentOffset.y = max(-inset.top, view.contentSize.height + inset.bottom - view.bounds.height)
+        }
+    }
+}
+
+/// Zero-sized, inside the scroll view's content: finds the UIScrollView above it (SwiftUI's own) as soon as it is in a
+/// window, so the transcript can move the offset the UIKit way, which keeps a fling or a finger going.
+private struct ScrollViewFinder: UIViewRepresentable {
+    let handle: ScrollViewHandle
+
+    final class Finder: UIView {
+        var handle: ScrollViewHandle?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil else { return }
+            var view = superview
+            while let v = view, !(v is UIScrollView) { view = v.superview }
+            handle?.view = view as? UIScrollView
+        }
+    }
+
+    func makeUIView(context: Context) -> Finder {
+        let finder = Finder()
+        finder.handle = handle
+        finder.isUserInteractionEnabled = false
+        return finder
+    }
+
+    func updateUIView(_ finder: Finder, context: Context) { finder.handle = handle }
+}
+#endif
+
 /// Equatable on what it shows: the session's summary changes with every event of the session and its subagents (its
 /// cost, what it is doing), and the callbacks are new closures each time, so otherwise every such change laid out the
 /// whole conversation again. The callbacks only route to the store, so they don't count.
@@ -282,18 +385,56 @@ struct TranscriptView: View, Equatable {
     /// The screen the reader is on, and how tall the content is, both counted in screens: which blocks are near enough
     /// to draw changes only when one of them does.
     @State private var band: Band?
+    #if os(iOS)
+    /// The scroll view underneath, for moving its offset without ending a fling.
+    @State private var scroller = ScrollViewHandle()
+    #endif
 
-    /// Blocks laid out when a session opens, and added each time the reader nears the top.
+    /// Blocks laid out when a session opens.
+    /// On iPhone fewer: they all lay out as the conversation arrives, under the rain that brings it in, and the
+    /// blocks before them come in once it rests.
+    #if os(iOS)
+    private static let window = 16
+    #else
     private static let window = 40
+    #endif
+    /// Blocks added each time the reader nears the top. Few at a time: each new block lays out in full before it can be
+    /// held as a space, and a big batch landing mid-scroll is a visible stutter. On iPhone a reveal costs no momentum
+    /// and settles within a frame, so they come smaller and more often.
+    #if os(iOS)
+    private static let step = 4
+    /// How long a reveal may still settle after its first measurement, before the next may start.
+    private static let settle: TimeInterval = 0.1
+    /// How far from the top, in screens, the blocks before the window are brought in: runway for a fast fling.
+    private static let runway: CGFloat = 6
+    /// How far from the top, in screens, the blocks before the window are brought in while the reader rests: laying
+    /// them out then costs nothing they can feel, and a fling up rarely has to lay any out on its way.
+    private static let reserve: CGFloat = 14
+    #else
+    private static let step = 12
+    private static let settle: TimeInterval = 0.6
+    private static let runway: CGFloat = 4
+    #endif
 
-    /// Blocks just added above the reader: where they were before, as the scroll view measures the new ones.
-    private struct Reveal {
+    /// Blocks just added above the reader: where they were before, as the scroll view measures the new ones. A class:
+    /// it is updated on each frame of a scroll while they settle, and written back to state as a struct it ran the
+    /// whole transcript's body every one of those frames.
+    private final class Reveal {
         var offset: CGFloat
         var content: CGFloat
         /// Until when the new blocks may still be settling, from the first time they were measured.
         var until: Date?
         /// Offsets asked of the scroll view so far.
         var issued: [CGFloat] = []
+        let started = Date.now
+
+        /// Settled, or never grew the content at all.
+        var done: Bool { if let until { Date.now > until } else { Date.now > started + 1 } }
+
+        init(offset: CGFloat, content: CGFloat) {
+            self.offset = offset
+            self.content = content
+        }
     }
 
     /// What the follow logic needs from the scroll view's geometry.
@@ -316,7 +457,8 @@ struct TranscriptView: View, Equatable {
             VStack(alignment: .leading, spacing: 24) {
                 if blocks.isEmpty {
                     if let pending {
-                        PendingTranscript(text: pending, unreachable: pending.hasPrefix("Can't"))
+                        // Empty: something else is showing that it loads.
+                        if !pending.isEmpty { PendingTranscript(text: pending, unreachable: pending.hasPrefix("Can't")) }
                     } else {
                         EmptyTranscript(session: session)
                     }
@@ -350,7 +492,9 @@ struct TranscriptView: View, Equatable {
                                 // Coming back from being held as a space isn't arriving.
                                 .modifier(Arrival(animate: opened && last && !frames.known(block.id)))
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                                #if os(macOS)
                                 .modifier(Returning(height: frames.height(of: block.id)))
+                                #endif
                                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.content)) } action: { frames.measured(block.id, $0) }
                         }
                     }
@@ -390,12 +534,27 @@ struct TranscriptView: View, Equatable {
             // Exactly as wide as the screen: a block that lays out wider can't make the conversation drift sideways.
             .containerRelativeFrame(.horizontal)
             .coordinateSpace(.named(Self.content))
+            // On iPhone only the prose is selectable (set where it is drawn): every selectable text is something a
+            // touch must be checked against before the scroll can start.
+            #if os(macOS)
             .textSelection(.enabled)
+            #endif
             .environment(\.keepInView, KeepInView { top in
                 // Measured from the top of the content, like the offset: 0 is the content's top at the top of the screen.
-                if top < metrics.offset { position.scrollTo(y: max(0, top - 12)) }
+                if top < metrics.offset {
+                    // Up to the block's top: the reader is reading there now, not at the end.
+                    atBottom = false
+                    position.scrollTo(y: max(0, top - 12))
+                }
             })
+            #if os(iOS)
+            .background(ScrollViewFinder(handle: scroller).frame(width: 0, height: 0))
+            #endif
         }
+        #if os(iOS)
+        // Told rather than asked: a closure reading this view's state from the handle saw it as it was when made.
+        .onChange(of: atBottom, initial: true) { _, now in scroller.following = now && phase == .idle }
+        #endif
         .scrollIndicators(.never)
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .scrollPosition($position)
@@ -407,8 +566,23 @@ struct TranscriptView: View, Equatable {
         #endif
         .onScrollPhaseChange { _, new in
             phase = new
+            #if os(iOS)
+            scroller.following = atBottom && new == .idle
+            #endif
             // A drag that ended in the empty space past the end, before it could spring back.
             if new == .idle { pullBackToEnd() }
+            #if os(iOS)
+            if new == .idle {
+                // The reader let go: back within reach of the end, follow it again (nothing moved them there while
+                // their finger or fling had the scroll view).
+                let end = max(0, metrics.content - metrics.container)
+                if end - metrics.offset < 40 {
+                    if !atBottom { atBottom = true }
+                    if abs(end - metrics.offset) > 0.5 { position.scrollTo(y: end) }
+                }
+                prefill()
+            }
+            #endif
         }
         .onChange(of: items.isEmpty, initial: true) { _, empty in
             // Opening: lay out the end of the conversation, and keep to that start from now on.
@@ -416,6 +590,10 @@ struct TranscriptView: View, Equatable {
             let all = Activity.blocks(items, busy: session.status.isBusy)
             shownFrom = all[max(0, all.count - Self.window)...].first?.firstItemId
             opened = true
+            #if os(iOS)
+            // The reader hasn't touched it yet: get the blocks around them ready (after the rain, if it plays).
+            prefill()
+            #endif
         }
         .onScrollGeometryChange(for: Scroll.self) { geometry in
             // The container already leaves out the insets (the composer, and on iPhone the navigation bar), but the offset
@@ -430,11 +608,22 @@ struct TranscriptView: View, Equatable {
                 metrics.moved &+= 1
             }
             if new.container > 0 {
-                let band = Band(screen: Int(new.offset / new.container), content: Int(new.content / new.container), container: new.container)
+                let band = Band.following(self.band, offset: new.offset, container: new.container, content: new.content)
                 if band != self.band { self.band = band }
             }
-            if let until = revealing?.until, Date.now > until { revealing = nil }
-            if var reveal = revealing, new.content != reveal.content {
+            if let reveal = revealing, reveal.done { endReveal() }
+            #if os(iOS)
+            if let reveal = revealing, scroller.view != nil {
+                // Blocks just went in above: the scroll view handle has already moved the offset by what they added
+                // (`anchor`). Only how long they may still settle is kept here.
+                if new.content != reveal.content {
+                    reveal.content = new.content
+                    reveal.until = reveal.until ?? .now + Self.settle
+                }
+                return
+            }
+            #endif
+            if let reveal = revealing, new.content != reveal.content {
                 // Blocks just went in above: keep what the reader was looking at where it was. They lay out again a
                 // moment later, a little taller (on the Mac, their selectable text), so this holds for a moment.
                 if new.offset != old.offset, !reveal.issued.isEmpty, !reveal.issued.contains(where: { abs($0 - new.offset) < 0.5 }) {
@@ -447,15 +636,24 @@ struct TranscriptView: View, Equatable {
                     position.scrollTo(y: target)
                     reveal.issued.append(target)
                 }
-                reveal.until = reveal.until ?? .now + 0.6
-                revealing = reveal
+                reveal.until = reveal.until ?? .now + Self.settle
                 return
             }
-            // Reading up toward the top: bring in the blocks before it, a couple of screens ahead.
-            if new.offset < old.offset, new.offset < new.container * 2, revealing == nil, !loadingEarlier { showEarlier() }
+            // Reading up toward the top: bring in the blocks before it, a few screens ahead, so the smaller batches
+            // land before the reader gets there.
+            // On iPhone only the reader's own scroll counts: the scroll view settling as the conversation arrives isn't
+            // reading up, and while they rest `prefill` brings the blocks in.
+            if new.offset < old.offset, new.offset < new.container * Self.runway, revealing == nil, !loadingEarlier,
+               !Self.hasPhases || Self.readerMoving(phase) { showEarlier() }
             // A scroll toward the end that landed short: when the content grows twice in a row, the second request can be
             // dropped while the first is still being applied.
             #if os(iOS)
+            if Self.readerMoving(phase) {
+                // The reader's finger or fling has the scroll view: nothing here moves it, as any scroll request ends a
+                // fling. Scrolling up stops following; letting go near the end picks it up again.
+                if atBottom, new.offset < old.offset - 1 { atBottom = false }
+                return
+            }
             if new.container != old.container, new.content == old.content, atBottom || new.offset > max(0, new.maxOffset) + 0.5 {
                 // The screen resized under a still transcript. When the keyboard is coming or going (its notification
                 // lands just after the resize), the composer slides with it: move the end along with it, rather than
@@ -463,6 +661,8 @@ struct TranscriptView: View, Equatable {
                 metrics.easingUntil = .now + 0.1
                 Task { @MainActor in
                     try? await Task.sleep(for: .milliseconds(40))
+                    // The reader took hold of the scroll view meanwhile: theirs.
+                    guard !Self.readerMoving(phase) else { metrics.easingUntil = .distantPast; return }
                     let end = max(0, metrics.content - metrics.container)
                     if Date.now < metrics.keyboardUntil {
                         metrics.easingUntil = .now + 0.45
@@ -476,6 +676,15 @@ struct TranscriptView: View, Equatable {
             }
             // While that scroll eases in, its own steps aren't the reader scrolling, nor the end moving away.
             if Date.now < metrics.easingUntil { return }
+            if atBottom, phase == .idle, let scrollView = scroller.view {
+                // Following the end. As the content grows or shrinks, the handle keeps the offset there (`anchor`);
+                // anything else that moved it (SwiftUI settling its opening position) is undone here, in this frame. A
+                // scroll request lands a frame or more later, and by then blocks may have come in above, so it landed
+                // short and left the last reply behind the composer.
+                let end = max(0, new.maxOffset)
+                if new.content == old.content, abs(new.offset - end) > 0.5 { scrollView.contentOffset.y += end - new.offset }
+                return
+            }
             #endif
             // Only the app's own scroll toward the end can land short: the reader's drag or fling stops where it stops, and
             // snapping it to the end from within the last few points fights their finger.
@@ -516,9 +725,9 @@ struct TranscriptView: View, Equatable {
                 } label: {
                     Label(session.status.isBusy ? "New activity" : "Jump to latest", systemImage: "arrow.down")
                         .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(session.status.isBusy ? Palette.amber : Palette.moon)
+                        .foregroundStyle(session.status.isBusy ? Palette.accent : Palette.moon)
                         .padding(.horizontal, 14).frame(height: 32)
-                        .card(radius: 16, fill: Palette.raised, border: session.status.isBusy ? Palette.amber.opacity(0.5) : Palette.border)
+                        .card(radius: 16, fill: Palette.raised, border: session.status.isBusy ? Palette.accent.opacity(0.5) : Palette.border)
                         .glow(radius: 10, on: session.status.isBusy)
                         .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
                 }
@@ -548,18 +757,65 @@ struct TranscriptView: View, Equatable {
         } else if earlier > 0, let loadEarlier {
             Task {
                 await loadEarlier()
+                // This view still holds the items from before the page arrived: on iPhone the next scroll step, or the
+                // rest that follows, brings the new blocks in from the fresh ones.
+                #if os(macOS)
                 reveal()
+                #endif
             }
         }
+    }
+
+    private func endReveal() {
+        revealing = nil
+        #if os(iOS)
+        scroller.placing = false
+        #endif
     }
 
     private func reveal() {
         let all = Activity.blocks(items, busy: session.status.isBusy)
         let start = Self.start(of: all, from: shownFrom)
-        guard start > 0, let first = all[max(0, start - Self.window)].firstItemId else { return }
+        guard start > 0, let first = all[max(0, start - Self.step)].firstItemId else { return }
         revealing = Reveal(offset: metrics.offset, content: metrics.content)
+        #if os(iOS)
+        scroller.placing = true
+        #endif
         shownFrom = first
     }
+
+    #if os(iOS)
+
+    /// While the reader rests, a step at a time: brings in the blocks above until there are `reserve` screens of them,
+    /// then draws the blocks around the reader, so their next move mostly scrolls through blocks already laid out.
+    /// Stops as soon as they touch the screen again.
+    private func prefill() {
+        scroller.rest &+= 1
+        let rest = scroller.rest
+        Task { @MainActor in
+            for _ in 0..<160 {
+                try? await Task.sleep(for: .milliseconds(100))
+                guard rest == scroller.rest, phase == .idle, metrics.container > 0 else { return }
+                // The conversation is still raining in: every frame goes to the rain.
+                if Materialize.active { continue }
+                if let reveal = revealing {
+                    guard reveal.done else { continue }
+                    endReveal()
+                }
+                if loadingEarlier { continue }
+                if metrics.offset < metrics.container * Self.reserve {
+                    let start = Self.start(of: Activity.blocks(items, busy: session.status.isBusy), from: shownFrom)
+                    if start > 0 || (earlier > 0 && loadEarlier != nil) {
+                        showEarlier()
+                        continue
+                    }
+                }
+                guard let next = band?.settling(offset: metrics.offset, container: metrics.container, height: metrics.content) else { return }
+                band = next
+            }
+        }
+    }
+    #endif
 
     /// On iPhone a scroll the reader makes has a phase; the scroll view's own adjustments don't. A Mac's mouse wheel
     /// may report none, so there phases tell nothing.
@@ -572,7 +828,9 @@ struct TranscriptView: View, Equatable {
     }
 
     /// The reader is dragging, or their fling is still running.
-    private static func readerMoving(_ phase: ScrollPhase) -> Bool { hasPhases && phase != .idle }
+    private static func readerMoving(_ phase: ScrollPhase) -> Bool {
+        hasPhases && (phase == .tracking || phase == .interacting || phase == .decelerating)
+    }
 
     private func pullBackToEnd() {
         let end = max(0, metrics.content - metrics.container)
@@ -605,10 +863,11 @@ struct EmptyTranscript: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Spirit(color: Palette.agent(session.agent), size: 64, working: session.status.isBusy)
+            AgentMark(agent: session.agent, size: 60, working: session.status.isBusy)
                 .padding(.bottom, 6)
             Text(session.isSubagent ? "Waiting for the subagent to start" : "What would you like to work on?")
-                .font(.system(size: 24, design: .serif))
+                .font(.system(size: 24, weight: .semibold))
+                .tracking(-0.4)
                 .foregroundStyle(Palette.moon)
             Text("\(session.agent.displayName) in \(Format.path(session.cwd))")
                 .font(.system(size: 13.5)).foregroundStyle(.secondary)
@@ -657,7 +916,7 @@ struct IdleLine: Identifiable, Equatable {
 struct WorkingIndicator: View {
     let text: String
     var systemImage: String? = nil
-    var tint: Color = Palette.amber
+    var tint: Color = Palette.accent
     var live = true
 
     var body: some View {
@@ -766,6 +1025,7 @@ struct UserMessage: View {
             }
             if !text.isEmpty {
                 Text(text)
+                    .textSelection(.enabled)
                     .font(.system(size: 15.5))
                     .foregroundStyle(Palette.moon)
                     .lineSpacing(4)
@@ -841,10 +1101,10 @@ struct ActivityView: View {
                 .rotationEffect(.degrees(isExpanded ? 90 : 0))
                 .frame(width: 14)
             if activity.live {
-                Spirit(color: Palette.amber, size: 18, working: true)
+                AgentMark(symbol: "sparkle", color: Palette.accent, size: 18, working: true)
             }
             Text(headline).font(.system(size: 13, weight: .medium))
-                .foregroundStyle(activity.live ? Palette.amber : Palette.moon)
+                .foregroundStyle(activity.live ? Palette.accent : Palette.moon)
                 .lineLimit(1)
                 .shimmer(activity.live)
                 .contentTransition(.opacity)
@@ -862,7 +1122,7 @@ struct ActivityView: View {
         .padding(.horizontal, 12)
         .frame(height: 38)
         .card(radius: 12, fill: Palette.surface.opacity(isExpanded ? 0.95 : 0.7),
-              border: activity.live ? Palette.amber.opacity(0.4) : Palette.border.opacity(isExpanded ? 1 : 0.8))
+              border: activity.live ? Palette.accent.opacity(0.5) : Palette.lit.opacity(isExpanded ? 1 : 0.85))
         .glow(radius: 8, on: activity.live)
         .animation(.easeOut(duration: 0.3), value: activity.live)
     }
@@ -917,7 +1177,7 @@ struct Timeline: View {
         .padding(.leading, 6)
         .background(alignment: .topLeading) {
             Rectangle()
-                .fill(LinearGradient(colors: [Palette.ice.opacity(0.55), Palette.rail, live ? Palette.amber.opacity(0.7) : Palette.rail.opacity(0.4)],
+                .fill(LinearGradient(colors: [Palette.ice.opacity(0.55), Palette.rail, live ? Palette.accent.opacity(0.7) : Palette.rail.opacity(0.4)],
                                      startPoint: .top, endPoint: .bottom))
                 .frame(width: 1.5)
                 .padding(.vertical, 18)
@@ -933,13 +1193,17 @@ struct StepNode: View {
     var body: some View {
         let tint = self.tint
         ZStack {
-            Circle().fill(Palette.canvas)
-            Circle().fill(tint.opacity(0.14))
-            Circle().strokeBorder(tint.opacity(0.6), lineWidth: 1)
+            // A halo drawn as a gradient, not a shadow: a shadow is a second render pass on every row while scrolling.
+            if item.status == .running || item.status == .pending {
+                Circle().fill(RadialGradient(colors: [tint.opacity(0.45), tint.opacity(0)], center: .center, startRadius: 8, endRadius: 17))
+                    .frame(width: 34, height: 34)
+            }
+            Circle().fill(Palette.canvas).frame(width: 22, height: 22)
+            Circle().fill(tint.opacity(0.14)).frame(width: 22, height: 22)
+            Circle().strokeBorder(tint.opacity(0.6), lineWidth: 1).frame(width: 22, height: 22)
             symbol.foregroundStyle(tint)
         }
         .frame(width: 22, height: 22)
-        .shadow(color: item.status == .running || item.status == .pending ? tint.opacity(0.8) : .clear, radius: 5)
         .padding(.top, 7)
         .accessibilityHidden(true)
         .transition(.scale.combined(with: .opacity))
@@ -951,7 +1215,7 @@ struct StepNode: View {
         switch item.status {
         case .error: return Palette.danger
         case .done: return Palette.ice
-        default: return Palette.amber
+        default: return Palette.accent
         }
     }
 
@@ -1186,7 +1450,7 @@ struct ToolRow: View {
                     ForEach(description.spawned, id: \.self) { name in
                         Button { openChild(name) } label: {
                             HStack(spacing: 6) {
-                                Spirit(color: Palette.avatar(name), size: 18)
+                                AgentMark(name: name, size: 18)
                                 Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon)
                                 Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
                             }
@@ -1223,10 +1487,10 @@ struct ToolRow: View {
                             Button { confirmingRestart = true } label: {
                                 Label("Restart Python Kernel", systemImage: "arrow.clockwise")
                                     .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(Palette.amber)
+                                    .foregroundStyle(Palette.accent)
                                     .padding(.horizontal, 12).frame(height: 28)
-                                    .background(Palette.amber.opacity(0.14), in: Capsule())
-                                    .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                                    .background(Palette.accent.opacity(0.14), in: Capsule())
+                                    .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.45)))
                                     .contentShape(Capsule())
                             }
                             .buttonStyle(PressStyle())
@@ -1242,10 +1506,10 @@ struct ToolRow: View {
                                 Button { confirmingStop = true } label: {
                                     Label("Stop", systemImage: "stop.fill")
                                         .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(Palette.amber)
+                                        .foregroundStyle(Palette.accent)
                                         .padding(.horizontal, 10).frame(height: 24)
-                                        .background(Palette.amber.opacity(0.14), in: Capsule())
-                                        .overlay(Capsule().strokeBorder(Palette.amber.opacity(0.45)))
+                                        .background(Palette.accent.opacity(0.14), in: Capsule())
+                                        .overlay(Capsule().strokeBorder(Palette.accent.opacity(0.45)))
                                         .contentShape(Capsule())
                                 }
                                 .buttonStyle(PressStyle())
@@ -1441,7 +1705,7 @@ enum Syntax {
         }
         let strings = #"("""[\s\S]*?"""|'''[\s\S]*?'''|"(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*')"#
         let patterns: [(String, Color)] = [
-            (#"\b\d+(\.\d+)?\b"#, Palette.amber),
+            (#"\b\d+(\.\d+)?\b"#, Palette.accent),
             (#"\b(\#(words.joined(separator: "|")))\b"#, Palette.lilac),
             // Strings and comments in one pass, so whichever starts first wins: `"https://…"` stays a string, `# it's`
             // stays a comment.
@@ -1464,7 +1728,7 @@ struct Avatar: View {
     let name: String
     var size: CGFloat = 26
 
-    var body: some View { Spirit(color: Palette.avatar(name), size: size) }
+    var body: some View { AgentMark(name: name, size: size) }
 }
 
 // MARK: Notes
@@ -1602,7 +1866,7 @@ struct ReportCard: View {
                 .padding(.horizontal, 10)
                 .frame(height: 36)
                 .card(radius: 11, fill: hovering || expanded ? Palette.raised : Palette.surface.opacity(0.7),
-                      border: expanded ? tint.opacity(0.45) : Palette.border)
+                      border: expanded ? tint.opacity(0.45) : Palette.lit.opacity(0.85))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1626,10 +1890,8 @@ struct ReportCard: View {
                 }
                 .padding(16)
                 .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
-                .shadow(color: tint.opacity(0.12), radius: 14)
                 .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.8)).frame(width: 2).padding(.vertical, 14)
-                        .shadow(color: tint, radius: 4)
+                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
                 }
                 .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
             }
@@ -1637,7 +1899,7 @@ struct ReportCard: View {
         .trackTop(top)
     }
 
-    private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.periwinkle }
+    private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.accent }
 
     @ViewBuilder private var badge: some View {
         if let icon {
@@ -1645,7 +1907,7 @@ struct ReportCard: View {
                 .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 18, height: 18)
-                .background(Palette.periwinkle.gradient, in: Circle())
+                .background(Palette.accent.gradient, in: Circle())
         } else {
             Avatar(name: name, size: 22)
         }
@@ -1709,10 +1971,9 @@ private struct AttachedImage: View {
                 Text(name).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             }
             .padding(.horizontal, 7).frame(height: 20)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Palette.canvas.opacity(0.82), in: Capsule())
             .padding(6)
         }
-        .shadow(color: Palette.lilac.opacity(loaded ? 0.18 : 0), radius: 8)
         .contentShape(shape)
         .onTapGesture {
             guard let image, let request else { return }
