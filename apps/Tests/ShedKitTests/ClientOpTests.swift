@@ -73,20 +73,20 @@ final class ClientOpTests: XCTestCase {
     func testTheAppSendsEachOperationAsTheFileHasIt() throws {
         let listed = Set(try fixture().map(text))
         for op in examples {
-            let sent = try sent(op)
-            XCTAssertEqual(sent["id"] as? String, "c1")
-            XCTAssertEqual(sent["op"] as? String, op.name.rawValue)
-            let text = try text(sent)
-            XCTAssertTrue(listed.contains(text), "protocol/client_ops.json has no \(text)")
+            let message = try sent(op)
+            XCTAssertEqual(message["id"] as? String, "c1")
+            XCTAssertEqual(message["op"] as? String, op.name.rawValue)
+            let written = try text(message)
+            XCTAssertTrue(listed.contains(written), "protocol/client_ops.json has no \(written)")
         }
     }
 
     func testTheFileHasNothingTheAppDoesNotSendButWhatIsNamedHere() throws {
-        let sent = Set(try examples.map { try text(sent($0)) })
-        let bridgeOnly = Set(try bridgeOnly.map(text))
+        let fromTheApp = Set(try examples.map { try text(sent($0)) })
+        let notSent = Set(try bridgeOnly.map(text))
         let listed = Set(try fixture().map(text))
-        XCTAssertEqual(listed.subtracting(sent), bridgeOnly)
-        XCTAssertEqual(sent.intersection(bridgeOnly), [])
+        XCTAssertEqual(listed.subtracting(fromTheApp), notSent)
+        XCTAssertEqual(fromTheApp.intersection(notSent), Set<String>())
         // An operation the app never sends has no case at all.
         XCTAssertNil(ClientOp.Name(rawValue: "list_sessions"))
     }
