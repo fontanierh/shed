@@ -42,9 +42,11 @@ search options:
   --scrape             also read each result as Markdown (saved to files)
 
 fetch options:
-  --format LIST        markdown (default), summary, html, rawHtml, links, images, screenshot,
-                       screenshot@fullPage, json, branding, changeTracking; repeatable or comma-separated
-  --prompt TEXT        what to extract, for --format json
+  --format LIST        markdown (default), summary, html, rawHtml, rawBase64, links, images,
+                       screenshot, screenshot@fullPage, json, query, question, highlights, branding,
+                       product, audio, video, changeTracking; repeatable or comma-separated (a format's
+                       other options go in --body)
+  --prompt TEXT        what to extract (json), or what to ask the page (query, question, highlights)
   --schema JSON|FILE   the JSON schema to extract, for --format json
   --all-content        keep navigation, headers and footers (by default only the main content)
   --include-tags LIST  only these HTML tags or selectors
@@ -346,6 +348,19 @@ impl Request {
                         }
                         format
                     }
+                    // Formats that ask something of the page take `--prompt` as their question.
+                    Some(kind @ ("query" | "question" | "highlights")) => {
+                        let field = match kind {
+                            "query" => "prompt",
+                            "question" => "question",
+                            _ => "query",
+                        };
+                        let mut format = json!({ "type": kind });
+                        if let Some(p) = &prompt {
+                            format[field] = json!(p);
+                        }
+                        format
+                    }
                     _ => f,
                 })
                 .collect();
@@ -625,6 +640,18 @@ fn present_search(reply: &Value, request: &Request) -> Result<String> {
     Ok(out)
 }
 
+/// The parts of a scrape `present_page` lays out itself; anything else in it is passed on as it is.
+const HANDLED: &[&str] = &[
+    "markdown",
+    "summary",
+    "html",
+    "rawHtml",
+    "rawBase64",
+    "screenshot",
+    "warning",
+    "metadata",
+];
+
 async fn present_page(reply: &Value, request: &Request) -> Result<String> {
     let data = &reply["data"];
     let meta = &data["metadata"];
@@ -677,9 +704,16 @@ async fn present_page(reply: &Value, request: &Request) -> Result<String> {
             }
         }
     }
-    for field in ["links", "images", "json", "branding", "changeTracking"] {
-        if !data[field].is_null() {
-            page[field] = data[field].clone();
+    // The response body as the server sent it, decoded, in a file.
+    if let Some(raw) = data["rawBase64"].as_str() {
+        let path = save(&dir, &file_name(&url, "raw"), &base64_decode(raw)?)?;
+        page["rawFile"] = json!(path);
+    }
+    // Every other format as Firecrawl returns it (links, images, json, an answer, a product, audio and video links…),
+    // so a format added there needs nothing here.
+    for (field, value) in data.as_object().into_iter().flatten() {
+        if !HANDLED.contains(&field.as_str()) && !value.is_null() {
+            page[field] = value.clone();
         }
     }
     if let Some(shot) = data["screenshot"].as_str() {
@@ -711,26 +745,41 @@ async fn present_page(reply: &Value, request: &Request) -> Result<String> {
     if let Some(markdown) = page["markdown"].as_str() {
         out += &format!("\n{markdown}\n");
     }
-    if !page["json"].is_null() {
-        out += &format!("\n## Extracted\n\n{:#}\n", page["json"]);
-    }
-    for field in ["links", "images"] {
-        if let Some(list) = page[field].as_array() {
-            out += &format!("\n## {} ({})\n\n", capitalize(field), list.len());
-            for item in list {
-                out += &format!(
-                    "- {}\n",
-                    item.as_str().map_or(item.to_string(), str::to_string)
-                );
+    for field in data.as_object().into_iter().flatten().map(|(f, _)| f) {
+        if HANDLED.contains(&field.as_str()) || page[field].is_null() {
+            continue;
+        }
+        let value = &page[field];
+        let heading = if field == "json" { "Extracted" } else { field };
+        let body = match value {
+            Value::String(s) => s.clone(),
+            Value::Array(list) if list.iter().all(Value::is_string) => {
+                let items: Vec<String> = list
+                    .iter()
+                    .map(|i| format!("- {}", i.as_str().unwrap_or_default()))
+                    .collect();
+                out += &format!("\n## {} ({})\n\n", capitalize(heading), list.len());
+                out += &(items.join("\n") + "\n");
+                continue;
             }
+            other => format!("{other:#}"),
+        };
+        if !request.full && chars(&body) > LONG {
+            let path = save(
+                &dir,
+                &file_name(&url, &format!("{field}.txt")),
+                body.as_bytes(),
+            )?;
+            notes.push(format!("{}: {}", capitalize(heading), path.display()));
+        } else {
+            out += &format!("\n## {}\n\n{body}\n", capitalize(heading));
         }
     }
-    for field in ["branding", "changeTracking"] {
-        if !page[field].is_null() {
-            out += &format!("\n## {field}\n\n{:#}\n", page[field]);
-        }
-    }
-    for (field, what) in [("htmlFile", "HTML"), ("rawHtmlFile", "Raw HTML")] {
+    for (field, what) in [
+        ("htmlFile", "HTML"),
+        ("rawHtmlFile", "Raw HTML"),
+        ("rawFile", "Response body"),
+    ] {
         if let Some(path) = page[field].as_str() {
             notes.push(format!("{what}: {path}"));
         }
@@ -942,6 +991,43 @@ mod tests {
             out,
             "https://x.dev (HTTP 404)\n\nHello\n\n## Links (1)\n\n- https://a.dev\n"
         );
+    }
+
+    #[test]
+    fn formats_without_a_layout_of_their_own_are_passed_on() {
+        let mut r = Request::parse(
+            "fetch",
+            args(&[
+                "https://x.dev",
+                "--format",
+                "query,product",
+                "--prompt",
+                "price?",
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            r.body["formats"],
+            json!([{ "type": "query", "prompt": "price?" }, "product"])
+        );
+        r.out = Some(scratch("pass"));
+        let reply = json!({ "success": true, "data": {
+            "answer": "12 euros",
+            "product": { "title": "Mug", "price": 12 },
+            "metadata": { "url": "https://x.dev", "statusCode": 200 },
+        }});
+        let out = futures_util::FutureExt::now_or_never(present_page(&reply, &r))
+            .unwrap()
+            .unwrap();
+        assert!(out.contains("## Answer\n\n12 euros\n"), "{out}");
+        assert!(out.contains("## Product\n\n{\n  \"price\": 12"), "{out}");
+        r.json = true;
+        let out = futures_util::FutureExt::now_or_never(present_page(&reply, &r))
+            .unwrap()
+            .unwrap();
+        let page: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(page["answer"], "12 euros");
+        assert_eq!(page["product"]["price"], 12);
     }
 
     #[test]

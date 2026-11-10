@@ -1218,6 +1218,12 @@ mod tests {
     use super::*;
     use crate::protocol::ItemKind;
 
+    #[test]
+    #[ignore = "writes the real dsh profile; run by hand, then check it with dsh --profile shed --patch <layer> --dump-config"]
+    fn writes_the_shed_profile() {
+        println!("{}", install_profile().unwrap().display());
+    }
+
     /// What the plugin sent on Jim's Mac for: start a background job, have a subagent read a file, then answer with
     /// both. Trimmed of dsh's bookkeeping events (system prompt, request headers, log delivery, inbox splices).
     const FEED: &str = include_str!("dsh_feed.jsonl");

@@ -94,10 +94,11 @@ def fetch(url, *, formats=None, prompt=None, schema=None, all_content=False, inc
           languages=None, out=None, body=None):
     """Read a page. Returns a dict with `url`, `statusCode`, `title`, `metadata`, and one entry per format asked
     for: `markdown` (the default), `summary`, `html` and `rawHtml` (also saved, as `htmlFile` and `rawHtmlFile`),
-    `links`, `images`, `screenshotFile` (a PNG on this Mac), `json`, `branding`, `changeTracking`.
+    `screenshotFile` (a PNG on this Mac), and every other format under the key Firecrawl gives it (`links`,
+    `images`, `json`, `answer`, `product`, `audio`, `video`, `branding`, ...; `shed-web --help` lists them).
 
     formats: e.g. ["markdown", "links", "screenshot@fullPage"]; for "json", give `prompt` (what to extract) and/or
-    `schema` (a JSON schema dict). all_content: keep navigation, headers and footers. wait, max_age, timeout: in ms.
+    `schema` (a JSON schema dict); for "query", "question" and "highlights", `prompt` is what to ask the page. all_content: keep navigation, headers and footers. wait, max_age, timeout: in ms.
     country, languages: load the page from a country ("DE"), in languages (["de-DE"]).
     body: more fields for Firecrawl's scrape request.
     """
