@@ -61,7 +61,7 @@ public final class BridgeClient {
             try? await Task.sleep(for: .seconds(5))
             guard gen == generation, connected, let endpoint, ContinuousClock.now - lastHeard > .seconds(15) else { continue }
             let asked = ContinuousClock.now
-            Task { _ = try? await call("ping") }
+            Task { _ = try? await call(.ping) }
             try? await Task.sleep(for: .seconds(10))
             guard gen == generation, connected, lastHeard < asked else { continue }
             connect(to: endpoint)
@@ -78,14 +78,11 @@ public final class BridgeClient {
 
     /// Send an operation and wait for its reply; returns the raw reply JSON.
     @discardableResult
-    public func call(_ op: String, _ fields: [String: Any] = [:]) async throws -> Data {
+    func call(_ op: ClientOp) async throws -> Data {
         guard let task, connected else { throw ConnectionLost(maybeDelivered: false) }
         nextId += 1
         let id = "c\(nextId)"
-        var payload = fields
-        payload["id"] = id
-        payload["op"] = op
-        let text = String(decoding: try JSONSerialization.data(withJSONObject: payload), as: UTF8.self)
+        let text = try op.message(id: id)
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
             task.send(.string(text)) { [weak self] error in
@@ -95,8 +92,8 @@ public final class BridgeClient {
         }
     }
 
-    public func call<T: Decodable>(_ op: String, _ fields: [String: Any] = [:], as type: T.Type) async throws -> T {
-        let data = try await call(op, fields)
+    func call<T: Decodable>(_ op: ClientOp, as type: T.Type) async throws -> T {
+        let data = try await call(op)
         return try JSONDecoder().decode(Reply<T>.self, from: data).data
     }
 

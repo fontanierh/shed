@@ -383,7 +383,7 @@ public final class SessionStore {
         let id = id.map { Self.split($0) == nil && !environments.isEmpty ? Self.tag(environments[0].id, $0) : $0 }
         guard id != selectedId else { return }
         if let old = selectedId, let (env, raw) = Self.split(old), let client = clients[env] {
-            Task { try? await client.call("detach", ["sessionId": raw]) }
+            Task { try? await client.call(.detach(sessionId: raw)) }
         }
         flushing?.cancel()
         flushing = nil
@@ -401,7 +401,7 @@ public final class SessionStore {
     private func attach(_ id: String) async {
         do {
             guard let (env, raw) = Self.split(id) else { return }
-            try await call(env, "attach", ["sessionId": raw], repeatable: true)
+            try await call(env, .attach(sessionId: raw))
         } catch {
             await attachFailed(id, error)
         }
@@ -600,7 +600,7 @@ public final class SessionStore {
         loadingEarlier = true
         defer { loadingEarlier = false }
         do {
-            let page = try await client.call("load_earlier", ["sessionId": raw, "before": first.id], as: EarlierItems.self)
+            let page = try await client.call(.loadEarlier(sessionId: raw, before: first.id), as: EarlierItems.self)
             // A snapshot may have replaced the transcript meanwhile.
             guard selectedId == id, items.first?.id == first.id else { return }
             let older = page.items.filter { itemIndex[$0.id] == nil }
@@ -640,12 +640,12 @@ public final class SessionStore {
 
     /// `op`, sent again once the connection is back if a drop cut it off: when it can't have arrived, or when
     /// doing it twice is harmless.
-    private func call(_ env: String, _ op: String, _ payload: [String: Any], repeatable: Bool) async throws {
+    private func call(_ env: String, _ op: ClientOp) async throws {
         do {
-            try await client(env).call(op, payload)
-        } catch let lost as ConnectionLost where !lost.maybeDelivered || repeatable {
+            try await client(env).call(op)
+        } catch let lost as ConnectionLost where !lost.maybeDelivered || op.repeatable {
             guard await reconnected(env) else { throw lost }
-            try await client(env).call(op, payload)
+            try await client(env).call(op)
         }
     }
 
@@ -660,31 +660,26 @@ public final class SessionStore {
         return (try client(env), env, raw)
     }
 
-    private static let repeatable: Set<String> = [
-        "abort", "stop_tool", "set_thinking", "set_auto_compaction", "set_context_limit", "set_model", "resume_session", "close_session", "clear_goal",
-    ]
-
-    private func perform(_ op: String, _ fields: [String: Any] = [:]) {
+    /// Asks the open session's bridge for `op`, which is given the id that bridge knows the session by.
+    private func perform(_ op: (_ sessionId: String) -> ClientOp) {
         guard let id = selectedId, let (env, raw) = Self.split(id) else { return }
-        var payload = fields
-        payload["sessionId"] = raw
+        let op = op(raw)
         Task {
-            do { try await call(env, op, payload, repeatable: Self.repeatable.contains(op)) } catch { report(error) }
+            do { try await call(env, op) } catch { report(error) }
         }
     }
 
     /// Throws to the sheet that asked, which shows why: an alert behind a sheet never appears on the Mac.
     public func createSession(in env: String, agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async throws {
-        var fields: [String: Any] = ["agent": agent.rawValue, "cwd": cwd]
-        if let model, !model.isEmpty { fields["model"] = model }
-        if let thinking, !thinking.isEmpty { fields["thinking"] = thinking }
         let client = try client(env)
-        let created = try await client.call("create_session", fields, as: SessionSummary.self)
+        let create = ClientOp.createSession(agent: agent, cwd: cwd, model: model?.isEmpty == false ? model : nil,
+                                            thinking: thinking?.isEmpty == false ? thinking : nil)
+        let created = try await client.call(create, as: SessionSummary.self)
         let summary = tagged(created, env)
         sessions[summary.id] = summary
         select(summary.id)
         if let firstMessage, !firstMessage.isEmpty {
-            do { try await client.call("send", ["sessionId": created.id, "text": firstMessage]) } catch { report(error) }
+            do { try await client.call(.send(sessionId: created.id, text: firstMessage)) } catch { report(error) }
         }
     }
 
@@ -698,7 +693,7 @@ public final class SessionStore {
         Task {
             do {
                 do {
-                    try await client(env).call("send", ["sessionId": raw, "text": text])
+                    try await client(env).call(.send(sessionId: raw, text: text))
                 } catch let lost as ConnectionLost {
                     // Cut off by a dropped connection: send it again once back, unless the session's transcript, sent
                     // afresh on reconnecting, shows it arrived after all.
@@ -710,7 +705,7 @@ public final class SessionStore {
                                           : sending[id]?.contains { $0.id == local.id } != true
                         if landed { return }
                     }
-                    try await client(env).call("send", ["sessionId": raw, "text": text])
+                    try await client(env).call(.send(sessionId: raw, text: text))
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
                 try? await Task.sleep(for: .seconds(60))
@@ -728,19 +723,19 @@ public final class SessionStore {
         guard let index = sending[sessionId]?.firstIndex(where: { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == text }) else { return }
         sending[sessionId]?.remove(at: index)
     }
-    public func followUp(_ text: String) { perform("follow_up", ["text": text]) }
-    public func abort() { perform("abort") }
+    public func followUp(_ text: String) { perform { .followUp(sessionId: $0, text: text) } }
+    public func abort() { perform { .abort(sessionId: $0) } }
     /// Stops a stuck tool call and delivers what was queued behind it.
-    public func stopTool() { perform("stop_tool") }
+    public func stopTool() { perform { .stopTool(sessionId: $0) } }
     /// Kills the session's Python kernel, for one stuck past what Stop can interrupt; Prime starts a fresh one.
-    public func restartKernel() { perform("restart_kernel") }
-    public func compact() { perform("compact") }
-    public func newSession() { perform("new_session") }
-    public func clearGoal() { perform("clear_goal") }
-    public func setThinking(_ level: String) { perform("set_thinking", ["level": level]) }
-    public func setAutoCompaction(_ enabled: Bool) { perform("set_auto_compaction", ["enabled": enabled]) }
+    public func restartKernel() { perform { .restartKernel(sessionId: $0) } }
+    public func compact() { perform { .compact(sessionId: $0) } }
+    public func newSession() { perform { .newSession(sessionId: $0) } }
+    public func clearGoal() { perform { .clearGoal(sessionId: $0) } }
+    public func setThinking(_ level: String) { perform { .setThinking(sessionId: $0, level: level) } }
+    public func setAutoCompaction(_ enabled: Bool) { perform { .setAutoCompaction(sessionId: $0, enabled: enabled) } }
     /// `nil` goes back to the model's own window.
-    public func setContextLimit(_ limit: Int?) { perform("set_context_limit", ["limit": limit.map { $0 as Any } ?? NSNull()]) }
+    public func setContextLimit(_ limit: Int?) { perform { .setContextLimit(sessionId: $0, limit: limit) } }
 
     public func rename(_ id: String, to name: String) {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -748,19 +743,19 @@ public final class SessionStore {
         Task {
             do {
                 let to = try route(id)
-                try await to.client.call("rename_session", ["sessionId": to.raw, "name": name])
+                try await to.client.call(.renameSession(sessionId: to.raw, name: name))
             } catch { report(error) }
         }
     }
-    public func setModel(_ model: ModelInfo) { perform("set_model", ["provider": model.provider, "modelId": model.id]) }
-    public func resume() { perform("resume_session") }
-    public func close() { perform("close_session") }
+    public func setModel(_ model: ModelInfo) { perform { .setModel(sessionId: $0, provider: model.provider, modelId: model.id) } }
+    public func resume() { perform { .resumeSession(sessionId: $0) } }
+    public func close() { perform { .closeSession(sessionId: $0) } }
 
     public func delete(_ id: String) {
         Task {
             do {
                 let to = try route(id)
-                try await to.client.call("delete_session", ["sessionId": to.raw])
+                try await to.client.call(.deleteSession(sessionId: to.raw))
             } catch { report(error) }
         }
     }
@@ -771,48 +766,45 @@ public final class SessionStore {
             struct Model: Decodable { let provider: String; let id: String }
             let models: [Model]
         }
-        let listed = try await client(env).call("list_agent_models", ["agent": agent.rawValue], as: Listed.self)
+        let listed = try await client(env).call(.listAgentModels(agent: agent), as: Listed.self)
         return listed.models.map { "\($0.provider)/\($0.id)" }
     }
 
     /// Folders on an environment's computer; nil path means the home folder.
     public func listDir(in env: String, _ path: String?, hidden: Bool = false) async throws -> DirListing {
-        var fields: [String: Any] = ["hidden": hidden]
-        if let path { fields["path"] = path }
-        return try await client(env).call("list_dir", fields, as: DirListing.self)
+        try await client(env).call(.listDir(path: path, hidden: hidden), as: DirListing.self)
     }
 
     /// The GitHub account signed in with `gh` on that computer: contributions and open pull requests.
     public func githubOverview(in env: String) async throws -> GitHubOverview {
-        try await client(env).call("github_overview", [:], as: GitHubOverview.self)
+        try await client(env).call(.githubOverview, as: GitHubOverview.self)
     }
 
     /// The branch of the repository `folder` is in on that computer, read with its `git`. Nil when it is detached or in
     /// no repository.
     public func gitBranch(in env: String, of folder: String) async throws -> String? {
         struct Reply: Decodable { let branch: String? }
-        return try await client(env).call("git_branch", ["path": folder], as: Reply.self).branch
+        return try await client(env).call(.gitBranch(path: folder), as: Reply.self).branch
     }
 
     // MARK: Background commands
 
     public func listJobs(_ sessionId: String) async throws -> [BackgroundJob] {
         let to = try route(sessionId)
-        return try await to.client.call("list_jobs", ["sessionId": to.raw], as: [BackgroundJob].self)
+        return try await to.client.call(.listJobs(sessionId: to.raw), as: [BackgroundJob].self)
     }
 
     public func jobOutput(_ sessionId: String, _ jobId: String, lines: Int = 200) async throws -> String {
         struct Tail: Decodable { let tail: String }
         let to = try route(sessionId)
-        return try await to.client.call("job_output", ["sessionId": to.raw, "jobId": jobId, "lines": lines], as: Tail.self).tail
+        return try await to.client.call(.jobOutput(sessionId: to.raw, jobId: jobId, lines: lines), as: Tail.self).tail
     }
 
     /// Labels picked per question id; no answers dismisses the question.
     public func answerQuestion(_ sessionId: String, _ questionId: String, picked: [String: [String]]) async {
         do {
             let to = try route(sessionId)
-            let answers = picked.map { ["id": $0.key, "selected": $0.value] as [String: Any] }
-            _ = try await to.client.call("answer_question", ["sessionId": to.raw, "questionId": questionId, "answers": answers])
+            try await to.client.call(.answerQuestion(sessionId: to.raw, questionId: questionId, picked: picked))
         } catch {
             report(error)
         }
@@ -821,7 +813,7 @@ public final class SessionStore {
     public func killJob(_ sessionId: String, _ jobId: String) async {
         do {
             let to = try route(sessionId)
-            _ = try await to.client.call("kill_job", ["sessionId": to.raw, "jobId": jobId])
+            try await to.client.call(.killJob(sessionId: to.raw, jobId: jobId))
         } catch {
             report(error)
         }
@@ -831,7 +823,7 @@ public final class SessionStore {
         guard let id = selectedId else { return }
         do {
             let to = try route(id)
-            models = try await to.client.call("list_models", ["sessionId": to.raw], as: [ModelInfo].self)
+            models = try await to.client.call(.listModels(sessionId: to.raw), as: [ModelInfo].self)
         } catch {
             report(error)
         }
