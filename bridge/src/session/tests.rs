@@ -14,6 +14,8 @@ use crate::protocol::{Goal, ModelInfo};
 #[derive(Default)]
 pub struct Agents {
     answers: std::sync::Mutex<HashMap<String, Value>>,
+    /// Commands the agent refuses, and what it says.
+    refusals: std::sync::Mutex<HashMap<String, String>>,
     asked: std::sync::Mutex<Vec<Value>>,
 }
 
@@ -24,6 +26,9 @@ impl Agents {
             .lock()
             .unwrap()
             .push(json!({ "session": session, "command": kind, "fields": fields }));
+        if let Some(refusal) = self.refusals.lock().unwrap().get(kind) {
+            return Some(Err(anyhow!("{refusal}")));
+        }
         self.answers.lock().unwrap().get(kind).cloned().map(Ok)
     }
 }
@@ -1049,4 +1054,138 @@ async fn malformed_events() {
         Value::Object(seen)
     })
     .await;
+}
+
+/// What each thing a client can ask of a session asks of its agent, answers, and changes in what the bridge keeps:
+/// for a Pi session, a DeepSeek Harness one, a Prime one, a stopped one and a subagent.
+#[tokio::test(start_paused = true)]
+async fn commands() {
+    let rig = &Rig::new("commands", &[]);
+    let answers = json!({
+        "prompt": {}, "steer": {}, "compact": {}, "abort": {}, "abort_and_send_queued": {},
+        "set_session_name": {}, "new_session": { "cancelled": false },
+        "get_state": { "model": { "provider": "example", "id": "model-1", "name": "Model One" },
+            "thinkingLevel": "high", "sessionName": "From the agent", "sessionFile": "/work/sessions/s1.jsonl" },
+        "get_session_stats": { "cost": 0.5, "contextUsage": { "tokens": 1000, "contextWindow": 200000, "percent": 0.5 } },
+        "get_messages": { "messages": [{ "role": "user", "content": text("A new start"), "timestamp": 1_700_000_100_000u64 }] },
+        "get_available_models": { "models": [] },
+        "get_available_thinking_levels": { "levels": ["low", "high"] },
+    });
+    // Whether the agent is there to answer. A stopped session has no agent, and a subagent takes no commands.
+    let kinds = [
+        ("pi", AgentKind::Pi, Backend::Pi, true),
+        ("deepseek", AgentKind::Deepseek, Backend::Pi, true),
+        ("prime", AgentKind::Prime, Backend::Prime, true),
+        ("pi, stopped", AgentKind::Pi, Backend::Pi, false),
+        ("subagent", AgentKind::Pi, Backend::PiSubagent, false),
+    ];
+    let cases = [
+        "rename",
+        "rename to nothing",
+        "send",
+        "send while it works",
+        "send, and the agent is already streaming",
+        "compact",
+        "compact with instructions",
+        "compact with blank instructions",
+        "clear the goal",
+        "restart the kernel",
+        "stop the tool",
+        "new session",
+    ];
+    let mut seen = serde_json::Map::new();
+    for (kind, agent, backend, answering) in kinds {
+        let mut of_kind = serde_json::Map::new();
+        for case in cases {
+            *rig.app.agents.answers.lock().unwrap() = match answering {
+                true => serde_json::from_value(answers.clone()).unwrap(),
+                false => HashMap::new(),
+            };
+            *rig.app.agents.refusals.lock().unwrap() = match case {
+                "send, and the agent is already streaming" if answering => HashMap::from([(
+                    "prompt".to_string(),
+                    "Agent is already streaming".to_string(),
+                )]),
+                _ => HashMap::new(),
+            };
+            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
+            summary.title = "Earlier".into();
+            if case == "send while it works" {
+                summary.status = SessionStatus::Running;
+            }
+            let mut state = SessionState::new(summary, None);
+            state.attached = backend == Backend::Prime;
+            if backend == Backend::Pi && answering {
+                state.child = Some(crate::rpc::RpcChild::inert());
+            }
+            let session = &Arc::new(Session {
+                id: "s1".into(),
+                agent,
+                backend,
+                cwd: "/work/project".into(),
+                state: Mutex::new(state),
+            });
+            let before = kept(rig, session).await;
+            let app = &rig.app;
+            let answer = match case {
+                "rename" => app
+                    .rename_session(session, "  Plan the release ")
+                    .await
+                    .map(|()| Value::Null),
+                "rename to nothing" => app
+                    .rename_session(session, "  ")
+                    .await
+                    .map(|()| Value::Null),
+                "compact" => app.compact(session, None).await,
+                "compact with instructions" => {
+                    app.compact(session, Some("keep the plan".into())).await
+                }
+                "compact with blank instructions" => app.compact(session, Some("  ".into())).await,
+                "clear the goal" => app.clear_goal(session).await,
+                "restart the kernel" => app.restart_kernel(session).await,
+                "stop the tool" => app.stop_tool(session).await,
+                "new session" => app.new_session(session).await,
+                _ => app.send_text(session, "Carry on".into()).await,
+            };
+            // The refresh a command leaves for later.
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let mut changed = serde_json::Map::new();
+            differences(&before, &kept(rig, session).await, "", &mut changed);
+            // What a refresh reads is pinned on its own: here, only that it ran, and the name it left.
+            let refreshed = changed.remove("levelsFor").is_some();
+            changed.retain(|part, _| matches!(part.as_str(), "named" | "summary.title" | "items"));
+            if let Some(items) = changed.get_mut("items") {
+                *items = json!(items.as_array().map(Vec::len));
+            }
+            let asked: Vec<Value> = std::mem::take(&mut *app.agents.asked.lock().unwrap())
+                .into_iter()
+                .map(|mut asked| {
+                    asked.as_object_mut().unwrap().remove("session");
+                    asked
+                })
+                .collect();
+            let mut outcome = json!({ "asked": asked, "changed": changed, "refreshed": refreshed });
+            match answer {
+                Ok(answer) => outcome["answers"] = answer,
+                Err(error) => outcome["fails"] = json!(error.to_string()),
+            }
+            of_kind.insert(case.into(), outcome);
+        }
+        seen.insert(kind.into(), Value::Object(of_kind));
+    }
+    let text = serde_json::to_string_pretty(&Value::Object(seen)).unwrap() + "\n";
+    let path = format!(
+        "{}/src/session/pins/commands.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    if std::env::var_os("UPDATE_FIXTURES").is_some() {
+        std::fs::write(&path, &text).unwrap();
+    }
+    let pinned = std::fs::read_to_string(&path).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+    assert!(
+        pinned == text,
+        "commands no longer do as pinned, from {}. UPDATE_FIXTURES=1 cargo test rewrites {path}.",
+        first_difference(&pinned, &text)
+    );
 }
