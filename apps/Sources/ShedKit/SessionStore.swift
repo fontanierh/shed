@@ -36,6 +36,9 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
 public struct SiteEntry: Identifiable, Equatable {
     public let site: Site
     public let session: SessionSummary
+    /// Whether its address opens on this device: it is on the tailnet, or this computer serves it. Unpublished, the
+    /// address is the loopback of the computer that serves it.
+    public let opens: Bool
 
     public var id: String { "\(session.id)#\(site.port)" }
 }
@@ -334,9 +337,15 @@ public final class SessionStore {
     }
 
     /// Every site any session serves, newest session first, so the app can list them all in one place.
+    /// The sites a session serves.
+    public func sites(of session: SessionSummary) -> [SiteEntry] {
+        let local = environment(of: session.id)?.isLocal == true
+        return session.servedSites.map { SiteEntry(site: $0, session: session, opens: $0.published || local) }
+    }
+
     public var allSites: [SiteEntry] {
         sessions.values
-            .flatMap { session in session.servedSites.map { SiteEntry(site: $0, session: session) } }
+            .flatMap { sites(of: $0) }
             .sorted { a, b in
                 if a.session.createdAt != b.session.createdAt { return a.session.createdAt > b.session.createdAt }
                 return a.site.port < b.site.port

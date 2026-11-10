@@ -1,12 +1,12 @@
-// The home page: a composer to start a session, what is running, and what the code has been doing, as the
-// computers' own `git` tells it.
+// The home page: a composer to start a session, what is running, and what the code has been doing, as GitHub
+// tells it through a computer's `gh`.
 import SwiftUI
 
 /// No session open on the Mac: the beam at full strength, the composer, and the dashboard below it.
 struct HomeView: View {
     let store: SessionStore
-    /// Opens New Session with a first message and, optionally, a folder.
-    let start: (_ message: String, _ folder: String?) -> Void
+    /// Opens New Session with a first message.
+    let start: (_ message: String) -> Void
     @State private var shown = false
 
     var body: some View {
@@ -27,7 +27,7 @@ struct HomeView: View {
                     .opacity(shown ? 1 : 0)
                     .offset(y: shown ? 0 : 12)
 
-                Dashboard(store: store, start: start)
+                Dashboard(store: store)
                     .frame(maxWidth: .infinity)
                     .frame(maxWidth: 1000)
             }
@@ -46,8 +46,9 @@ struct HomeView: View {
 /// with the message in it, to pick or confirm the folder.
 struct HomeComposer: View {
     let store: SessionStore
-    let start: (_ message: String, _ folder: String?) -> Void
+    let start: (_ message: String) -> Void
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
+    @AppStorage("newSession.environment") private var chosenEnv = ""
     @AppStorage("newSession.model") private var model = ""
     @AppStorage("newSession.thinking") private var thinking = ""
     @AppStorage("newSession.folders") private var lastFolders = ""
@@ -55,10 +56,11 @@ struct HomeComposer: View {
     @FocusState private var focused: Bool
     var compact = false
 
+    /// The folder New Session will open with: the last one on the computer it will pick.
     private var folder: String? {
-        let env = store.environments.first?.id ?? ""
+        let env = store.environments.contains { $0.id == chosenEnv } ? chosenEnv : store.environments.first?.id ?? ""
         let lines = lastFolders.split(separator: "\n").map { $0.split(separator: "\t", maxSplits: 1).map(String.init) }
-        return lines.first { $0.count == 2 && $0[0] == env }?[1] ?? lines.first?.last
+        return lines.first { $0.count == 2 && $0[0] == env }?[1]
     }
 
     var body: some View {
@@ -95,7 +97,7 @@ struct HomeComposer: View {
                         // Always there: where the agent works is the first thing to choose.
                         chip(folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder", icon: "folder")
                             .fixedSize()
-                        Button { start(message, nil) } label: {
+                        Button { start(message) } label: {
                             HStack(spacing: 6) {
                                 AgentMark(agent: agent, size: 16, glow: false)
                                 Text(agent.displayName)
@@ -116,7 +118,7 @@ struct HomeComposer: View {
     }
 
     private func chip(_ text: String, icon: String, menu: Bool = false) -> some View {
-        Button { start(message, nil) } label: {
+        Button { start(message) } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
                 Text(text).lineLimit(1).truncationMode(.middle)
@@ -131,7 +133,7 @@ struct HomeComposer: View {
     private func send() {
         guard store.connection == .connected else { return }
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        start(text, nil)
+        start(text)
         message = ""
     }
 }
@@ -152,7 +154,6 @@ extension View {
 /// The cards under the composer: what runs now, and the code.
 struct Dashboard: View {
     let store: SessionStore
-    let start: (_ message: String, _ folder: String?) -> Void
     @State private var appeared = false
 
     var body: some View {
@@ -294,12 +295,16 @@ struct SitesCard: View {
                                 Text("\(entry.site.port) · \(entry.session.title)").font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer(minLength: 4)
-                            Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                            if entry.opens {
+                                Image(systemName: "arrow.up.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                            }
                         }
                         .padding(.vertical, 7).padding(.horizontal, 6)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(RowButton())
+                    // On another computer and not on the tailnet: its address is that computer's loopback.
+                    .disabled(!entry.opens)
                 }
             }
         }
@@ -330,7 +335,7 @@ struct RowButton: ButtonStyle {
 
 /// A status dot: blue and rippling while running, orange and beating while it waits for you, grey otherwise.
 struct LiveDot: View {
-    enum Kind { case running, attention, waiting, idle, error }
+    enum Kind { case running, attention, waiting, error }
     let state: Kind
     var size: CGFloat = 8
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -340,11 +345,10 @@ struct LiveDot: View {
         case .running: Palette.accent
         case .attention: Palette.attention
         case .waiting: Palette.accent.opacity(0.75)
-        case .idle: Palette.moon.opacity(0.35)
         case .error: Palette.danger
         }
         Circle().fill(color).frame(width: size, height: size)
-            .shadow(color: color.opacity(state == .idle ? 0 : 0.8), radius: 4)
+            .shadow(color: color.opacity(0.8), radius: 4)
             .background {
                 if state == .running {
                     RippleField(color: color, diameter: size, still: reduceMotion).frame(width: size * 3, height: size * 3)

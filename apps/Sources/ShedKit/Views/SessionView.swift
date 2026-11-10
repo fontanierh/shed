@@ -123,7 +123,7 @@ struct SessionView: View {
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         .sheet(isPresented: $showingSites) {
             NavigationStack {
-                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+                SitesPanel(entries: store.sites(of: session),
                            title: "Sites", empty: "Servers this session starts appear here.")
             }
             .presentationDetents([.medium, .large])

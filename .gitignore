@@ -1,6 +1,6 @@
 node_modules/
 .build/
-*.xcodeproj/xcuserdata/
+xcuserdata/
 DerivedData/
 .DS_Store
 apps/build/

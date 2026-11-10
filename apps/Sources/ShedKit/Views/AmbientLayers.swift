@@ -105,7 +105,7 @@ struct TrailField: AmbientLayers {
 
     func install(on host: CALayer, size: CGSize, scale: CGFloat) {
         let ice = Palette.ice.resolve(in: EnvironmentValues()).cgColor
-        let amber = Palette.accent.resolve(in: EnvironmentValues()).cgColor
+        let accent = Palette.accent.resolve(in: EnvironmentValues()).cgColor
         let moon = Palette.moon.resolve(in: EnvironmentValues()).cgColor
         let mid = size.height / 2
 
@@ -122,12 +122,12 @@ struct TrailField: AmbientLayers {
         firefly.bounds = CGRect(x: 0, y: 0, width: 56, height: 18)
         firefly.position = CGPoint(x: x(0), y: mid)
         let tail = CAGradientLayer()
-        tail.colors = [amber.copy(alpha: 0) ?? amber, amber.copy(alpha: 0.8) ?? amber, amber.copy(alpha: 0) ?? amber]
+        tail.colors = [accent.copy(alpha: 0) ?? accent, accent.copy(alpha: 0.8) ?? accent, accent.copy(alpha: 0) ?? accent]
         tail.startPoint = CGPoint(x: 0, y: 0.5)
         tail.endPoint = CGPoint(x: 1, y: 0.5)
         tail.frame = CGRect(x: 0, y: 8, width: 56, height: 2)
         tail.cornerRadius = 1
-        let glow = glowLayer(amber, alpha: 0.55, diameter: 18, scale: scale)
+        let glow = glowLayer(accent, alpha: 0.55, diameter: 18, scale: scale)
         glow.position = CGPoint(x: 28, y: 9)
         let dot = dotLayer(moon, diameter: 5)
         dot.position = CGPoint(x: 28, y: 9)

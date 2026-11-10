@@ -35,5 +35,11 @@ extension NSPasteboard {
         }
         return files
     }
+
+    /// Whether it carries files or an image, from its types alone: a drag asks at every move of the pointer, and
+    /// `files` would encode the image each time.
+    var hasFiles: Bool {
+        canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) || availableType(from: [.png, .tiff]) != nil
+    }
 }
 #endif
