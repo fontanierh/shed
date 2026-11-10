@@ -90,9 +90,9 @@ The bridge, in `bridge/src`:
 
 The rules the bridge keeps to:
 
-- **Data from outside is read once, where it arrives.** An agent's JSON becomes a typed value in `agent_wire.rs` (or in `opencodex.rs` and `web.rs` for those two services), by a `read` function written by hand. The rest of the code never looks inside raw JSON. The readers are forgiving on purpose: a field that is missing or has the wrong type reads as absent, because the agents change between releases.
-- **Each kind of session keeps its own state.** `BackendState` has one case for a Pi or DeepSeek Harness process, one for a Prime session and one for a Pi subagent, and code that differs by kind matches on all of them, so adding a kind fails to compile until every place has an answer.
-- **An error is handled, logged, or dropped with a stated reason.** The linter rejects `let _ = …` on a result. The one thing that may fail silently is a send to a channel nobody listens to any more, written `offer` (`channel.rs`).
+- **Data from outside is read once, where it arrives.** What an agent says about a session becomes a typed value in `agent_wire.rs`, by a `read` function written by hand, and the session code works with those types only. `opencodex.rs` and `web.rs` do the same for their two services. The readers are forgiving on purpose: a field that is missing or has the wrong type reads as absent, because the agents change between releases. Not everything follows the rule yet: the drivers (`dsh.rs`, `prime.rs`), `transcript.rs` and `jobs.rs` still pick fields out of JSON in their own code.
+- **Each kind of session keeps its own state.** `BackendState` has one case for a Pi or DeepSeek Harness process, one for a Prime session and one for a Pi subagent, and code that does something different for each kind matches on all of them, so a new kind fails to compile there until it has an answer. Plain yes-or-no checks on one kind are still written as comparisons.
+- **An error is handled, logged, or dropped with a stated reason.** The linter rejects `let _ = …` and a bare `.ok();` on a result. The one thing that may fail silently is a send to a channel nobody listens to any more, written `offer` (`channel.rs`).
 - **Behaviour is pinned.** `session/tests.rs` feeds each agent's recorded events, malformed ones, and every command through the same entry points the bridge uses, with no agent running, and compares everything the apps would receive with the files in `session/pins/`. A change that only moves code must leave those files as they are.
 
 The apps, in `apps/Sources/ShedKit`:
