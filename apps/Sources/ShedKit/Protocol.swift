@@ -1,4 +1,5 @@
-// Wire types shared with the bridge (bridge/src/protocol.rs).
+// Wire types shared with the bridge (bridge/src/protocol.rs). ProtocolFixtureTests reads the messages the bridge's tests
+// write to protocol/, so a change on one side fails the other's tests.
 import Foundation
 
 public enum AgentKind: String, Codable, CaseIterable, Identifiable, Sendable {

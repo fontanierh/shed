@@ -2,10 +2,10 @@ name: bridge
 
 on:
   pull_request:
-    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+    paths: ["bridge/**", "protocol/**", ".github/workflows/bridge.yml"]
   push:
     branches: [main]
-    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+    paths: ["bridge/**", "protocol/**", ".github/workflows/bridge.yml"]
 
 concurrency:
   group: bridge-${{ github.ref }}
