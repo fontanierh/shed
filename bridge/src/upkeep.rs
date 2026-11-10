@@ -277,6 +277,7 @@ fn targets(catalog: &[Value], rows: &[Value]) -> Vec<(Target, Vec<String>)> {
         .filter(|model| bare(model))
         .filter_map(|model| {
             let id = model["id"].as_str()?;
+            // Listed under a name Open Codex's settings don't know it by: nothing to write to.
             let row = row(id)?;
             let target = Target {
                 id: id.to_string(),
@@ -457,11 +458,18 @@ async fn run(gateway: &Gateway) -> Result<()> {
 /// Open Codex looks for new models.
 pub async fn keep() {
     tokio::time::sleep(Duration::from_secs(90)).await;
+    // Said once, not every half hour: an Open Codex that isn't running stays that way for a while.
+    let mut said = String::new();
     loop {
         if let Some(gateway) = opencodex::gateway().filter(|gateway| gateway.upkeep) {
-            if let Err(e) = run(&gateway).await {
-                eprintln!("Open Codex catalog upkeep: {e}");
+            let failure = match run(&gateway).await {
+                Ok(()) => String::new(),
+                Err(e) => e.to_string(),
+            };
+            if !failure.is_empty() && failure != said {
+                eprintln!("Open Codex catalog upkeep: {failure}");
             }
+            said = failure;
         }
         tokio::time::sleep(Duration::from_secs(30 * 60)).await;
     }
