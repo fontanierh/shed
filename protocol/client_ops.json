@@ -31,7 +31,7 @@
   { "id": "c30", "op": "answer_question", "sessionId": "s1", "questionId": "q1", "answers": [] },
   { "id": "c31", "op": "load_earlier", "sessionId": "s1", "before": "i1" },
   { "id": "c32", "op": "list_agent_models", "agent": "deepseek" },
-  { "id": "c33", "op": "list_dir" },
+  { "id": "c33", "op": "list_dir", "hidden": false },
   { "id": "c34", "op": "list_dir", "path": "/work", "hidden": true },
   { "id": "c35", "op": "git_branch", "path": "/work/project" },
   { "id": "c36", "op": "github_overview" }
