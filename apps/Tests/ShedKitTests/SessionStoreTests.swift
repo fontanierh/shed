@@ -66,7 +66,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(tree[1].children?.map(\.id), ["one:early", "one:late"])
         XCTAssertEqual(tree[1].children?[0].children?.map(\.id), ["one:deep"])
         XCTAssertEqual(store.tree(in: "two").map(\.id), ["two:orphan"])
-        XCTAssertEqual(Set(store.tree.map(\.id)), ["one:new", "one:old", "two:orphan"])
+        XCTAssertEqual(Set(store.tree(in: nil).map(\.id)), ["one:new", "one:old", "two:orphan"])
 
         XCTAssertEqual(store.activeDescendants(of: "one:old"), 3)
         XCTAssertEqual(store.activeDescendants(of: "one:new"), 0)

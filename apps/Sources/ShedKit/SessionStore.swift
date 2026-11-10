@@ -298,8 +298,6 @@ public final class SessionStore {
 
     public var selected: SessionSummary? { selectedId.flatMap { sessions[$0] } }
 
-    public var tree: [SessionNode] { tree(in: nil) }
-
     /// The session tree of one environment, or of all of them.
     public func tree(in env: String?) -> [SessionNode] {
         let roots = sessions.values.filter { s in
@@ -336,13 +334,13 @@ public final class SessionStore {
         sessions.values.filter { $0.isSubagent && $0.isActive && !ended.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// Every site any session serves, newest session first, so the app can list them all in one place.
     /// The sites a session serves.
     public func sites(of session: SessionSummary) -> [SiteEntry] {
         let local = environment(of: session.id)?.isLocal == true
         return session.servedSites.map { SiteEntry(site: $0, session: session, opens: $0.published || local) }
     }
 
+    /// Every site any session serves, newest session first, so the app can list them all in one place.
     public var allSites: [SiteEntry] {
         sessions.values
             .flatMap { sites(of: $0) }
@@ -350,11 +348,6 @@ public final class SessionStore {
                 if a.session.createdAt != b.session.createdAt { return a.session.createdAt > b.session.createdAt }
                 return a.site.port < b.site.port
             }
-    }
-
-    /// The sites one session serves.
-    public func sites(of sessionId: String) -> [Site] {
-        sessions[sessionId]?.servedSites ?? []
     }
 
     /// Subagents below this session (any depth) still at work. Prime parents keep going while these run.
@@ -366,7 +359,7 @@ public final class SessionStore {
     /// same name to one subagent after another: the mention's time tells which. `spawning` is the call that started
     /// it, so the subagent is the first to come after; anything else (a report, an exit) comes from one that was
     /// already there.
-    public func child(of id: String, named name: String, near date: Date? = nil, spawning: Bool = false) -> SessionSummary? {
+    private func child(of id: String, named name: String, near date: Date?, spawning: Bool) -> SessionSummary? {
         let named = allChildren(of: id).filter { $0.name == name }
         guard let at = date.map({ $0.timeIntervalSince1970 * 1000 }) else { return named.last }
         // The agent's clock and the bridge's stamps are a moment apart.
@@ -741,9 +734,7 @@ public final class SessionStore {
     public func stopTool() { perform("stop_tool") }
     /// Kills the session's Python kernel, for one stuck past what Stop can interrupt; Prime starts a fresh one.
     public func restartKernel() { perform("restart_kernel") }
-    public func compact(instructions: String? = nil) {
-        perform("compact", instructions.map { ["instructions": $0] } ?? [:])
-    }
+    public func compact() { perform("compact") }
     public func newSession() { perform("new_session") }
     public func clearGoal() { perform("clear_goal") }
     public func setThinking(_ level: String) { perform("set_thinking", ["level": level]) }

@@ -127,7 +127,7 @@ struct SessionSidebar: View {
                             }
                         } else {
                             SectionTitle("Sessions")
-                            ForEach(store.tree) { node in tree(node, depth: 0) }
+                            ForEach(store.tree(in: nil)) { node in tree(node, depth: 0) }
                         }
                         #if os(iOS)
                         // The phone's home page lives at the end of its list: the open pull requests. (No contributions
@@ -282,7 +282,7 @@ struct SessionSidebar: View {
                 if let children = node.children, expanded.contains(node.id) { walk(children) }
             }
         }
-        walk(store.tree)
+        walk(store.tree(in: nil))
         return out
     }
 
