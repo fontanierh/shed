@@ -141,6 +141,16 @@ To keep sites on the Mac, turn publishing off in `~/.agent-remote/config.json`:
 
 A server an agent starts detached (`nohup`, a daemon) stays its session's site: the bridge remembers whose it was, and one it never saw start goes to the session working in the folder the server runs in.
 
+## New models
+
+Open Codex lists a provider's new model within the hour, but with no reasoning efforts and no image input until one of its own releases describes it, which can take days. Shed fills the gap by asking the provider: every half hour the bridge looks for models listed that way and sends each a few small requests through Open Codex, one with a picture and one per effort the provider's other models take. What the provider accepts is written into Open Codex's model settings, and the model shows in Shed with its efforts and attachments.
+
+It costs a handful of small requests on your own keys per new model, and only touches models that have no settings of their own in Open Codex. To turn it off, in `~/.agent-remote/config.json`:
+
+```json
+"opencodex": { "upkeep": false }
+```
+
 ## Uninstall
 
 ```bash
