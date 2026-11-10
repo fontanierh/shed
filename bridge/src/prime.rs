@@ -12,6 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
 use crate::agent_wire::{InactiveRow, PrimeRow};
+use crate::channel::Offer;
 use crate::protocol::SessionKind;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
@@ -169,12 +170,12 @@ impl PrimeDaemon {
                 // It was connected and lost: the next try doesn't wait as long as after a row of failures.
                 Ok(()) => {
                     delay = Duration::from_secs(1);
-                    let _ = tx.send(DaemonEvent::Disconnected(
+                    tx.offer(DaemonEvent::Disconnected(
                         "Prime daemon connection closed".into(),
                     ));
                 }
                 Err(e) => {
-                    let _ = tx.send(DaemonEvent::Disconnected(e.to_string()));
+                    tx.offer(DaemonEvent::Disconnected(e.to_string()));
                 }
             }
             *self.writer.lock().await = None;
@@ -247,9 +248,11 @@ impl PrimeDaemon {
             .filter_map(|row| PrimeRow::read(&row["summary"]))
             .collect();
         let running: HashSet<String> = rows.iter().filter_map(top_level).collect();
-        let _ = tx.send(DaemonEvent::Roster(rows));
+        tx.offer(DaemonEvent::Roster(rows));
         tokio::spawn(self.clone().wake_open_sessions(running));
-        let _ = reader.await;
+        if let Err(e) = reader.await {
+            eprintln!("prime daemon: the reader stopped: {e}");
+        }
         Ok(())
     }
 
@@ -270,11 +273,11 @@ impl PrimeDaemon {
                         .unwrap_or("command failed")
                         .to_string())
                 };
-                let _ = waiter.send(result);
+                waiter.offer(result);
             }
             "session_event" => {
                 if let Some(id) = message["activeSessionId"].as_str() {
-                    let _ = tx.send(DaemonEvent::SessionEvent {
+                    tx.offer(DaemonEvent::SessionEvent {
                         active_session_id: id.into(),
                         event: message["event"].clone(),
                     });
@@ -285,21 +288,21 @@ impl PrimeDaemon {
                 for row in message["changed"].as_array().into_iter().flatten() {
                     if row["status"] == "inactive" {
                         if let Some(row) = InactiveRow::read(&row["summary"]) {
-                            let _ = tx.send(DaemonEvent::Inactive(row));
+                            tx.offer(DaemonEvent::Inactive(row));
                         }
                     } else {
                         rows.extend(PrimeRow::read(&row["summary"]));
                     }
                 }
                 self.note_shown(&rows);
-                let _ = tx.send(DaemonEvent::RosterUpdate(rows));
+                tx.offer(DaemonEvent::RosterUpdate(rows));
             }
             "session_closed" => {
                 let id = message["activeSessionId"]
                     .as_str()
                     .or_else(|| message["summary"]["activeSessionId"].as_str());
                 if let Some(id) = id {
-                    let _ = tx.send(DaemonEvent::SessionClosed(id.into()));
+                    tx.offer(DaemonEvent::SessionClosed(id.into()));
                 }
             }
             _ => {}
@@ -432,8 +435,10 @@ impl PrimeDaemon {
         for id in asleep {
             match self.attach(id).await {
                 Ok(_) => {
-                    let _ = self.session(id, "detach", json!({})).await;
                     eprintln!("reopened Prime session {id} the daemon had left without a worker");
+                    if let Err(e) = self.session(id, "detach", json!({})).await {
+                        eprintln!("could not detach from Prime session {id} again: {e}");
+                    }
                 }
                 Err(e) => eprintln!("could not reopen Prime session {id}: {e}"),
             }

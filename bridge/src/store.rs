@@ -83,21 +83,34 @@ impl Store {
         Ok(id)
     }
 
-    pub fn load_sessions(&self) -> Vec<SessionRecord> {
-        let path = self.dir.join("sessions.json");
-        let Ok(raw) = std::fs::read_to_string(&path) else {
-            return Vec::new();
+    /// What one of the bridge's own files holds, or nothing for a file that isn't there yet. One that can't be
+    /// understood is kept aside, since the next save writes it anew.
+    fn load<T: serde::de::DeserializeOwned + Default>(&self, name: &str) -> T {
+        let path = self.dir.join(name);
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("{name} can't be read: {e}");
+                }
+                return T::default();
+            }
         };
         serde_json::from_str(&raw).unwrap_or_else(|e| {
-            // Kept aside: the next save writes the list anew.
             let aside = path.with_extension("json.bad");
-            let _ = std::fs::copy(&path, &aside);
-            eprintln!(
-                "sessions.json can't be read ({e}); kept as {}",
-                aside.display()
-            );
-            Vec::new()
+            match std::fs::copy(&path, &aside) {
+                Ok(_) => eprintln!("{name} can't be read ({e}); kept as {}", aside.display()),
+                Err(copy) => eprintln!(
+                    "{name} can't be read ({e}), and can't be kept as {}: {copy}",
+                    aside.display()
+                ),
+            }
+            T::default()
         })
+    }
+
+    pub fn load_sessions(&self) -> Vec<SessionRecord> {
+        self.load("sessions.json")
     }
 
     pub fn save_sessions(&self, records: &[SessionRecord]) -> Result<()> {
@@ -138,18 +151,12 @@ impl Store {
 
     /// Context windows chosen per session, Pi's and Prime's alike, by session id.
     pub fn load_limits(&self) -> HashMap<String, u64> {
-        std::fs::read_to_string(self.dir.join("limits.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+        self.load("limits.json")
     }
 
     /// The sites the bridge published, so it can take their routes down when they end and never touch the rest.
     pub fn load_published_sites(&self) -> std::collections::BTreeMap<u16, crate::sites::Published> {
-        std::fs::read_to_string(self.dir.join("sites.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+        self.load("sites.json")
     }
 
     pub fn save_published_sites(
@@ -365,11 +372,27 @@ mod tests {
     }
 
     #[test]
-    fn a_list_of_sessions_that_cannot_be_read_is_kept_aside() {
+    fn a_file_that_cannot_be_understood_is_kept_aside() {
         let store = store("sessions");
         std::fs::write(store.dir.join("sessions.json"), "[{\"id\": 1}]").unwrap();
+        std::fs::write(store.dir.join("limits.json"), "{\"0a1b2c3d\": \"wide\"}").unwrap();
+        std::fs::write(store.dir.join("sites.json"), "not json").unwrap();
         assert!(store.load_sessions().is_empty());
-        assert!(store.dir.join("sessions.json.bad").is_file());
+        assert!(store.load_limits().is_empty());
+        assert!(store.load_published_sites().is_empty());
+        for name in ["sessions", "limits", "sites"] {
+            assert!(store.dir.join(format!("{name}.json.bad")).is_file());
+        }
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_yet_reads_as_empty_and_leaves_nothing_aside() {
+        let store = store("absent");
+        assert!(store.load_sessions().is_empty());
+        assert!(store.load_limits().is_empty());
+        assert!(store.load_published_sites().is_empty());
+        assert_eq!(std::fs::read_dir(&store.dir).unwrap().count(), 0);
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 }

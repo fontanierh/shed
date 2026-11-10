@@ -28,5 +28,7 @@ tokio = { version = "1", features = ["test-util"] }
 
 [lints.clippy]
 dbg_macro = "deny"
+let_underscore_must_use = "deny"
 todo = "deny"
 unimplemented = "deny"
+unused_result_ok = "deny"

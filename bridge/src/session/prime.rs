@@ -50,7 +50,9 @@ impl App {
                         if was_attached {
                             let app = self.clone();
                             tokio::spawn(async move {
-                                let _ = app.ensure_attached(&s).await;
+                                if let Err(e) = app.ensure_attached(&s).await {
+                                    eprintln!("attaching to {} again failed: {e}", s.id);
+                                }
                             });
                         }
                     }

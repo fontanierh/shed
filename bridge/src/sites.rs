@@ -219,7 +219,11 @@ async fn title(host: &str, port: u16) -> Option<String> {
     .ok()?
     .ok()?;
     let mut body = Vec::new();
-    let read = tokio::time::timeout(Duration::from_millis(2500), async {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a slow page: the title is looked for in what arrived in time"
+    )]
+    let _ = tokio::time::timeout(Duration::from_millis(2500), async {
         let mut chunk = [0u8; 8192];
         while body.len() < 128 * 1024 {
             match stream.read(&mut chunk).await {
@@ -233,7 +237,6 @@ async fn title(host: &str, port: u16) -> Option<String> {
         }
     })
     .await;
-    let _ = read;
     let text = String::from_utf8_lossy(&body);
     page_title(&text)
 }
@@ -502,7 +505,7 @@ impl crate::session::App {
                 let before = published.len();
                 published.retain(|_, site| served.contains_key(&site.tailnet_port()));
                 if published.len() != before {
-                    let _ = self.store.save_published_sites(&published);
+                    self.save_published(&published);
                 }
             }
 
@@ -533,7 +536,7 @@ impl crate::session::App {
                                 served: (to != port).then_some(to),
                             },
                         );
-                        let _ = self.store.save_published_sites(&published);
+                        self.save_published(&published);
                     }
                 }
             }
@@ -555,7 +558,7 @@ impl crate::session::App {
                 if unpublish(to).await {
                     served.remove(&to);
                     published.remove(&port);
-                    let _ = self.store.save_published_sites(&published);
+                    self.save_published(&published);
                 }
             }
 
@@ -613,6 +616,12 @@ impl crate::session::App {
                     });
             }
             self.set_sites(by_session).await;
+        }
+    }
+
+    fn save_published(&self, published: &BTreeMap<u16, Published>) {
+        if let Err(e) = self.store.save_published_sites(published) {
+            eprintln!("failed to save the published sites: {e}");
         }
     }
 

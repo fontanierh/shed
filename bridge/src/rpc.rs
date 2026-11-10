@@ -13,6 +13,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::channel::Offer;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
@@ -285,9 +287,9 @@ impl RpcChild {
                             .unwrap_or("command failed")
                             .to_string())
                     };
-                    let _ = waiter.send(result);
+                    waiter.offer(result);
                 } else {
-                    let _ = tx.send(ChildOutput::Event(record));
+                    tx.offer(ChildOutput::Event(record));
                 }
             }
             let reason = match reader_rpc.upgrade() {
@@ -295,9 +297,9 @@ impl RpcChild {
                 None => "agent exited".into(),
             };
             for (_, waiter) in pending.lock().unwrap().drain() {
-                let _ = waiter.send(Err(reason.clone()));
+                waiter.offer(Err(reason.clone()));
             }
-            let _ = tx.send(ChildOutput::Exited(reason));
+            tx.offer(ChildOutput::Exited(reason));
         });
 
         Ok((rpc, rx))
@@ -350,7 +352,9 @@ impl RpcChild {
             Some(dsh) => dsh.close().await,
             None => {
                 if let Some(stdin) = self.stdin.lock().await.as_mut() {
-                    let _ = stdin.shutdown().await;
+                    if let Err(e) = stdin.shutdown().await {
+                        eprintln!("closing an agent's input: {e}");
+                    }
                 }
             }
         }
@@ -361,7 +365,9 @@ impl RpcChild {
                     .await
                     .is_err()
                 {
-                    let _ = child.kill().await;
+                    if let Err(e) = child.kill().await {
+                        eprintln!("an agent still running 3 seconds after its close could not be killed: {e}");
+                    }
                 }
             });
         }
