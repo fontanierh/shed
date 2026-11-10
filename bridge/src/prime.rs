@@ -459,3 +459,23 @@ fn start_daemon() -> Result<()> {
         .map_err(|e| anyhow!("failed to start prime-agent daemon: {e}"))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn only_top_level_sessions_are_remembered() {
+        let row = |more: Value| {
+            let mut row = json!({ "activeSessionId": "a1", "sessionId": "s1" });
+            row.as_object_mut()
+                .unwrap()
+                .extend(more.as_object().unwrap().clone());
+            PrimeRow::read(&row).unwrap()
+        };
+        assert_eq!(top_level(&row(json!({}))).as_deref(), Some("s1"));
+        assert_eq!(top_level(&row(json!({ "runtimeKind": "subagent" }))), None);
+    }
+}

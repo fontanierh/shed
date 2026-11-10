@@ -508,3 +508,37 @@ pub fn compaction_summary(messages: &[Value]) -> Option<&str> {
         .filter(|m| m["role"] == "compactionSummary")
         .and_then(|m| m["summary"].as_str())
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn a_prime_row_is_listed_by_its_session_id_then_its_id() {
+        let listed = |row: Value| PrimeRow::read(&row).and_then(|row| row.listed_as);
+        assert_eq!(
+            listed(json!({ "activeSessionId": "a1", "sessionId": "s1", "id": "i1" })).as_deref(),
+            Some("s1")
+        );
+        assert_eq!(
+            listed(json!({ "activeSessionId": "a1", "id": "i1" })).as_deref(),
+            Some("i1")
+        );
+        assert_eq!(listed(json!({ "activeSessionId": "a1" })), None);
+        assert_eq!(listed(json!({ "sessionId": "s1" })), None);
+    }
+
+    #[test]
+    fn a_stopped_prime_row_needs_a_file_or_an_id() {
+        let read =
+            |row: Value| InactiveRow::read(&row).map(|row| (row.session_file, row.session_id));
+        assert_eq!(
+            read(json!({ "sessionFile": "/work/s.jsonl", "sessionId": "s1", "id": "i1" })),
+            Some((Some("/work/s.jsonl".into()), Some("s1".into())))
+        );
+        assert_eq!(read(json!({ "id": "i1" })), Some((None, Some("i1".into()))));
+        assert_eq!(read(json!({ "activeSessionId": "a1" })), None);
+    }
+}
