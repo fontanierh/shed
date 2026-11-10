@@ -3,8 +3,12 @@
 //! files saved with a file in `pins/`. `UPDATE_FIXTURES=1 cargo test` rewrites the files: read the diff before
 //! committing it, since it is the change in behaviour.
 
+use std::time::Duration;
+
 use super::*;
-use crate::protocol::Goal;
+use crate::agent_wire::{InactiveRow, PrimeRow};
+use crate::prime::DaemonEvent;
+use crate::protocol::{Goal, ModelInfo};
 
 /// Stands in for the agents: answers the bridge's commands from a script and keeps what it was asked.
 #[derive(Default)]
@@ -166,8 +170,27 @@ impl Rig {
         let _ = std::fs::remove_dir_all(self.app.store.dir());
         assert!(
             pinned == text,
-            "{pin} no longer behaves as pinned. UPDATE_FIXTURES=1 cargo test rewrites {path}: its diff is the change."
+            "{pin} no longer behaves as pinned, from {}. UPDATE_FIXTURES=1 cargo test rewrites {path}: its diff is \
+             the change.",
+            first_difference(&pinned, &text)
         );
+    }
+}
+
+/// Where two texts part, for a failure that can be read without rewriting the pin.
+fn first_difference(pinned: &str, seen: &str) -> String {
+    let mut lines = pinned.lines().zip(seen.lines()).enumerate();
+    match lines.find(|(_, (pinned, seen))| pinned != seen) {
+        Some((at, (pinned, seen))) => format!(
+            "line {}: pinned `{}`, now `{}`",
+            at + 1,
+            pinned.trim(),
+            seen.trim()
+        ),
+        None => format!(
+            "line {}, where one of them ends",
+            pinned.lines().count().min(seen.lines().count()) + 1
+        ),
     }
 }
 
@@ -593,8 +616,14 @@ async fn deepseek_events() {
     let mut rig = Rig::new("deepseek", &[("sessions.json", SAVED_SESSIONS)]);
     rig.terse = true;
     let dsh = rig.app.find("dsh1").await.unwrap();
-    rig.events(&dsh, &crate::dsh::tests::recorded_events())
-        .await;
+    // The feed times each tool with the clock. Replayed, a tool takes no time, or a millisecond on a slow run.
+    let mut recorded = crate::dsh::tests::recorded_events();
+    for event in &mut recorded {
+        if event["type"] == "tool_execution_end" {
+            event["durationMs"] = json!(0);
+        }
+    }
+    rig.events(&dsh, &recorded).await;
     rig.settle("the recorded feed: a background job, a subagent, an answer")
         .await;
 
@@ -757,9 +786,11 @@ where
     if std::env::var_os("UPDATE_FIXTURES").is_some() {
         std::fs::write(&path, &text).unwrap();
     }
+    let pinned = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(
-        std::fs::read_to_string(&path).unwrap_or_default() == text,
-        "{pin} no longer reads malformed messages as pinned. UPDATE_FIXTURES=1 cargo test rewrites {path}."
+        pinned == text,
+        "{pin} no longer reads malformed messages as pinned, from {}. UPDATE_FIXTURES=1 cargo test rewrites {path}.",
+        first_difference(&pinned, &text)
     );
 }
 
