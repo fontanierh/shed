@@ -13,8 +13,6 @@
 //! floods the agent's context. Each call is logged, with the credits it used, to ~/.agent-remote/logs/web.log.
 
 use anyhow::{anyhow, bail, Context, Result};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -391,68 +389,45 @@ impl Request {
     }
 }
 
-/// A JSON object from outside as a `T`, whose fields are each read as `value["key"].as_str()` and the like read
-/// them: a missing key or a value of another type is none, and an unknown key is passed over. Anything but an
-/// object reads as an empty one; a derived struct would otherwise take an array as its fields in order.
-fn read<T: DeserializeOwned + Default>(value: &Value) -> T {
-    if !value.is_object() {
-        return T::default();
-    }
-    T::deserialize(value).unwrap_or_default()
+// The readers in this file take what they can of what comes from outside: a part that is missing, or of another
+// type than expected, reads as absent, never as an error.
+
+fn text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
 }
 
-fn text<'de, D: Deserializer<'de>>(from: D) -> Result<Option<String>, D::Error> {
-    Ok(match Value::deserialize(from)? {
-        Value::String(text) => Some(text),
-        _ => None,
-    })
-}
-
-fn whole<'de, D: Deserializer<'de>>(from: D) -> Result<Option<u64>, D::Error> {
-    Ok(Value::deserialize(from)?.as_u64())
-}
-
-fn flag<'de, D: Deserializer<'de>>(from: D) -> Result<Option<bool>, D::Error> {
-    Ok(Value::deserialize(from)?.as_bool())
-}
-
-/// A list of objects: none when it isn't a list, and an element that isn't an object reads as an empty one.
-fn each<'de, D, T>(from: D) -> Result<Vec<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned + Default,
-{
-    Ok(match Value::deserialize(from)? {
-        Value::Array(elements) => elements.iter().map(read).collect(),
-        _ => vec![],
-    })
-}
-
-fn nested<'de, D, T>(from: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned + Default,
-{
-    Ok(read(&Value::deserialize(from)?))
+fn list(value: &Value) -> &[Value] {
+    value.as_array().map(Vec::as_slice).unwrap_or_default()
 }
 
 /// ~/.agent-remote/config.json, as far as the web goes.
-#[derive(Deserialize, Default)]
 struct Config {
-    #[serde(default, deserialize_with = "nested")]
     web: Settings,
 }
 
+impl Config {
+    fn read(config: &Value) -> Config {
+        Config {
+            web: Settings::read(&config["web"]),
+        }
+    }
+}
+
 /// The config's `web` entry.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Settings {
-    #[serde(default, deserialize_with = "text")]
     provider: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     firecrawl_api_key: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     firecrawl_url: Option<String>,
+}
+
+impl Settings {
+    fn read(web: &Value) -> Settings {
+        Settings {
+            provider: text(&web["provider"]),
+            firecrawl_api_key: text(&web["firecrawlApiKey"]),
+            firecrawl_url: text(&web["firecrawlUrl"]),
+        }
+    }
 }
 
 enum Provider {
@@ -469,7 +444,7 @@ impl Provider {
     }
 
     fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
-        Self::from(read::<Config>(config).web, env_key)
+        Self::from(Config::read(config).web, env_key)
     }
 
     fn from(web: Settings, env_key: Option<String>) -> Result<Provider> {
@@ -535,18 +510,24 @@ async fn firecrawl(key: &str, url: &str, body: &Map<String, Value>) -> Result<Va
 }
 
 /// What any reply of Firecrawl's says of how it went.
-#[derive(Deserialize, Default)]
 struct Outcome {
-    #[serde(default, deserialize_with = "flag")]
     success: Option<bool>,
-    #[serde(default, deserialize_with = "text")]
     error: Option<String>,
+}
+
+impl Outcome {
+    fn read(reply: &Value) -> Outcome {
+        Outcome {
+            success: reply["success"].as_bool(),
+            error: text(&reply["error"]),
+        }
+    }
 }
 
 /// Firecrawl's reply, or what it said went wrong.
 fn answer(status: reqwest::StatusCode, text: &str) -> Result<Value> {
     let reply: Value = serde_json::from_str(text).unwrap_or(Value::Null);
-    let outcome: Outcome = read(&reply);
+    let outcome = Outcome::read(&reply);
     if !status.is_success() || outcome.success == Some(false) {
         let message = outcome
             .error
@@ -589,23 +570,23 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
 }
 
 /// Where a reply of Firecrawl's says the credits it used: a search at its top, a scrape in its page's metadata.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Used {
-    #[serde(default, deserialize_with = "whole")]
     credits_used: Option<u64>,
-    #[serde(default, rename = "data", deserialize_with = "page_credits")]
     page_credits_used: Option<u64>,
 }
 
-/// A scrape's `data`, of which the log reads one number two objects down.
-fn page_credits<'de, D: Deserializer<'de>>(from: D) -> Result<Option<u64>, D::Error> {
-    Ok(Value::deserialize(from)?["metadata"]["creditsUsed"].as_u64())
+impl Used {
+    fn read(reply: &Value) -> Used {
+        Used {
+            credits_used: reply["creditsUsed"].as_u64(),
+            page_credits_used: reply["data"]["metadata"]["creditsUsed"].as_u64(),
+        }
+    }
 }
 
 /// The credits a reply says it used: a search says so itself, a scrape in its page's metadata.
 fn credits(reply: &Value) -> Option<u64> {
-    let used: Used = read(reply);
+    let used = Used::read(reply);
     used.credits_used.or(used.page_credits_used)
 }
 
@@ -672,48 +653,65 @@ fn snippet(text: &str) -> String {
 }
 
 /// Firecrawl's reply to a search. Its credits go out in `--json` as they came, whatever they are.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Found {
-    #[serde(default)]
     credits_used: Value,
-    #[serde(default, deserialize_with = "nested")]
     data: Results,
 }
 
+impl Found {
+    fn read(reply: &Value) -> Found {
+        Found {
+            credits_used: reply["creditsUsed"].clone(),
+            data: Results::read(&reply["data"]),
+        }
+    }
+}
+
 /// A search's results, by where they were found.
-#[derive(Deserialize, Default)]
 struct Results {
-    #[serde(default, deserialize_with = "each")]
     web: Vec<Hit>,
-    #[serde(default, deserialize_with = "each")]
     news: Vec<Hit>,
-    #[serde(default, deserialize_with = "each")]
     images: Vec<Hit>,
 }
 
+impl Results {
+    fn read(data: &Value) -> Results {
+        let hits = |kind: &str| list(&data[kind]).iter().map(Hit::read).collect();
+        Results {
+            web: hits("web"),
+            news: hits("news"),
+            images: hits("images"),
+        }
+    }
+}
+
 /// One result of a search. Its title, date and image link go out in `--json` as they came, whatever they are.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Hit {
-    #[serde(default, deserialize_with = "text")]
     url: Option<String>,
-    #[serde(default)]
     title: Value,
-    #[serde(default, deserialize_with = "text")]
     description: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     snippet: Option<String>,
-    #[serde(default)]
     date: Value,
-    #[serde(default)]
     image_url: Value,
-    #[serde(default, deserialize_with = "text")]
     markdown: Option<String>,
 }
 
+impl Hit {
+    fn read(hit: &Value) -> Hit {
+        Hit {
+            url: text(&hit["url"]),
+            title: hit["title"].clone(),
+            description: text(&hit["description"]),
+            snippet: text(&hit["snippet"]),
+            date: hit["date"].clone(),
+            image_url: hit["imageUrl"].clone(),
+            markdown: text(&hit["markdown"]),
+        }
+    }
+}
+
 fn present_search(reply: &Value, request: &Request) -> Result<String> {
-    let reply: Found = read(reply);
+    let reply = Found::read(reply);
     let dir = request.files();
     let mut sources = vec![];
     let mut out = String::new();
@@ -785,54 +783,88 @@ fn present_search(reply: &Value, request: &Request) -> Result<String> {
 }
 
 /// Firecrawl's reply to a scrape.
-#[derive(Deserialize, Default)]
 struct Scraped {
-    #[serde(default, deserialize_with = "nested")]
     data: Page,
 }
 
+impl Scraped {
+    fn read(reply: &Value) -> Scraped {
+        Scraped {
+            data: Page::read(&reply["data"]),
+        }
+    }
+}
+
+/// The parts of a scrape `present_page` lays out itself; anything else in it is passed on as it is.
+const HANDLED: &[&str] = &[
+    "markdown",
+    "summary",
+    "html",
+    "rawHtml",
+    "rawBase64",
+    "screenshot",
+    "warning",
+    "metadata",
+];
+
 /// A scraped page: the parts `present_page` lays out itself, and in `other` anything else, passed on as it is.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Page {
-    #[serde(default, deserialize_with = "text")]
     markdown: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     summary: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     html: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     raw_html: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     raw_base64: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     screenshot: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     warning: Option<String>,
     /// Goes out whole in `--json`; `Metadata` is what is read of it.
-    #[serde(default)]
     metadata: Value,
-    #[serde(flatten)]
     other: Map<String, Value>,
 }
 
+impl Page {
+    fn read(data: &Value) -> Page {
+        Page {
+            markdown: text(&data["markdown"]),
+            summary: text(&data["summary"]),
+            html: text(&data["html"]),
+            raw_html: text(&data["rawHtml"]),
+            raw_base64: text(&data["rawBase64"]),
+            screenshot: text(&data["screenshot"]),
+            warning: text(&data["warning"]),
+            metadata: data["metadata"].clone(),
+            other: data
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(field, _)| !HANDLED.contains(&field.as_str()))
+                .map(|(field, value)| (field.clone(), value.clone()))
+                .collect(),
+        }
+    }
+}
+
 /// What is read of a page's `metadata`. Its status and title go out in `--json` as they came, whatever they are.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Metadata {
-    #[serde(default, deserialize_with = "text")]
     url: Option<String>,
-    #[serde(default, rename = "sourceURL", deserialize_with = "text")]
     source_url: Option<String>,
-    #[serde(default)]
     status_code: Value,
-    #[serde(default)]
     title: Value,
 }
 
+impl Metadata {
+    fn read(metadata: &Value) -> Metadata {
+        Metadata {
+            url: text(&metadata["url"]),
+            source_url: text(&metadata["sourceURL"]),
+            status_code: metadata["statusCode"].clone(),
+            title: metadata["title"].clone(),
+        }
+    }
+}
+
 async fn present_page(reply: &Value, request: &Request) -> Result<String> {
-    let data = read::<Scraped>(reply).data;
-    let meta: Metadata = read(&data.metadata);
+    let data = Scraped::read(reply).data;
+    let meta = Metadata::read(&data.metadata);
     let url = meta.url.or(meta.source_url).unwrap_or_default();
     let dir = request.files();
     let mut page = json!({
@@ -1101,13 +1133,17 @@ mod tests {
     fn the_key_comes_from_the_config_or_the_environment() {
         let config = json!({ "provider": "firecrawl", "firecrawlApiKey": "fc-config" });
         let Provider::Firecrawl { key, base } =
-            Provider::from(read(&config), Some("fc-env".into())).unwrap();
+            Provider::from(Settings::read(&config), Some("fc-env".into())).unwrap();
         assert_eq!((key.as_str(), base.as_str()), ("fc-config", FIRECRAWL));
         let Provider::Firecrawl { key, .. } =
-            Provider::from(read(&Value::Null), Some("fc-env".into())).unwrap();
+            Provider::from(Settings::read(&Value::Null), Some("fc-env".into())).unwrap();
         assert_eq!(key, "fc-env");
-        assert!(Provider::from(read(&Value::Null), None).is_err());
-        assert!(Provider::from(read(&json!({ "provider": "other" })), Some("k".into())).is_err());
+        assert!(Provider::from(Settings::read(&Value::Null), None).is_err());
+        assert!(Provider::from(
+            Settings::read(&json!({ "provider": "other" })),
+            Some("k".into())
+        )
+        .is_err());
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1267,13 +1303,13 @@ mod tests {
             "extra": true,
         });
         assert_eq!(
-            firecrawl_of(Provider::from(read(&web), None)),
+            firecrawl_of(Provider::from(Settings::read(&web), None)),
             both("fc-config", "http://firecrawl.test")
         );
         // A key or an address that isn't text is as good as missing.
         let web = json!({ "firecrawlApiKey": 7, "firecrawlUrl": 7 });
         assert_eq!(
-            firecrawl_of(Provider::from(read(&web), Some("fc-env".into()))),
+            firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
             both("fc-env", FIRECRAWL)
         );
         // So is a `web` that isn't an object.
@@ -1283,21 +1319,22 @@ mod tests {
             json!(true),
         ] {
             assert_eq!(
-                firecrawl_of(Provider::from(read(&web), Some("fc-env".into()))),
+                firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
                 both("fc-env", FIRECRAWL),
                 "{web}"
             );
         }
         // A blank key is no key, and one in the config hides the environment's.
-        assert!(Provider::from(read(&Value::Null), Some(" ".into())).is_err());
+        assert!(Provider::from(Settings::read(&Value::Null), Some(" ".into())).is_err());
         assert!(Provider::from(
-            read(&json!({ "firecrawlApiKey": "" })),
+            Settings::read(&json!({ "firecrawlApiKey": "" })),
             Some("fc-env".into())
         )
         .is_err());
-        let Err(unknown) =
-            Provider::from(read(&json!({ "provider": "other" })), Some("fc-env".into()))
-        else {
+        let Err(unknown) = Provider::from(
+            Settings::read(&json!({ "provider": "other" })),
+            Some("fc-env".into()),
+        ) else {
             panic!("an unknown provider was taken")
         };
         assert_eq!(
