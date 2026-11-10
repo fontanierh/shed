@@ -309,7 +309,6 @@ public struct DirListing: Decodable, Sendable {
     public let path: String
     public let parent: String?
     public let home: String
-    public let git: Bool
     public let entries: [Entry]
 }
 
