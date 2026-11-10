@@ -11,14 +11,14 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use crate::agent_wire::{
-    self, queue_texts, AgentState, AgentStats, Attached, DshSubagent, InactiveRow, PiSubagents,
-    PrimeRow,
+    self, AgentState, AgentStats, Attached, DshSubagent, InactiveRow, PiSubagentCall, PiSubagents,
+    PrimeRow, SessionEvent,
 };
 use crate::history::{self, History};
 use crate::prime::{DaemonEvent, PrimeDaemon};
 use crate::protocol::{
-    ContextUsage, Goal, Item, ItemKind, ModelInfo, Queue, ServerMessage, SessionKind,
-    SessionStatus, SessionSummary, Spend, WaitingOn,
+    ContextUsage, Item, ItemKind, ModelInfo, Queue, ServerMessage, SessionKind, SessionStatus,
+    SessionSummary, Spend, WaitingOn,
 };
 use crate::rpc::{AgentKind, ChildOutput, RpcChild, SpawnOptions};
 use crate::store::{SessionRecord, Store};
@@ -1412,71 +1412,52 @@ impl App {
         let mut summary_changed = false;
         let mut refresh = false;
         let mut resnapshot = false;
-        let mut pi_subagents: Option<(String, Value, bool)> = None;
+        let mut pi_subagents: Option<PiSubagentCall> = None;
         let mut dsh_subagent: Option<DshSubagent> = None;
-        let kind = event["type"].as_str().unwrap_or("");
-        match kind {
-            "agent_start" => st.summary.status = SessionStatus::Running,
-            "agent_settled" => {
+        match SessionEvent::read(event) {
+            SessionEvent::AgentStarted => st.summary.status = SessionStatus::Running,
+            SessionEvent::AgentSettled => {
                 st.summary.status = SessionStatus::Idle;
                 refresh = true;
             }
-            "agent_end" | "turn_end" => refresh = true,
-            "compaction_start" => st.summary.status = SessionStatus::Compacting,
-            "compaction_end" => {
+            SessionEvent::TurnEnded | SessionEvent::ActionsChanged => refresh = true,
+            SessionEvent::CompactionStarted => st.summary.status = SessionStatus::Compacting,
+            SessionEvent::CompactionEnded { compacted } => {
                 refresh = true;
-                resnapshot = event["aborted"] != true && !event["errorMessage"].is_string();
+                resnapshot = compacted;
             }
-            "queue_update" => {
-                st.summary.queue = Queue {
-                    steering: queue_texts(&event["steering"]),
-                    follow_up: queue_texts(&event["followUp"]),
-                };
+            SessionEvent::Queue(queue) => {
+                st.summary.queue = queue;
                 summary_changed = true;
             }
-            "thinking_level_changed" => {
-                st.summary.thinking_level = event["level"].as_str().map(str::to_string);
+            SessionEvent::ThinkingLevel(level) => {
+                st.summary.thinking_level = level;
                 summary_changed = true;
             }
-            "session_info_changed" => {
-                st.named = event["name"].is_string();
-                st.summary.title = event["name"]
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| default_title(&session.cwd));
+            SessionEvent::Named(name) => {
+                st.named = name.is_some();
+                st.summary.title = name.unwrap_or_else(|| default_title(&session.cwd));
                 summary_changed = true;
             }
-            "session_action_update" => refresh = true,
-            "goal_update" => {
-                st.summary.goal = Goal::from_value(&event["goal"]);
+            SessionEvent::Goal(goal) => {
+                st.summary.goal = goal;
                 summary_changed = true;
             }
-            "dsh_jobs" => {
-                st.summary.background_jobs = event["running"].as_u64().unwrap_or(0) as u32;
+            SessionEvent::Jobs(running) => {
+                st.summary.background_jobs = running;
                 summary_changed = true;
             }
-            "dsh_subagent" => dsh_subagent = DshSubagent::read(event),
-            "dsh_question" => {
-                st.summary.question = Some(event["question"].clone()).filter(|q| q.is_object());
+            SessionEvent::Question(question) => {
+                st.summary.question = question;
                 summary_changed = true;
             }
-            "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
-                if session.backend == Backend::Pi && event["toolName"] == "subagent" =>
-            {
-                let finished = kind == "tool_execution_end";
-                st.summary.running_subagents = !finished;
+            SessionEvent::DshSubagent(child) => dsh_subagent = Some(child),
+            SessionEvent::PiSubagentCall(call) if session.backend == Backend::Pi => {
+                st.summary.running_subagents = !call.finished;
                 summary_changed = true;
-                let details = if finished {
-                    &event["result"]["details"]
-                } else {
-                    &event["partialResult"]["details"]
-                };
-                if details.is_object() {
-                    let call_id = event["toolCallId"].as_str().unwrap_or("call").to_string();
-                    pi_subagents = Some((call_id, details.clone(), finished));
-                }
+                pi_subagents = Some(call);
             }
-            _ => {}
+            SessionEvent::PiSubagentCall(_) | SessionEvent::Other => {}
         }
         st.transcript.handle_event(event);
         let looping = st.transcript.take_looping();
@@ -1502,9 +1483,8 @@ impl App {
             self.schedule_refresh(session, &mut st);
         }
         drop(st);
-        if let Some((call_id, details, finished)) = pi_subagents {
-            self.update_pi_subagents(session, &call_id, &details, finished)
-                .await;
+        if let Some(call) = pi_subagents {
+            self.update_pi_subagents(session, call).await;
         }
         if let Some(child) = dsh_subagent {
             self.update_dsh_subagent(session, child).await;
@@ -1566,14 +1546,13 @@ impl App {
     }
 
     /// Mirror the children of a Pi `subagent` tool call as read-only sessions.
-    async fn update_pi_subagents(
-        self: &Arc<Self>,
-        parent: &Arc<Session>,
-        call_id: &str,
-        details: &Value,
-        finished: bool,
-    ) {
-        let Some(PiSubagents { chain, runs }) = PiSubagents::read(details) else {
+    async fn update_pi_subagents(self: &Arc<Self>, parent: &Arc<Session>, call: PiSubagentCall) {
+        let PiSubagentCall {
+            call_id,
+            finished,
+            children: Some(PiSubagents { chain, runs }),
+        } = call
+        else {
             return;
         };
         let parent_window = parent
@@ -2020,13 +1999,8 @@ impl App {
         }
         // Rebuild Pi subagents from completed subagent tool results (e.g. after a resume).
         if session.backend == Backend::Pi {
-            for message in messages
-                .iter()
-                .filter(|m| m["role"] == "toolResult" && m["toolName"] == "subagent")
-            {
-                let call_id = message["toolCallId"].as_str().unwrap_or("call").to_string();
-                self.update_pi_subagents(session, &call_id, &message["details"], true)
-                    .await;
+            for call in PiSubagentCall::finished_in(&messages) {
+                self.update_pi_subagents(session, call).await;
             }
         }
         Ok(())
@@ -2038,10 +2012,7 @@ impl App {
         if session.backend != Backend::Prime {
             return;
         }
-        let summary = messages
-            .first()
-            .filter(|m| m["role"] == "compactionSummary")
-            .and_then(|m| m["summary"].as_str());
+        let summary = agent_wire::compaction_summary(messages);
         let (file, previous) = {
             let mut st = session.state.lock().await;
             if summary.is_none() {

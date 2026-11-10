@@ -403,3 +403,108 @@ impl DshSubagent {
         })
     }
 }
+
+/// What an event from an agent says about its session. The conversation the same events carry is `Transcript`'s to
+/// read.
+pub enum SessionEvent {
+    AgentStarted,
+    AgentSettled,
+    TurnEnded,
+    CompactionStarted,
+    CompactionEnded {
+        /// It went through, and the conversation is now the shorter one.
+        compacted: bool,
+    },
+    Queue(Queue),
+    ThinkingLevel(Option<String>),
+    /// The session's name, or that it has none any more.
+    Named(Option<String>),
+    ActionsChanged,
+    Goal(Option<Goal>),
+    /// DeepSeek Harness: how many background commands are running.
+    Jobs(u32),
+    /// DeepSeek Harness: the question the session waits on an answer to, if any.
+    Question(Option<Value>),
+    DshSubagent(DshSubagent),
+    PiSubagentCall(PiSubagentCall),
+    Other,
+}
+
+/// A `subagent` tool call of a Pi session, while it runs or once it has finished.
+pub struct PiSubagentCall {
+    pub call_id: String,
+    pub finished: bool,
+    pub children: Option<PiSubagents>,
+}
+
+impl PiSubagentCall {
+    fn read(call: &Value, finished: bool, details: &Value) -> PiSubagentCall {
+        PiSubagentCall {
+            call_id: text(&call["toolCallId"]).unwrap_or_else(|| "call".into()),
+            finished,
+            children: PiSubagents::read(details),
+        }
+    }
+
+    /// The finished `subagent` tool calls of a conversation.
+    pub fn finished_in(messages: &[Value]) -> impl Iterator<Item = PiSubagentCall> + '_ {
+        messages
+            .iter()
+            .filter(|m| m["role"] == "toolResult" && m["toolName"] == "subagent")
+            .map(|m| PiSubagentCall::read(m, true, &m["details"]))
+    }
+}
+
+impl SessionEvent {
+    pub fn read(event: &Value) -> SessionEvent {
+        let kind = event["type"].as_str().unwrap_or("");
+        match kind {
+            "agent_start" => SessionEvent::AgentStarted,
+            "agent_settled" => SessionEvent::AgentSettled,
+            "agent_end" | "turn_end" => SessionEvent::TurnEnded,
+            "compaction_start" => SessionEvent::CompactionStarted,
+            "compaction_end" => SessionEvent::CompactionEnded {
+                compacted: event["aborted"] != true && !event["errorMessage"].is_string(),
+            },
+            "queue_update" => SessionEvent::Queue(Queue {
+                steering: queue_texts(&event["steering"]),
+                follow_up: queue_texts(&event["followUp"]),
+            }),
+            "thinking_level_changed" => SessionEvent::ThinkingLevel(text(&event["level"])),
+            "session_info_changed" => SessionEvent::Named(text(&event["name"])),
+            "session_action_update" => SessionEvent::ActionsChanged,
+            "goal_update" => SessionEvent::Goal(Goal::from_value(&event["goal"])),
+            "dsh_jobs" => SessionEvent::Jobs(event["running"].as_u64().unwrap_or(0) as u32),
+            "dsh_question" => {
+                SessionEvent::Question(Some(event["question"].clone()).filter(Value::is_object))
+            }
+            "dsh_subagent" => {
+                DshSubagent::read(event).map_or(SessionEvent::Other, SessionEvent::DshSubagent)
+            }
+            "tool_execution_start" | "tool_execution_update" | "tool_execution_end"
+                if event["toolName"] == "subagent" =>
+            {
+                let finished = kind == "tool_execution_end";
+                let result = if finished {
+                    &event["result"]
+                } else {
+                    &event["partialResult"]
+                };
+                SessionEvent::PiSubagentCall(PiSubagentCall::read(
+                    event,
+                    finished,
+                    &result["details"],
+                ))
+            }
+            _ => SessionEvent::Other,
+        }
+    }
+}
+
+/// The summary a conversation starts with once the agent has compacted it.
+pub fn compaction_summary(messages: &[Value]) -> Option<&str> {
+    messages
+        .first()
+        .filter(|m| m["role"] == "compactionSummary")
+        .and_then(|m| m["summary"].as_str())
+}

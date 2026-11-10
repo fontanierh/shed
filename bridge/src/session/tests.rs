@@ -4,6 +4,7 @@
 //! committing it, since it is the change in behaviour.
 
 use super::*;
+use crate::protocol::Goal;
 
 /// Stands in for the agents: answers the bridge's commands from a script and keeps what it was asked.
 #[derive(Default)]
@@ -915,14 +916,13 @@ async fn malformed_subagents() {
     leniency("pi-subagents-malformed", details, |details| async move {
         let mut seen = serde_json::Map::new();
         for (case, before) in [("new", None), ("known", Some(earlier))] {
-            if let Some(before) = before {
-                rig.app
-                    .update_pi_subagents(pi, "call_1", before, false)
-                    .await;
+            for details in [before, Some(&details)].into_iter().flatten() {
+                let event = json!({ "type": "tool_execution_update", "toolName": "subagent",
+                    "toolCallId": "call_1", "partialResult": { "details": details } });
+                if let SessionEvent::PiSubagentCall(call) = SessionEvent::read(&event) {
+                    rig.app.update_pi_subagents(pi, call).await;
+                }
             }
-            rig.app
-                .update_pi_subagents(pi, "call_1", &details, false)
-                .await;
             seen.insert(case.into(), Value::Object(subagents(rig).await));
         }
         Value::Object(seen)
