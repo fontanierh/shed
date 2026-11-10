@@ -1,4 +1,4 @@
-//! agent-remote: control Pi and Prime Agent sessions on this Mac from the macOS and iOS apps.
+//! agent-remote: control Pi, Prime Agent and DeepSeek Harness sessions on this Mac from the macOS and iOS apps.
 
 mod dsh;
 mod cost;
@@ -70,10 +70,19 @@ async fn main() -> Result<()> {
     let shutdown_app = app.clone();
     axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
+            // Ctrl-C in a terminal, SIGTERM from launchd.
+            let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM can be listened for");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = terminate.recv() => {}
+            }
             eprintln!("shutting down, closing agent sessions");
-            shutdown_app.shutdown().await;
+            // A session that doesn't answer must not hold the restart: launchd waits, then kills.
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), shutdown_app.shutdown()).await;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // The apps' open connections would keep the server waiting.
+            std::process::exit(0);
         })
         .await?;
     Ok(())

@@ -692,24 +692,29 @@ impl App {
     pub async fn delete_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
         let key = limit_key(session, &*session.state.lock().await).to_string();
         self.forget_limit(&key);
+        self.compacting_for_limit.lock().unwrap().remove(&session.id);
         match session.backend {
             Backend::Prime => return self.close_session(session).await,
             Backend::Pi => self.close_session(session).await?,
             Backend::PiSubagent => {}
         }
-        let children: Vec<String> = {
-            let all = self.sessions.read().await.clone();
-            let mut ids = Vec::new();
-            for s in all.iter().filter(|s| s.backend == Backend::PiSubagent) {
-                if s.state.lock().await.summary.parent_id.as_deref() == Some(&session.id) {
-                    ids.push(s.id.clone());
-                }
-            }
-            ids
-        };
-        for id in children {
-            self.remove(&id).await;
+        // Its subagents and theirs: dsh nests them.
+        let mut subagents = Vec::new();
+        let all = self.sessions.read().await.clone();
+        for s in all.iter().filter(|s| s.backend == Backend::PiSubagent) {
+            subagents.push((s.id.clone(), s.state.lock().await.summary.parent_id.clone()));
         }
+        let mut family = vec![session.id.clone()];
+        let mut i = 0;
+        while i < family.len() {
+            let parent = family[i].clone();
+            family.extend(subagents.iter().filter(|s| s.1.as_deref() == Some(parent.as_str())).map(|s| s.0.clone()));
+            i += 1;
+        }
+        for id in family.iter().skip(1) {
+            self.remove(id).await;
+        }
+        crate::jobs::forget(&session.id);
         self.remove(&session.id).await;
         tokio::spawn(self.clone().save_registry());
         Ok(())
@@ -760,6 +765,8 @@ impl App {
         const WINDOW: u64 = 5 * 60 * 1000;
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
         let mut tallies: HashMap<String, crate::opencodex::Tally> = HashMap::new();
+        // The last failure logged: one that lasts (no admin token yet) is said once, not every ten seconds.
+        let mut logged = String::new();
         // Per top-level session: the family's totals when the run started, and its recent (time, cost, tokens).
         let mut runs: HashMap<String, (u64, f64, u64)> = HashMap::new();
         let mut samples: HashMap<String, std::collections::VecDeque<(u64, f64, u64)>> = HashMap::new();
@@ -810,7 +817,11 @@ impl App {
                         continue;
                     };
                     if let Err(e) = tallies.entry(conversation.clone()).or_default().update(&gateway, &conversation).await {
-                        eprintln!("Open Codex spend: {e}");
+                        let e = e.to_string();
+                        if e != logged {
+                            eprintln!("Open Codex spend: {e}");
+                            logged = e;
+                        }
                         failed = true;
                         break;
                     }
@@ -839,9 +850,10 @@ impl App {
                 let minutes = (now - base.0) as f64 / 60_000.0;
                 let spend = Spend {
                     per_minute: (priced && minutes >= 0.5).then(|| (cost - base.1).max(0.0) / minutes),
-                    tokens_per_minute: (minutes >= 0.5).then(|| (tokens - base.2) as f64 / minutes),
+                    // A family that lost a member counts fewer tokens than before: never below zero.
+                    tokens_per_minute: (minutes >= 0.5).then(|| tokens.saturating_sub(base.2) as f64 / minutes),
                     run_cost: priced.then(|| (cost - run.1).max(0.0)),
-                    run_tokens: tokens - run.2,
+                    run_tokens: tokens.saturating_sub(run.2),
                     since: run.0,
                 };
                 if ended {
@@ -1449,7 +1461,8 @@ impl App {
         st.transcript.handle_event(event);
         let looping = st.transcript.take_looping();
         self.flush_changes(&session.id, &mut st);
-        if !st.named && session.backend == Backend::Pi {
+        // Titled once, from the first message: after a compaction the transcript starts at a later one.
+        if !st.named && session.backend == Backend::Pi && st.summary.title == default_title(&session.cwd) {
             if let Some(first) = st.transcript.first_user_text() {
                 let title = first_line(first, 60);
                 if !title.is_empty() && title != st.summary.title {
@@ -1935,7 +1948,6 @@ impl App {
             }
             limits.clone()
         };
-        self.compacting_for_limit.lock().unwrap().remove(id);
         if let Err(e) = self.store.save_limits(&limits) {
             eprintln!("failed to save context windows: {e}");
         }

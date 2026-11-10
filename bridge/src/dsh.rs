@@ -257,7 +257,10 @@ impl Dsh {
             let parent = child["parent"].as_str().map(str::to_string);
             let events = child["events"].as_array().map(Vec::as_slice).unwrap_or_default();
             feed.replay_subagent(child_id, parent, events);
-            subagents.push(feed.subagent(child_id));
+            // One stored without events made no entry to describe.
+            if feed.sessions.contains_key(child_id) {
+                subagents.push(feed.subagent(child_id));
+            }
         }
         drop(feed);
         for event in subagents {

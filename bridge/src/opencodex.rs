@@ -275,10 +275,12 @@ fn update(path: &PathBuf, change: impl FnOnce(&mut Value)) -> Result<()> {
     if !value.is_object() {
         return Ok(());
     }
+    // By value, not by text: the agents write these files in their own layout, and rewriting them in ours each
+    // time would only reorder their keys.
+    let before = value.clone();
     change(&mut value);
-    let text = format!("{:#}\n", value);
-    if raw.as_deref() != Some(text.as_str()) {
-        write_if_changed(path, text.as_bytes())?;
+    if raw.is_none() || value != before {
+        write_if_changed(path, format!("{:#}\n", value).as_bytes())?;
     }
     Ok(())
 }
@@ -287,8 +289,13 @@ fn write_if_changed(path: &PathBuf, bytes: &[u8]) -> Result<()> {
     if std::fs::read(path).ok().as_deref() == Some(bytes) {
         return Ok(());
     }
-    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    // Unique per write: two syncs at once must not rename each other's temp file away.
+    let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(&tmp, bytes)?;
+    // The agents keep some of these to their user alone.
+    if let Ok(old) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, old.permissions());
+    }
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
@@ -336,6 +343,9 @@ impl Tally {
         let since = if self.through == 0 { 0 } else { self.through + 1 };
         let mut cursor: Option<String> = None;
         let mut latest = self.through;
+        // Added up apart and kept only when every page came: a failed page leaves the tally as it was, so the next
+        // try doesn't count the first pages twice.
+        let (mut tokens, mut cost, mut priced) = (self.tokens, self.cost, self.priced);
         // Pages of 100, newest first: a long session's whole history the first time, a few requests after that.
         for _ in 0..100 {
             let mut url = format!(
@@ -349,10 +359,10 @@ impl Tally {
             let page = get(&url, Some(token)).await?;
             for entry in page["entries"].as_array().into_iter().flatten() {
                 latest = latest.max(entry["timestamp"].as_u64().unwrap_or(0));
-                self.tokens += entry["totalTokens"].as_u64().unwrap_or(0);
-                if let Some(cost) = entry["displayMetrics"]["cost"]["estimate"]["cost"]["total"].as_f64() {
-                    self.cost += cost;
-                    self.priced = true;
+                tokens += entry["totalTokens"].as_u64().unwrap_or(0);
+                if let Some(entry_cost) = entry["displayMetrics"]["cost"]["estimate"]["cost"]["total"].as_f64() {
+                    cost += entry_cost;
+                    priced = true;
                 }
             }
             match page["nextCursor"].as_str() {
@@ -360,7 +370,7 @@ impl Tally {
                 _ => break,
             }
         }
-        self.through = latest;
+        (self.tokens, self.cost, self.priced, self.through) = (tokens, cost, priced, latest);
         Ok(())
     }
 }

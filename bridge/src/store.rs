@@ -34,21 +34,25 @@ impl Store {
 
     pub fn token(&self) -> Result<String> {
         let path = self.dir.join("config.json");
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            let config: serde_json::Value = serde_json::from_str(&raw)?;
-            if let Some(token) = config["token"].as_str() {
-                return Ok(token.to_string());
-            }
+        let mut config = match std::fs::read_to_string(&path) {
+            Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
+                .with_context(|| format!("{} is not valid JSON", path.display()))?,
+            Err(_) => json!({}),
+        };
+        if let Some(token) = config["token"].as_str() {
+            return Ok(token.to_string());
         }
         let token = format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        write_private(
-            &path,
-            &serde_json::to_vec_pretty(&json!({ "token": token }))?,
-        )?;
+        // What is already there stays: the installer writes its settings before the bridge first starts.
+        config
+            .as_object_mut()
+            .with_context(|| format!("{} is not a JSON object", path.display()))?
+            .insert("token".into(), json!(token));
+        write_private(&path, &serde_json::to_vec_pretty(&config)?)?;
         Ok(token)
     }
 
@@ -64,10 +68,17 @@ impl Store {
     }
 
     pub fn load_sessions(&self) -> Vec<SessionRecord> {
-        std::fs::read_to_string(self.dir.join("sessions.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+        let path = self.dir.join("sessions.json");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        serde_json::from_str(&raw).unwrap_or_else(|e| {
+            // Kept aside: the next save writes the list anew.
+            let aside = path.with_extension("json.bad");
+            let _ = std::fs::copy(&path, &aside);
+            eprintln!("sessions.json can't be read ({e}); kept as {}", aside.display());
+            Vec::new()
+        })
     }
 
     pub fn save_sessions(&self, records: &[SessionRecord]) -> Result<()> {
@@ -153,4 +164,49 @@ fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(name: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("shed-store-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Store { dir }
+    }
+
+    #[test]
+    fn the_first_token_keeps_what_the_installer_wrote() {
+        let store = store("token");
+        let path = store.dir.join("config.json");
+        std::fs::write(&path, r#"{"opencodex": false, "defaultContextWindows": {"a/b": 272000}}"#).unwrap();
+        let token = store.token().unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["token"], token.as_str());
+        assert_eq!(config["opencodex"], false);
+        assert_eq!(store.default_windows()["a/b"], 272000);
+        // And it is the same one from then on.
+        assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_token_is_made_where_there_is_no_config() {
+        let store = store("fresh");
+        let token = store.token().unwrap();
+        assert_eq!(token.len(), 64);
+        assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_of_sessions_that_cannot_be_read_is_kept_aside() {
+        let store = store("sessions");
+        std::fs::write(store.dir.join("sessions.json"), "[{\"id\": 1}]").unwrap();
+        assert!(store.load_sessions().is_empty());
+        assert!(store.dir.join("sessions.json.bad").is_file());
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
 }
