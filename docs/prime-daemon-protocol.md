@@ -26,7 +26,7 @@ The server speaks first:
 
 Responses: `{"id":"<id>","type":"response","command":"<type>","success":true,"data":…}` or `success:false, error`.
 
-Session commands are Prime's RPC commands with an `activeSessionId` added. The bridge sends `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_model`, `set_thinking_level`, `set_auto_compaction`, `set_session_name`, `prompt`, `abort`, `compact`, `new_session`, `attach` and `detach`. `steer` and `clear_queue` were verified too and aren't used. `get_available_thinking_levels` is unknown, so use `thinkingLevelMap` from `get_available_models`. Stats, state and prompt work without attaching.
+Session commands are Prime's RPC commands with an `activeSessionId` added. The bridge sends `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_model`, `set_thinking_level`, `set_auto_compaction`, `set_session_name`, `prompt`, `abort`, `compact`, `new_session`, `attach` and `detach`. `steer` and `clear_queue` were verified too and aren't used. The daemon doesn't know `get_available_thinking_levels`; the levels come from `thinkingLevelMap` in `get_available_models` instead. Stats, state and prompt work without attaching.
 
 Supervisor commands:
 
@@ -34,7 +34,7 @@ Supervisor commands:
 |---|---|---|
 | `list` | `all` (bool) | Session summaries |
 | `roster_subscribe` | — | Returns `{roster:[{agentId, summary}]}` and then pushes `roster_update` |
-| `list` rows | — | `{sessions:[…]}`, each with `lifecycle` (`live`/`archived`), `runtimeKind` (null on a top-level session without a worker), `activeSessionId`, `workerPid`. After a reboot, open sessions stay `live` but run no worker and are missing from the roster; attaching one starts its worker. When it connects, the bridge does this (attach, then detach) for the `live` top-level sessions it had listed before, which it keeps in `~/.agent-remote/prime-sessions.json`: Prime also keeps sessions live that nobody has opened since an older reboot. |
+| `list` rows | — | `{sessions:[…]}`, each with `lifecycle` (`live`/`archived`), `runtimeKind` (null on a top-level session without a worker), `activeSessionId`, `workerPid`. After a reboot, open sessions stay `live` but run no worker and are missing from the roster; attaching one starts its worker. So when the bridge connects, it wakes them: attach, then detach. It wakes only the top-level sessions it had listed before, which it remembers in `~/.agent-remote/prime-sessions.json`, because Prime also keeps as `live` the sessions nobody has opened since an earlier reboot. |
 | `create` | `config:{cwd, executionMode:"interactive", sessionDir, model:"provider/id", thinking}`, `launchEnv:{…}` | Returns a summary with `activeSessionId`. `thinking` here doesn't change the saved default. The TUI sends its whole environment as `launchEnv`; the bridge sends a curated one. |
 | `attach` | `activeSessionId`, `capabilities:["attach_snapshot","event_sequence"]` | `data.snapshot = {summary, state, messages, lastEventSequence, lastEventCursor, children}` |
 | `get_direct_worker_transport` | `activeSessionId` | Optional fast path straight to the worker socket. The bridge doesn't use it; everything also routes through the supervisor. |
@@ -64,7 +64,7 @@ Prime subagents are asynchronous. `rlm.spawn(...)` returns right away, the paren
 - `[child-exited: no-reply child:NAME] …` means the child ended a turn without reporting. It is **not** finished: it can wake up again.
 - `[bash-done pid:N exit:N] …` means a background job finished, and it wakes the session that started it.
 
-Any session can also start a shell job from its REPL (`h = bash("…")` returns a handle) and end its turn. The session state doesn't show these jobs: `isBashRunning`, `isRunningTools` and `unfinishedActionCount` all stay false, and `hasRunningSubagents` turns false as soon as the children go idle. Neither the attach snapshot's `state` nor the roster carries job bookkeeping.
+Any session can also start a shell job from its REPL (`h = bash("…")` returns a handle) and end its turn. The session state doesn't show these jobs: `isBashRunning`, `isRunningTools` and `unfinishedActionCount` all stay false, and `hasRunningSubagents` turns false as soon as the children go idle. Neither the attach snapshot's `state` nor the roster says anything about them.
 
 The daemon lists them on request, with the `kernel_bash_activity` capability. Prime's TUI uses these commands for its "shells: N" footer and background commands view:
 
@@ -77,6 +77,6 @@ The daemon lists them on request, with the `kernel_bash_activity` capability. Pr
 
 The notice is `[bash-done pid:N exit:N]\n\nCommand: "…"`, and the TUI labels it "Background command finished".
 
-The bridge proxies these as `list_jobs`, `job_output` and `kill_job`. Persistent shells get ids prefixed `shell:`. Polling `list_kernel_bash` could wake a passivated worker, so the running count published as `backgroundJobs` comes from a heuristic instead. Every 2 seconds the bridge runs `ps` and, for each Prime session's `workerPid` (from the roster row), counts the processes directly under the worker's REPL kernel (`python -m rlm.repl`). An idle worker shows only the kernel, with nothing under it. Each REPL job adds a `/bin/bash -c …` process under the kernel. Clients treat a session as active when it is running **or** has background jobs.
+The bridge proxies these as `list_jobs`, `job_output` and `kill_job`. Persistent shells get ids prefixed `shell:`. Asking `list_kernel_bash` over and over could wake a worker the daemon had put to sleep, so the count of running jobs published as `backgroundJobs` comes from the process list instead. Every 2 seconds the bridge runs `ps` and, for each Prime session's `workerPid` (from the roster row), counts the processes directly under the worker's REPL kernel (`python -m rlm.repl`). An idle worker shows only the kernel, with nothing under it. Each REPL job adds a `/bin/bash -c …` process under the kernel. Clients treat a session as active when it is running **or** has background jobs.
 
 Pi has no background commands of its own. The `background-jobs` extension (`setup/pi/extensions`) adds them on the same model: `bash_background`, `job_output`, `job_kill` and `jobs` tools, a `[bash-done id:… pid:N exit:N]` notice that wakes the agent, "shells: N" in Pi's footer, and `/jobs` in Pi's TUI. It keeps a JSON record and a log per job in `$AGENT_REMOTE_JOBS_DIR`. The bridge sets that to `~/.agent-remote/jobs/<session>` for each Pi session it starts, and reads it to serve the same three ops.

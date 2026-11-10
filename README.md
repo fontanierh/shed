@@ -14,15 +14,15 @@ Shed lets you run coding agents on your Macs and drive them from anywhere. It wo
 
 ## What it does
 
-- **One session list for every computer.** Sessions from each Mac running the bridge, Pi, Prime and DeepSeek Harness side by side, including Prime sessions started in its own TUI.
+- **One session list for every computer.** Every Mac that runs the bridge shows its sessions in the same list: Pi, Prime and DeepSeek Harness side by side, including Prime sessions started in Prime's own TUI.
 - **The full transcript, live.** Reasoning, tool calls and their output, file edits, images and audio stream in as the agent works.
-- **Steer while it runs.** Messages sent during a turn steer it; the rest queue. Stop, compact, and switch model, reasoning effort or context window from the composer.
+- **Steer while it runs.** A message sent during a turn steers it, or can be queued for when the turn ends. Stop, compact, and switch model, reasoning effort or context window from the composer.
 - **Subagents and background commands.** Child sessions show under their parent and open like any other. Shell commands an agent leaves running are listed with live output and can be cancelled.
-- **Context and cost at a glance.** A gauge for the context window, and the session's spend so far, as Open Codex measures it.
-- **Runaway protection.** The bridge stops a reply that has degenerated into whitespace or the same few characters repeated, and tells the agent why.
-- **Web search and page reading.** Every agent can search the web and read any page as Markdown through the bridge's provider (Firecrawl), each in its own way.
-- **On the iPhone,** a Live Activity follows a running session from the Lock Screen and the Dynamic Island, with what it spends a minute.
-- **One set of models for every agent.** Every agent offers exactly the models Open Codex serves: API keys and a ChatGPT subscription set up once there show up as separate choices in all of them.
+- **Context and cost at a glance.** A gauge shows how full the context window is, next to what the session has spent so far, as Open Codex measures it.
+- **Runaway protection.** The bridge stops a reply that has turned into blank space or the same few characters over and over, and tells the agent why.
+- **Web search and page reading.** Every agent can search the web and read any page as Markdown. The bridge does it for them through one provider (Firecrawl).
+- **On the iPhone,** a Live Activity follows a running session from the Lock Screen and the Dynamic Island, and shows what it spends per minute.
+- **One set of models for every agent.** Every agent offers exactly the models Open Codex serves. Set up your API keys and a ChatGPT subscription once, in Open Codex, and each shows up as its own choice in all three agents.
 
 ## How it works
 
@@ -54,7 +54,7 @@ git clone https://github.com/fontanierh/shed.git && cd shed
 setup/install.sh
 ```
 
-Run in a terminal, it walks through each part and asks for what is missing. Keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, and `FIRECRAWL_API_KEY` for [web search](#web-search-and-page-reading)). The script:
+Run it in a terminal: it goes through each part and asks for what is missing. Keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, and `FIRECRAWL_API_KEY` for [web search](#web-search-and-page-reading)). What it sets up:
 
 - **Open Codex.** Uses the one already on the Mac as it is, or installs the release Shed is tested with, and applies Shed's fixes that Open Codex hasn't released yet (`setup/opencodex/`). It runs as Open Codex's own login service. Each API key you give goes to Open Codex alone. Then it offers to sign in to a ChatGPT subscription (`ocx account login openai`) in the browser. The OpenAI key and the subscription show as separate models: `openai-apikey/…` is billed to the key, and bare ids such as `gpt-6.1-terra` go to the subscription. Claude comes from the Anthropic API key (`anthropic-apikey/…`) only: a Claude subscription is meant for Anthropic's own apps, so the bridge leaves out any Claude subscription signed in to Open Codex.
 - **Agents.** Installs or updates Pi, Prime Agent and DeepSeek Harness, makes GPT-6.1 Terra the default where none is set, and installs Pi's subagent and background-jobs extensions.
@@ -63,9 +63,9 @@ Run in a terminal, it walks through each part and asks for what is missing. Keys
 - **Tailscale.** Publishes the bridge on your tailnet (see below).
 - **iPhone app.** With `SHED_TEAM_ID` set, or on request, builds it onto a connected iPhone (see step 3).
 
-It ends with a summary of each part. It is safe to run again, and that is how you update: every step updates in place and leaves settings it doesn't own alone. `--no-app`, `--no-service`, `--no-tailscale` and `--no-iphone` skip those steps. `--no-opencodex` gives Pi and Prime your keys directly instead (the OpenAI, Anthropic, Gemini and DeepSeek ones, from the environment), and leaves every agent's own providers in place.
+It ends with a summary of each part. It is safe to run again, and that is how you update: every step updates what is there and leaves alone the settings it didn't make. `--no-app`, `--no-service`, `--no-tailscale` and `--no-iphone` skip those steps. `--no-opencodex` gives Pi and Prime your keys directly instead (the OpenAI, Anthropic, Gemini and DeepSeek ones, from the environment), and leaves every agent's own providers in place.
 
-Keys, subscriptions and models are managed afterwards in the Open Codex dashboard at http://localhost:10100. A model added there shows in every agent's list the next time you start a session (the lists are kept for a minute).
+Keys, subscriptions and models are managed afterwards in the Open Codex dashboard at http://localhost:10100. A model added there shows in every agent's list the next time you start a session (the bridge re-reads the list at most once a minute).
 
 Open **Shed** from `~/Applications`. On the Mac that runs the bridge, the app finds it and its token on its own.
 
@@ -118,7 +118,7 @@ It keeps its copy of the source in `~/.agent-remote/sync` on that Mac, apart fro
 
 macOS asks before a program first reads Documents, Desktop or Downloads, and holds the read until someone answers on that Mac. Commands an agent runs count as the bridge's, so the prompt names `agent-remote`. Grant it once, in System Settings › Privacy & Security › Full Disk Access (add `~/.agent-remote/bin/agent-remote`), or answer each prompt as it comes.
 
-The answer sticks across updates only if the bridge keeps the same signature. The installer and `sync-remote.sh` sign it with the first Developer ID or Apple Development certificate in your keychain (set `SHED_SIGN_IDENTITY` to choose one). Without a certificate it is signed ad hoc, and macOS asks again after every update.
+macOS remembers the answer across updates only if the bridge keeps the same signature. The installer and `sync-remote.sh` sign it with the first Developer ID or Apple Development certificate in your keychain (set `SHED_SIGN_IDENTITY` to choose one). Without a certificate it is signed ad hoc, and macOS asks again after every update.
 
 When a tool call or background command has run for a minute and stood still for 45 seconds, the bridge looks into it. If it names one of those folders, the apps say macOS is probably waiting for an answer and offer to stop it. To judge any other stall, give the bridge an OpenAI key in `~/.agent-remote/config.json`:
 
@@ -156,7 +156,7 @@ Pi, Prime and DeepSeek Harness have no web search of their own, so the bridge gi
 - **Prime:** the `shed_web` Python module, for the code it writes (`from shed_web import search, fetch`). The bridge writes it to `~/.agent-remote/python`, on Prime's `PYTHONPATH`.
 - **DeepSeek Harness:** its own `web_search` and `web_fetch` tools, which Shed's dsh plugin points at the same provider.
 
-Pages come back as Markdown; any other Firecrawl format (HTML, links, a screenshot, a summary, structured extraction) can be asked for. A page over 20,000 characters is saved to a file and only its beginning shown, and HTML and screenshots always go to files. Each call is logged with the credits it used in `~/.agent-remote/logs/web.log`. It is a convenience: agents still fetch raw sources with plain requests and drive a local browser for real browsing.
+Pages come back as Markdown; any other Firecrawl format (HTML, links, a screenshot, a summary, structured extraction) can be asked for. A page over 20,000 characters is saved to a file and only its beginning shown, and HTML and screenshots always go to files. Each call is logged with the credits it used in `~/.agent-remote/logs/web.log`. It is a shortcut, not the only way: agents still fetch raw sources with plain requests, and drive a local browser when a page needs one.
 
 ## Uninstall
 
@@ -169,10 +169,10 @@ This removes the login service, the Tailscale publication, the routes of the sit
 ## Development
 
 ```
-bridge/        Rust bridge: protocol, Pi, Prime and DeepSeek Harness drivers, transcript normalization
+bridge/        Rust bridge: the protocol, one driver per agent, and the session code that turns them into one
   dsh/         the plugin the bridge loads into DeepSeek Harness
   scripts/     end-to-end checks against a running bridge (smoke, subagents, async-subagents, resume-check)
-protocol/      one of every message, read by the bridge's tests and the apps'
+protocol/      one example of every message, read by the bridge's tests and the apps'
 apps/          Swift package: ShedKit (shared client and views) and ShedMac
   iOS/         iPhone app and Live Activity, generated with XcodeGen from project.yml
   scripts/     bundle-mac.sh, install-iphone.sh
@@ -182,14 +182,20 @@ design/        scripts and prompts behind the sunburst artwork and its motion st
 ```
 
 ```bash
-cd bridge && cargo test && cargo clippy --all-targets   # bridge unit tests and lints
-apps/scripts/bundle-mac.sh debug                        # build apps/build/Shed.app
-node bridge/scripts/smoke.mjs pi 7878 ~/src/project     # drive a live session through a running bridge
+cd bridge && cargo test                                  # bridge tests: no agent, no network, a few seconds
+cd bridge && cargo clippy --all-targets -- -D warnings   # lints, as CI runs them
+cd apps && swift test                                    # the apps' tests
+apps/scripts/bundle-mac.sh debug                         # build apps/build/Shed.app
+node bridge/scripts/smoke.mjs pi 7878 ~/src/project      # drive a live session through a running bridge
 ```
+
+The scripts in `bridge/scripts/` start real agent sessions, so they spend money on a model. Nothing else here does.
+
+[docs/architecture.md](docs/architecture.md#where-things-are) says where each part of the code lives and the few rules it keeps to.
 
 The wire protocol is defined in [`bridge/src/protocol.rs`](bridge/src/protocol.rs) and mirrored in [`apps/Sources/ShedKit/Protocol.swift`](apps/Sources/ShedKit/Protocol.swift); change both together. Both sides' tests read the messages in `protocol/`, so a change to one side alone fails the other's.
 
-Some bridge tests compare against recorded files: the messages in `protocol/` and what the session code does with each agent's events in `bridge/src/session/pins/`. When a change is meant to alter them, `UPDATE_FIXTURES=1 cargo test` rewrites the files; their diff is the change in behaviour, so read it before committing. After editing `apps/iOS/project.yml`, regenerate the Xcode project with `xcodegen` in `apps/iOS`.
+Some bridge tests compare against recorded files: the messages in `protocol/`, and in `bridge/src/session/pins/` what the session code does with each agent's events and with each command. A change that only moves code around must leave these files untouched. When a change is meant to alter behaviour, `UPDATE_FIXTURES=1 cargo test` rewrites them; the diff of those files is the change in behaviour, so read it before committing. After editing `apps/iOS/project.yml`, regenerate the Xcode project with `xcodegen` in `apps/iOS`.
 
 ## License
 
