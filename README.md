@@ -147,7 +147,7 @@ A server an agent starts detached (`nohup`, a daemon) stays its session's site: 
 setup/uninstall.sh
 ```
 
-This removes the login service, the Tailscale publication and the Mac app. Left in place: Pi, Prime Agent and DeepSeek Harness with their settings and sessions, Open Codex and its login service, and `~/.agent-remote`. So are a `setup/sync-remote.sh --watch` agent (remove it with `--unwatch`) and the tailnet routes of sites that were still published when the bridge stopped (`tailscale serve status` lists them).
+This removes the login service, the Tailscale publication, the routes of the sites the bridge published, every `setup/sync-remote.sh --watch` agent and the Mac app. Left in place: Pi, Prime Agent and DeepSeek Harness with their settings and sessions, Open Codex and its login service, and `~/.agent-remote`.
 
 ## Development
 
