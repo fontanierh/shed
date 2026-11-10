@@ -175,6 +175,35 @@ impl Store {
     }
 }
 
+/// Windows saved under the `activeSessionId` a Prime session had when they were chosen, as the bridge once did,
+/// move to the conversation's `sessionId`: a session gets another `activeSessionId` each time it reopens, and the
+/// window was no longer found. Prime's worker records (`<daemon>/<activeSessionId>.json`) still name the
+/// conversation. Returns whether anything moved.
+pub fn adopt_stray_limits(limits: &mut HashMap<String, u64>, workers: &std::path::Path) -> bool {
+    let daemons: Vec<PathBuf> = std::fs::read_dir(workers)
+        .map(|dir| dir.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    let conversation = |active: &str| {
+        daemons.iter().find_map(|daemon| {
+            let raw = std::fs::read_to_string(daemon.join(format!("{active}.json"))).ok()?;
+            let record: serde_json::Value = serde_json::from_str(&raw).ok()?;
+            record["rootSessionId"].as_str().map(str::to_string)
+        })
+    };
+    // A session's id in a file name: nothing that could leave the folder.
+    let strays: Vec<(String, String)> = limits
+        .keys()
+        .filter(|key| key.chars().all(|c| c.is_ascii_alphanumeric()))
+        .filter_map(|key| Some((key.clone(), conversation(key)?)))
+        .collect();
+    for (active, conversation) in &strays {
+        if let Some(limit) = limits.remove(active) {
+            limits.entry(conversation.clone()).or_insert(limit);
+        }
+    }
+    !strays.is_empty()
+}
+
 fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     // Unique per write: concurrent saves must not rename each other's temp file away.
@@ -214,6 +243,32 @@ mod tests {
         // And it is the same one from then on.
         assert_eq!(store.token().unwrap(), token);
         std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_window_saved_under_a_session_that_reopened_moves_to_its_conversation() {
+        let dir = store("strays").dir;
+        let daemon = dir.join("workers/bf0e");
+        std::fs::create_dir_all(&daemon).unwrap();
+        std::fs::write(
+            daemon.join("409b1ffd5290.json"),
+            r#"{"rootActiveSessionId": "409b1ffd5290", "rootSessionId": "01a1-conversation"}"#,
+        )
+        .unwrap();
+        let mut limits: HashMap<String, u64> = [
+            ("409b1ffd5290".to_string(), 400_000),
+            ("0a1b2c3d".to_string(), 600_000),
+            ("01a2-other".to_string(), 1_000_000),
+        ]
+        .into();
+        assert!(adopt_stray_limits(&mut limits, &dir.join("workers")));
+        assert_eq!(limits.get("01a1-conversation"), Some(&400_000));
+        assert_eq!(limits.get("409b1ffd5290"), None);
+        // A Pi session's id and a conversation's id have no worker record: they stay.
+        assert_eq!(limits.get("0a1b2c3d"), Some(&600_000));
+        assert_eq!(limits.get("01a2-other"), Some(&1_000_000));
+        assert!(!adopt_stray_limits(&mut limits, &dir.join("workers")));
+        assert!(!adopt_stray_limits(&mut limits, &dir.join("missing")));
     }
 
     #[test]
