@@ -1,0 +1,50 @@
+name: bridge
+
+on:
+  pull_request:
+    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+  push:
+    branches: [main]
+    paths: ["bridge/**", ".github/workflows/bridge.yml"]
+
+concurrency:
+  group: bridge-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    working-directory: bridge
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
+          shared-key: lint
+      - run: cargo clippy --all-targets --locked -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge
+          shared-key: test
+      - run: cargo test --locked

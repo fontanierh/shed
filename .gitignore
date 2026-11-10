@@ -13,3 +13,4 @@ design/sunburst/motion/*-frames.png
 design/sunburst/redo/shots/
 design/sunburst/redo/out/
 design/sunburst/redo/*.log
+__pycache__/
