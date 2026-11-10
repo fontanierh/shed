@@ -963,3 +963,59 @@ async fn malformed_goals() {
     })
     .await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn malformed_events() {
+    let rig = &Rig::new("events", &[]);
+    let events = json!({
+        "compaction": { "type": "compaction_end", "aborted": false, "errorMessage": null },
+        "queue": { "type": "queue_update", "steering": ["look at src"], "followUp": [{ "content": "then open a pull request" }] },
+        "level": { "type": "thinking_level_changed", "level": "high" },
+        "name": { "type": "session_info_changed", "name": "Tests" },
+        "goal": { "type": "goal_update", "goal": { "objective": "Make the tests pass", "status": "active" } },
+        "jobs": { "type": "dsh_jobs", "running": 2 },
+        "question": { "type": "dsh_question", "question": { "text": "Which branch?" } },
+        "subagent": { "type": "dsh_subagent", "id": "f117882d-2d43", "status": "running", "title": "Read notes.txt" },
+        "call": { "type": "tool_execution_update", "toolName": "subagent", "toolCallId": "call_1",
+            "partialResult": { "details": { "mode": "single", "results": [{ "agent": "scout", "task": "Find it" }] } } },
+        "result": { "type": "tool_execution_end", "toolName": "subagent", "toolCallId": "call_1",
+            "result": { "details": { "mode": "single", "results": [{ "agent": "scout", "task": "Find it", "stopReason": "stop" }] } } },
+    });
+    leniency("events-malformed", events, |events| async move {
+        let mut seen = serde_json::Map::new();
+        for (name, event) in events.as_object().into_iter().flatten() {
+            // What earlier events left, so a part the agent leaves out shows as kept or dropped.
+            let mut summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+            summary.title = "Earlier".into();
+            summary.thinking_level = Some("low".into());
+            summary.queue.steering = vec!["earlier".into()];
+            summary.background_jobs = 1;
+            summary.question = Some(json!({ "text": "Earlier?" }));
+            let mut state = SessionState::new(summary, None);
+            state.named = true;
+            let session = Arc::new(Session {
+                id: "s1".into(),
+                agent: AgentKind::Pi,
+                backend: Backend::Pi,
+                cwd: "/work/project".into(),
+                state: Mutex::new(state),
+            });
+            rig.app.sessions.write().await.push(session.clone());
+            rig.app.handle_event(&session, event).await;
+            let mut kept = kept(rig, &session).await;
+            // The conversation is the transcript's to read, and has its own tests.
+            kept.as_object_mut().unwrap().remove("items");
+            // How a subagent's own parts are read is pinned on its own: here, only that it shows.
+            let shown: serde_json::Map<String, Value> = subagents(rig)
+                .await
+                .into_iter()
+                .map(|(id, subagent)| (id, subagent["summary"]["status"].clone()))
+                .collect();
+            kept["subagents"] = Value::Object(shown);
+            rig.app.sessions.write().await.clear();
+            seen.insert(name.clone(), kept);
+        }
+        Value::Object(seen)
+    })
+    .await;
+}
