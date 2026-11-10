@@ -252,6 +252,8 @@ struct MediaImage: View {
 /// An image over the whole window: fitted, magnified with a pinch or a double click, dragged around once magnified.
 public struct LightboxView: View {
     let lightbox: Lightbox
+    /// Shown by a view that presents files itself, as a sheet's own viewer is.
+    var embedded = false
     @State private var scale = 1.0
     @State private var settledScale = 1.0
     @State private var offset = CGSize.zero
@@ -261,6 +263,11 @@ public struct LightboxView: View {
         self.lightbox = lightbox
     }
 
+    init(lightbox: Lightbox, embedded: Bool) {
+        self.lightbox = lightbox
+        self.embedded = embedded
+    }
+
     private func close() {
         withAnimation(.spring(response: 0.35, dampingFraction: 0.9)) { lightbox.shown = nil }
         scale = 1; settledScale = 1; offset = .zero; settledOffset = .zero
@@ -268,8 +275,12 @@ public struct LightboxView: View {
 
     public var body: some View {
         @Bindable var lightbox = lightbox
-        ZStack { image }
-            .sheet(item: $lightbox.file) { file in FileViewer(file: file) }
+        if embedded {
+            ZStack { image }
+        } else {
+            ZStack { image }
+                .sheet(item: $lightbox.file) { file in FileViewer(file: file) }
+        }
     }
 
     @ViewBuilder

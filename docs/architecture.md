@@ -57,7 +57,7 @@ Both agents can leave shell commands running after their turn ends. A `[bash-don
 
 ## Sites
 
-A session's web servers are found from the outside: the bridge reads the listening sockets of the processes in each session's tree (`lsof -nP -iTCP -sTCP:LISTEN`), so any server counts, whatever the agent started it with. Each site is a `Site` on its `SessionSummary` (`port`, `title`, `command`, `url`, `published`, `exposed`), published on its own `tailscale serve` HTTPS port when `sites.publish` is set, and taken down when its process ends. The bridge only removes routes it recorded in `sites.json`: the serve configuration is shared with whatever else the machine publishes.
+A session's web servers are found from the outside: the bridge reads the listening sockets of the processes in each session's tree (`lsof -nP -iTCP -sTCP:LISTEN`), so any server counts, whatever the agent started it with. Each site is a `Site` on its `SessionSummary` (`port`, `title`, `command`, `url`, `published`, `exposed`), published on its own `tailscale serve` HTTPS port unless `sites.publish` is false (a spare port from 8100 to 8199 when its own is taken on the tailnet; a route made by hand to the same server is used as it is), and taken down when its process ends. A site that isn't published carries a `reason`. A detached server (reparented to launchd) stays with the session it was first seen under, or goes to the session working in its folder. The bridge only removes routes it recorded in `sites.json`: the serve configuration is shared with whatever else the machine publishes.
 
 ## Setup
 

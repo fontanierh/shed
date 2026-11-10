@@ -245,6 +245,98 @@ extension EnvironmentValues {
     @Entry var restartKernel: ReaderAction? = nil
     /// Replies streaming in, ahead of the transcript's items.
     @Entry var liveText: LiveText? = nil
+    /// Where a row's details open instead of unfolding in place: on the phone, a sheet over the conversation.
+    @Entry var openSheet: SheetOpener? = nil
+    /// Set inside such a sheet: closes it, then does what was asked once it has gone. Going to another session from
+    /// under a sheet would leave the sheet standing over it.
+    @Entry var closeSheet: SheetCloser? = nil
+    /// Where the conversation's mentions of subagents lead.
+    @Entry var subagents: SubagentLinks? = nil
+    /// Whether text can be selected where it stands. The phone's conversation says no: every selectable text is
+    /// something a touch is checked against before a scroll can start, so there a long press copies instead.
+    @Entry var inlineSelection = true
+}
+
+extension View {
+    /// Selectable text, unless selecting in place is off here (`inlineSelection`).
+    @ViewBuilder func selectable(_ on: Bool) -> some View {
+        if on { textSelection(.enabled) } else { textSelection(.disabled) }
+    }
+}
+
+/// What a row shows when its details open in a sheet, rather than unfolding in the conversation.
+struct FeedSheet: Identifiable {
+    let id = UUID()
+    let title: String
+    let content: @MainActor () -> AnyView
+
+    init<Content: View>(title: String, @ViewBuilder content: @escaping @MainActor () -> Content) {
+        self.title = title
+        self.content = { AnyView(content()) }
+    }
+}
+
+/// Closes the sheet a view is in, then runs the action. Any two compare equal, like `SheetOpener`.
+struct SheetCloser: Equatable {
+    let action: @MainActor (@escaping @MainActor () -> Void) -> Void
+
+    @MainActor func callAsFunction(then: @escaping @MainActor () -> Void) { action(then) }
+
+    static func == (_: SheetCloser, _: SheetCloser) -> Bool { true }
+}
+
+/// The subagents of the session a conversation belongs to: what a mention of one leads to, and the way there. The
+/// store is observed where a link is read, so a chip follows its subagent ending without the conversation redrawing.
+struct SubagentLinks: Equatable {
+    let store: SessionStore
+    let parent: String
+
+    @MainActor func link(_ mention: SubagentMention) -> SubagentLink { store.link(of: parent, to: mention) }
+    @MainActor func open(_ id: String) { store.select(id) }
+
+    static func == (a: SubagentLinks, b: SubagentLinks) -> Bool { a.store === b.store && a.parent == b.parent }
+}
+
+/// A subagent a step started, as a chip that opens it. One that has ended stays named, dimmed, and leads nowhere.
+struct SubagentChip: View {
+    let mention: SubagentMention
+    @Environment(\.subagents) private var subagents
+    @Environment(\.closeSheet) private var closeSheet
+
+    var body: some View {
+        let name = mention.name
+        let link = subagents?.link(mention) ?? .pending
+        Button {
+            guard case .open(let id) = link, let subagents else { return }
+            if let closeSheet { closeSheet { subagents.open(id) } } else { subagents.open(id) }
+        } label: {
+            HStack(spacing: 6) {
+                AgentMark(name: name, size: 18, asleep: link == .ended)
+                Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon.opacity(link == .ended ? 0.5 : 1))
+                    .lineLimit(1)
+                if link != .ended {
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, 4).padding(.trailing, 10).frame(height: 26)
+            .card(radius: 13, fill: Palette.raised.opacity(link == .ended ? 0.5 : 1),
+                  border: link == .ended ? Palette.border.opacity(0.6) : Palette.avatar(name).opacity(0.35))
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(link != .ended)
+        .help(link == .ended ? "\(name) has ended" : "Open subagent \(name)")
+        .accessibilityLabel(link == .ended ? "\(name), ended" : "Open subagent \(name)")
+        .animation(.easeOut(duration: 0.25), value: link)
+    }
+}
+
+/// Opens a row's details in a sheet. Any two compare equal, like `ReaderAction`: a fresh closure changes nothing shown.
+struct SheetOpener: Equatable {
+    let action: @MainActor (FeedSheet) -> Void
+
+    @MainActor func callAsFunction(_ sheet: FeedSheet) { action(sheet) }
+
+    static func == (_: SheetOpener, _: SheetOpener) -> Bool { true }
 }
 
 /// An action the open session offers its transcript. Whether it is there is all that changes what a view shows, so
@@ -357,7 +449,6 @@ struct TranscriptView: View, Equatable {
     var pending: String? = nil
     /// Where an idle session stands, under its last message: what it waits on, or that nothing will wake it.
     var idle: [IdleLine] = []
-    var openChild: (String) -> Void = { _ in }
     var openParent: (@MainActor () -> Void)? = nil
     /// Older items not loaded yet, and how to load the next page of them.
     var earlier = 0
@@ -486,7 +577,7 @@ struct TranscriptView: View, Equatable {
                             Color.clear.frame(height: height)
                                 .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { frames.moved(block.id, to: $0) }
                         } else {
-                            BlockView(block: block, agent: session.agent, openChild: openChild, openParent: openParent,
+                            BlockView(block: block, agent: session.agent, openParent: openParent,
                                       streaming: session.status.isBusy && last)
                                 .equatable()
                                 // Coming back from being held as a space isn't arriving.
@@ -974,7 +1065,6 @@ private struct Arrival: ViewModifier {
 struct BlockView: View, Equatable {
     let block: Block
     let agent: AgentKind
-    let openChild: (String) -> Void
     let openParent: (@MainActor () -> Void)?
     /// The last block of a running turn: text still arriving.
     var streaming = false
@@ -986,7 +1076,7 @@ struct BlockView: View, Equatable {
     var body: some View {
         switch block {
         case .activity(let activity):
-            ActivityView(activity: activity, openChild: openChild)
+            ActivityView(activity: activity)
         case .jobsDone(let items):
             JobsDoneGroup(notes: items.map { Note($0.text) })
         case .item(let item):
@@ -1005,7 +1095,7 @@ struct BlockView: View, Equatable {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .card(radius: 12, fill: Palette.danger.opacity(0.08), border: Palette.danger.opacity(0.45))
             case .note:
-                NoteView(note: Note(item.text), date: item.date, openChild: openChild, openParent: openParent)
+                NoteView(note: Note(item.text), date: item.date, openParent: openParent)
             case .thinking, .tool:
                 EmptyView()
             }
@@ -1015,6 +1105,7 @@ struct BlockView: View, Equatable {
 
 struct UserMessage: View {
     let item: Item
+    @Environment(\.inlineSelection) private var inlineSelection
 
     var body: some View {
         let (text, files) = MessageAttachments.split(item.text)
@@ -1025,7 +1116,7 @@ struct UserMessage: View {
             }
             if !text.isEmpty {
                 Text(text)
-                    .textSelection(.enabled)
+                    .selectable(inlineSelection)
                     .font(.system(size: 15.5))
                     .foregroundStyle(Palette.moon)
                     .lineSpacing(4)
@@ -1058,7 +1149,6 @@ struct UserMessage: View {
 /// "Worked for 3m · 18 tool calls · 6 reasoning steps", expanding into a timeline of every step.
 struct ActivityView: View {
     let activity: Activity
-    let openChild: (String) -> Void
     @State private var expanded: Bool?
     @State private var top = BlockTop()
     @Environment(\.keepInView) private var keepInView
@@ -1080,13 +1170,13 @@ struct ActivityView: View {
             .accessibilityHint(isExpanded ? "Collapse" : "Expand")
 
             if isExpanded {
-                Timeline(steps: activity.steps, live: activity.live, openChild: openChild)
+                Timeline(steps: activity.steps, live: activity.live)
                     .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -6)), removal: .opacity))
             } else {
                 // Keep what matters visible when collapsed: failures and subagents started here.
                 let notable = activity.steps.filter { $0.item.status == .error || !ToolDescription($0.item).spawned.isEmpty }
                 if !notable.isEmpty {
-                    Timeline(steps: notable, live: false, openChild: openChild)
+                    Timeline(steps: notable, live: false)
                 }
             }
         }
@@ -1127,7 +1217,15 @@ struct ActivityView: View {
         .animation(.easeOut(duration: 0.3), value: activity.live)
     }
 
-    private var headline: String {
+    private var headline: String { activity.headline }
+
+    private var counts: String { activity.counts }
+}
+
+extension Activity {
+    /// What it is doing now while live, how long it worked once done.
+    var headline: String {
+        let activity = self
         if activity.live {
             let last = activity.steps.last.map(\.item)
             if last?.kind == .thinking { return Reasoning(last!.text).title ?? "Thinking" }
@@ -1137,7 +1235,9 @@ struct ActivityView: View {
         return activity.duration.map { $0 >= 1000 ? "Worked for \(Format.duration(ms: $0))" : "Worked" } ?? "Worked"
     }
 
-    private var counts: String {
+    /// "· 18 tool calls · 6 reasoning steps".
+    var counts: String {
+        let activity = self
         var parts: [String] = []
         if activity.toolCount > 0 { parts.append(activity.toolCount == 1 ? "1 tool call" : "\(activity.toolCount) tool calls") }
         if activity.reasoningCount > 0 { parts.append(activity.reasoningCount == 1 ? "1 reasoning step" : "\(activity.reasoningCount) reasoning steps") }
@@ -1145,30 +1245,24 @@ struct ActivityView: View {
     }
 }
 
-/// Steps along a vertical rail, each with a status node, separated by hairlines.
+/// Steps along a vertical rail, each with a status node.
 struct Timeline: View {
     let steps: [Activity.Step]
     let live: Bool
-    let openChild: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+            ForEach(steps) { step in
                 HStack(alignment: .top, spacing: 12) {
                     StepNode(item: step.item, running: live && step.id == steps.last?.id)
-                    VStack(spacing: 0) {
-                        Group {
-                            if step.item.kind == .thinking {
-                                ReasoningRow(text: step.item.text, duration: step.duration)
-                            } else {
-                                ToolRow(item: step.item, duration: step.duration, openChild: openChild)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        if index < steps.count - 1 {
-                            Rectangle().fill(Palette.border.opacity(0.6)).frame(height: 0.5)
+                    Group {
+                        if step.item.kind == .thinking {
+                            ReasoningRow(text: step.item.text, duration: step.duration)
+                        } else {
+                            ToolRow(item: step.item, duration: step.duration)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: -8)), removal: .opacity))
             }
@@ -1329,23 +1423,40 @@ struct ReasoningLines: View {
 struct CompactionMarker: View {
     let item: Item
     @State private var expanded = false
+    @Environment(\.openSheet) private var openSheet
 
     var body: some View {
         let before = item.output.flatMap(Int.init).map { " at " + Format.tokens($0) + " tokens" } ?? ""
         VStack(spacing: 10) {
-            Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() } } label: {
+            Button {
+                if let openSheet {
+                    let summary = item.text
+                    openSheet(FeedSheet(title: "Context compacted") {
+                        StreamingMarkdown(text: summary, streaming: false)
+                    })
+                } else {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() }
+                }
+            } label: {
                 HStack(spacing: 10) {
-                    VStack { Divider() }
+                    if openSheet == nil { VStack { Divider() } }
                     HStack(spacing: 6) {
                         Label("Context compacted" + before, systemImage: "rectangle.compress.vertical")
-                        if !item.text.isEmpty { Chevron(open: expanded) }
+                        if !item.text.isEmpty {
+                            if openSheet != nil {
+                                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                            } else {
+                                Chevron(open: expanded)
+                            }
+                        }
                     }
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.lilac)
                     .lineLimit(1)
                     .padding(.horizontal, 12).frame(height: 26)
                     .card(radius: 13, fill: Palette.lilac.opacity(0.08), border: Palette.lilac.opacity(0.3))
-                    VStack { Divider() }
+                    if openSheet == nil { VStack { Divider() } }
                 }
+                .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1401,7 +1512,6 @@ struct Chevron: View {
 struct ToolRow: View {
     let item: Item
     let duration: Double?
-    let openChild: (String) -> Void
     @State private var expanded = false
     @State private var top = BlockTop()
     @Environment(\.keepInView) private var keepInView
@@ -1448,17 +1558,7 @@ struct ToolRow: View {
             if !description.spawned.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(description.spawned, id: \.self) { name in
-                        Button { openChild(name) } label: {
-                            HStack(spacing: 6) {
-                                AgentMark(name: name, size: 18)
-                                Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon)
-                                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, 4).padding(.trailing, 10).frame(height: 26)
-                            .card(radius: 13, fill: Palette.raised, border: Palette.avatar(name).opacity(0.35))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open subagent \(name)")
+                        SubagentChip(mention: SubagentMention(name: name, date: item.date, spawning: true, running: running))
                     }
                 }
                 .padding(.leading, 32)
@@ -1765,20 +1865,18 @@ struct Note {
 struct NoteView: View {
     let note: Note
     let date: Date?
-    let openChild: (String) -> Void
     let openParent: (@MainActor () -> Void)?
 
     var body: some View {
         switch note.kind {
         case .fromChild:
-            ReportCard(name: note.child ?? "subagent", caption: "reported", date: date, text: note.body) {
-                openChild(note.child ?? "")
-            }
+            ReportCard(name: note.child ?? "subagent", caption: "reported", date: date, text: note.body,
+                       child: note.child.map { SubagentMention(name: $0, date: date) })
         case .fromParent:
             ReportCard(name: "Parent", caption: note.tag.hasPrefix("task") ? "sent a task" : "sent a message", date: date, text: note.body,
                        icon: "arrow.turn.right.down", open: openParent)
         case .childExited:
-            PausedChild(name: note.child ?? "subagent", date: date, detail: note.body) { openChild(note.child ?? "") }
+            PausedChild(name: note.child ?? "subagent", date: date, detail: note.body)
         case .jobDone:
             JobDoneView(note: note)
         case .other:
@@ -1788,15 +1886,19 @@ struct NoteView: View {
     }
 }
 
-/// A subagent that stopped without reporting back: one quiet line like a report's, opening the subagent.
+/// A subagent that stopped without reporting back: one quiet line like a report's, opening the subagent while it
+/// can still be opened.
 struct PausedChild: View {
     let name: String
     let date: Date?
     let detail: String
-    let open: () -> Void
+    @Environment(\.subagents) private var subagents
 
     var body: some View {
-        Button(action: open) {
+        let link = subagents?.link(SubagentMention(name: name, date: date)) ?? .pending
+        Button {
+            if case .open(let id) = link { subagents?.open(id) }
+        } label: {
             HStack(spacing: 8) {
                 Avatar(name: name, size: 22).saturation(0.4).opacity(0.8)
                 (Text(name).fontWeight(.semibold).foregroundStyle(.primary)
@@ -1808,7 +1910,9 @@ struct PausedChild: View {
                 if let date {
                     Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
                 }
-                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                if link != .ended {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                }
             }
             .padding(.horizontal, 10)
             .frame(height: 36)
@@ -1816,7 +1920,8 @@ struct PausedChild: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(detail.isEmpty ? "Open subagent \(name)" : detail)
+        .allowsHitTesting(link != .ended)
+        .help(link == .ended ? "\(name) has ended" : detail.isEmpty ? "Open subagent \(name)" : detail)
         .accessibilityLabel("\(name) paused without a reply")
     }
 }
@@ -1830,15 +1935,22 @@ struct ReportCard: View {
     let date: Date?
     let text: String
     var icon: String? = nil
-    var open: (() -> Void)? = nil
+    /// The subagent that sent it, when one did: Open leads to its session while it has one.
+    var child: SubagentMention? = nil
+    var open: (@MainActor () -> Void)? = nil
     @State private var expanded = false
     @State private var hovering = false
     @State private var top = BlockTop()
     @Environment(\.keepInView) private var keepInView
+    @Environment(\.openSheet) private var openSheet
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
+                if let openSheet {
+                    openSheet(FeedSheet(title: "\(name) \(caption)") { details })
+                    return
+                }
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     if expanded { keepInView(top) }
                     expanded.toggle()
@@ -1861,7 +1973,11 @@ struct ReportCard: View {
                     if let date {
                         Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
                     }
-                    Chevron(open: expanded)
+                    if openSheet != nil {
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                    } else {
+                        Chevron(open: expanded)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 36)
@@ -1874,29 +1990,27 @@ struct ReportCard: View {
             .help(expanded ? "Hide the message" : "Show the full message")
 
             if expanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    Markdown(text).markdownTheme(.agent).markdownImageProvider(.media)
-                    HStack(spacing: 14) {
-                        CopyButton(text: text, label: "Copy")
-                        if let open {
-                            Button(action: open) {
-                                Label("Open session", systemImage: "arrow.up.forward")
-                                    .font(.caption.weight(.medium))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Palette.ice)
-                        }
-                    }
-                }
-                .padding(16)
-                .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
-                }
-                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
+                details
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
             }
         }
         .trackTop(top)
+    }
+
+    /// The whole message, with Copy and Open.
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Markdown(text).markdownTheme(.agent).markdownImageProvider(.media)
+            HStack(spacing: 14) {
+                CopyButton(text: text, label: "Copy")
+                OpenSession(child: child, open: open)
+            }
+        }
+        .padding(16)
+        .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
+        }
     }
 
     private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.accent }
@@ -1911,6 +2025,41 @@ struct ReportCard: View {
         } else {
             Avatar(name: name, size: 22)
         }
+    }
+}
+
+/// "Open session" under a message between agents: the sender's session. Says so instead, quietly, once a subagent's
+/// session has ended.
+private struct OpenSession: View {
+    let child: SubagentMention?
+    let open: (@MainActor () -> Void)?
+    @Environment(\.subagents) private var subagents
+    @Environment(\.closeSheet) private var closeSheet
+
+    var body: some View {
+        if let child, let subagents {
+            switch subagents.link(child) {
+            case .open(let id): button { subagents.open(id) }
+            case .pending: EmptyView()
+            case .ended:
+                Label("Session ended", systemImage: "moon.zzz")
+                    .font(.caption).foregroundStyle(.tertiary)
+                    .accessibilityLabel("\(child.name)'s session has ended")
+            }
+        } else if let open {
+            button(open)
+        }
+    }
+
+    private func button(_ action: @escaping @MainActor () -> Void) -> some View {
+        Button {
+            if let closeSheet { closeSheet(then: action) } else { action() }
+        } label: {
+            Label("Open session", systemImage: "arrow.up.forward")
+                .font(.caption.weight(.medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.ice)
     }
 }
 

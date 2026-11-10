@@ -39,9 +39,19 @@ tiff. Video: mp4, mov, m4v. Audio: mp3, m4a, aac, wav, aiff, flac.
 
 ## Sites
 
-A web server you start in a session is found by the port it listens on, and offered to the user as a site: it shows \
-in the session's header and in the app's list of every site. Name it in your reply (\"the preview is up\"); don't \
-quote a port number, and don't run `tailscale serve` yourself.";
+To show the user a page or an app (a preview, a report, docs, a dashboard), serve it over HTTP on this machine. Shed \
+finds the server by its port, publishes it on the user's tailnet over HTTPS, and lists it in the app. The user is \
+usually on a phone: a localhost link or a path to an HTML file is no use to them.
+
+- Bind 127.0.0.1. Use the framework's default port, or a free one from 8100 to 8199 (check with \
+`lsof -iTCP:<port> -sTCP:LISTEN`). Never 7878, 3478 or 3479.
+- Start it as a background command so it outlives your turn. Don't nohup or daemonize it: Shed then can't always tell \
+the server is yours.
+- Give the page a real `<title>`. It is the site's name in the app.
+- Don't run `tailscale serve` or `tailscale funnel`. Shed publishes the site and takes it down when the server stops.
+- Check it answers (`curl -sI http://127.0.0.1:<port>/`), then name it in your reply (\"the preview is up\"). Don't \
+quote a URL or a port.
+- Stop the server when it is no longer needed.";
 
 /// The content type for a file the apps fetch, by extension: media the players need typed, the rest as bytes the apps
 /// view or download.

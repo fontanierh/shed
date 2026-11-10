@@ -3,9 +3,8 @@ import SwiftUI
 
 public struct RootView: View {
     @Bindable var store: SessionStore
-    @State private var showNewSession = false
-    /// What the home page's composer starts a session with.
-    @State private var newSession = NewSessionDraft()
+    /// New Session, open with what the home page's composer starts a session with.
+    @State private var newSession: NewSessionDraft?
     @State private var showSettings = false
     @State private var lightbox = Lightbox()
 
@@ -15,7 +14,7 @@ public struct RootView: View {
 
     public var body: some View {
         NavigationSplitView {
-            SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true }, openSettings: { showSettings = true })
+            SessionSidebar(store: store, newSession: { newSession = NewSessionDraft() }, openSettings: { showSettings = true })
                 .navigationSplitViewColumnWidth(min: 240, ideal: 290, max: 380)
                 .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -27,7 +26,6 @@ public struct RootView: View {
                 } else {
                     HomeView(store: store) { message, folder in
                         newSession = NewSessionDraft(message: message, folder: folder)
-                        showNewSession = true
                     }
                 }
             }
@@ -41,8 +39,8 @@ public struct RootView: View {
         }
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
-        .sheet(isPresented: $showNewSession) {
-            NewSessionSheet(store: store, initialMessage: newSession.message, initialFolder: newSession.folder)
+        .sheet(item: $newSession) { draft in
+            NewSessionSheet(store: store, initialMessage: draft.message, initialFolder: draft.folder)
         }
         .sheet(isPresented: $showSettings) { EnvironmentSettings(store: store) }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
@@ -57,7 +55,8 @@ public struct RootView: View {
 }
 
 /// What New Session opens with: a first message and a folder, from the home page.
-struct NewSessionDraft {
+struct NewSessionDraft: Identifiable {
+    let id = UUID()
     var message = ""
     var folder: String? = nil
 }

@@ -360,6 +360,9 @@ pub struct Site {
     pub published: bool,
     /// Bound to every interface rather than loopback: reachable from the LAN too, not only this Mac.
     pub exposed: bool,
+    /// Why it isn't published, in words the apps show.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission

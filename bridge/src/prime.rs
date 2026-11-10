@@ -26,14 +26,27 @@ pub enum DaemonEvent {
         event: Value,
     },
     SessionClosed(String),
-    /// A session stopped. Its last roster row has no activeSessionId, only its transcript file.
+    /// A session stopped. Its last roster row has no activeSessionId, only its transcript file and its session id.
     Inactive {
-        session_file: String,
+        session_file: Option<String>,
+        session_id: Option<String>,
     },
     Disconnected(String),
 }
 
 type Pending = oneshot::Sender<Result<Value, String>>;
+
+/// The daemon answered a command and said no, as opposed to not being reachable.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 pub struct PrimeDaemon {
     client_id: String,
@@ -258,9 +271,16 @@ impl PrimeDaemon {
                 let mut rows = Vec::new();
                 for row in message["changed"].as_array().into_iter().flatten() {
                     if row["status"] == "inactive" {
-                        if let Some(file) = row["summary"]["sessionFile"].as_str() {
+                        let summary = &row["summary"];
+                        let session_file = summary["sessionFile"].as_str().map(str::to_string);
+                        let session_id = summary["sessionId"]
+                            .as_str()
+                            .or_else(|| summary["id"].as_str())
+                            .map(str::to_string);
+                        if session_file.is_some() || session_id.is_some() {
                             let _ = tx.send(DaemonEvent::Inactive {
-                                session_file: file.into(),
+                                session_file,
+                                session_id,
                             });
                         }
                     } else {
@@ -313,7 +333,7 @@ impl PrimeDaemon {
         }
         match rx.await {
             Ok(Ok(data)) => Ok(data),
-            Ok(Err(e)) => Err(anyhow!(e)),
+            Ok(Err(e)) => Err(anyhow::Error::new(Refused(e))),
             Err(_) => Err(anyhow!("Prime daemon disconnected")),
         }
     }

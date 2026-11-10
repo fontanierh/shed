@@ -340,6 +340,8 @@ struct GlassSegments<Value: Hashable>: View {
     let options: [(value: Value, label: String)]
     @Binding var selection: Value
     var height: CGFloat = 28
+    /// The room beside each label. Less of it fits more segments.
+    var inset: CGFloat = 12
     @Namespace private var glide
     @State private var hovered: Value?
 
@@ -354,7 +356,8 @@ struct GlassSegments<Value: Hashable>: View {
                         .font(.system(size: 12.5, weight: on ? .semibold : .medium))
                         .foregroundStyle(on ? Palette.moon : Palette.moon.opacity(hovered == option.value ? 0.85 : 0.6))
                         .lineLimit(1)
-                        .padding(.horizontal, 12)
+                        .minimumScaleFactor(0.85)
+                        .padding(.horizontal, inset)
                         .frame(maxWidth: .infinity, minHeight: height - 4)
                         .background {
                             if on {
