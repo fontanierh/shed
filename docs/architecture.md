@@ -4,24 +4,29 @@ Shed has two halves: a **bridge** that runs next to the agents on each computer,
 
 ```
  iPhone app ─┐                                        ┌─ pi --mode rpc            one child process per Pi session
-             ├─ WebSocket ──► bridge (Rust, :7878) ───┤
+             ├─ WebSocket ──► bridge (Rust, :7878) ───┼─ dsh --profile shed       one child process per DeepSeek Harness session
  Mac app ────┘   Tailscale (HTTPS)                    └─ Prime daemon socket ──► every Prime session, subagents included
+
+                              every agent's models ──► Open Codex (127.0.0.1:10100)
 ```
 
 ## Bridge
 
 `bridge/` is a Rust service (tokio, axum) that `setup/install.sh` registers with launchd. It binds to `127.0.0.1` only; `tailscale serve` publishes it on the tailnet over HTTPS, which iOS requires. A bearer token from `~/.agent-remote/config.json` guards every connection, since the agents can run arbitrary code.
 
-It turns both agents into one client protocol (`bridge/src/protocol.rs`, mirrored in `apps/Sources/ShedKit/Protocol.swift`):
+It turns the three agents into one client protocol (`bridge/src/protocol.rs`, mirrored in `apps/Sources/ShedKit/Protocol.swift`):
 
-- one `SessionSummary` per session: status, model, effort, context usage, cost, queue, goal, background jobs, parent and children;
+- one `SessionSummary` per session: status, model, effort, context usage, cost, queue, goal, background jobs, sites, a question waiting for an answer, parent and children;
 - a normalized transcript of `user`, `text`, `thinking`, `tool`, `compaction`, `error` and `note` items, streamed as `snapshot`, `item_add` and `item_patch` messages to the clients attached to that session;
 - request/reply operations (`send`, `abort`, `compact`, `set_model`, `list_dir`, `list_jobs`, …), each answered by a `reply` with the request's `id`.
 
 How each agent is driven:
 
 - **Pi**: the bridge owns Pi sessions. It spawns `pi --mode rpc` per session, keeps a registry in `~/.agent-remote/sessions.json`, and resumes them with `--session <file>` after a restart.
+- **DeepSeek Harness**: the bridge runs `dsh --profile shed` per session, a dsh profile it writes on each start. The profile's one plugin (`bridge/dsh/shed.mjs`) answers the Pi commands the bridge sends and forwards dsh's events, which `bridge/src/dsh.rs` turns into Pi's, so the rest of the bridge runs these sessions as it runs Pi's: same registry, same resumption. dsh runs without its permission prompts, as Pi and Prime do.
 - **Prime Agent**: the bridge is a client of Prime's daemon, the same supervisor its TUI uses, and starts the daemon when none is running. Prime's RPC mode can't spawn subagents and ACP can't compact, report stats or steer, so the daemon is the only interface with everything. Sessions started in Prime's own TUI therefore show up in Shed too. The protocol is undocumented upstream; [prime-daemon-protocol.md](prime-daemon-protocol.md) records what the bridge relies on.
+
+**Open Codex** (`bridge/src/opencodex.rs`) is where every agent's models come from. The bridge writes its catalog into Pi's and Prime's configuration whenever a client asks for an agent's models (at most once a minute), makes it dsh's one provider in the `shed` profile, and reads its request history for what each session has spent and how fast it is spending.
 
 The bridge also stops runaway generations: a reply that streams thousands of blank characters, or the same few characters over and over, is aborted and the agent is told why (`bridge/src/runaway.rs`).
 
@@ -44,16 +49,19 @@ A client can hold several **computers** at once, each a bridge URL and token. `S
 | New session | `new_session` | same (`activeSessionId` stays) |
 | Resume | `--session <file>` | sessions live in the daemon |
 
+DeepSeek Harness takes Pi's column: its plugin answers the same commands. A question the agent asks through `ask_user_question` shows in the apps and is answered with `answer_question`; unanswered for two minutes, the agent carries on.
+
 ## Subagents
 
 Every subagent is a session in the tree, with `kind:"subagent"`, a `parentId` and a `name`, and it can be opened like any other.
 
 - **Prime** subagents are asynchronous agents in the daemon roster (`runtimeKind:"subagent"`). The parent keeps going, or ends its turn, while they work, and their reports arrive later as tagged notes (`[agent-message from child:NAME]`, `[child-exited: …]`, `[task from parent]`, `[bash-done …]`). An idle session isn't necessarily finished: any session can leave REPL shell jobs running that wake it later. The bridge counts them from the worker's process tree (`backgroundJobs`) and lists, tails and cancels them through the daemon, as Prime's TUI does (see [prime-daemon-protocol.md](prime-daemon-protocol.md)). Clients treat a session as *active* when it's running or has background jobs. That drives the "At work" list, the per-parent badge and the hourglass icon. Children accept messages directly.
+- **DeepSeek Harness** subagents are dsh's own. The plugin forwards each child's transcript and state (`dsh_subagent`), and the bridge mirrors it as a read-only session.
 - **Pi** subagents come from the `subagent` extension (vendored in `setup/pi`). They are synchronous: the parent's tool call waits for them. The bridge builds read-only child sessions from the tool's streamed `details.results[]`, so their transcripts show live.
 
 ## Background commands
 
-Both agents can leave shell commands running after their turn ends. A `[bash-done]` notice wakes the agent when a command finishes. Prime does this natively (REPL `bash()`). Pi gets the same from the `background-jobs` extension in `setup/pi`, which also loads in Pi's own TUI (`/jobs`, "shells: N"). The bridge's `list_jobs`, `job_output` and `kill_job` ops serve both. The app shows a terminal button in the session header with the running count. It opens the list with live output and "Cancel command". A cancelled command exits `-15`, and the agent hears about it as it would from its own TUI.
+Every agent can leave shell commands running after its turn ends. A `[bash-done]` notice wakes the agent when a command finishes. Prime does this natively (REPL `bash()`). Pi gets the same from the `background-jobs` extension in `setup/pi`, which also loads in Pi's own TUI (`/jobs`, "shells: N"). DeepSeek Harness reports its own through the plugin (`dsh_jobs`). The bridge's `list_jobs`, `job_output` and `kill_job` ops serve all three. The app shows a terminal button in the session header with the running count. It opens the list with live output and "Cancel command". A cancelled command exits `-15`, and the agent hears about it as it would from its own TUI.
 
 ## Sites
 
@@ -61,4 +69,4 @@ A session's web servers are found from the outside: the bridge reads the listeni
 
 ## Setup
 
-`setup/install.sh` provisions a Mac and can be run again at any time: Pi and Prime Agent at their latest versions, API keys from the environment, model definitions Prime's catalog lacks (`setup/prime/models.json`), Pi's subagent and background-jobs extensions (`setup/pi`), the bridge as a launchd service, the Mac app, and the `tailscale serve` publication. `setup/sync-remote.sh` keeps the bridge on another Mac in step with a checkout, and `setup/uninstall.sh` removes the service, the publication and the app.
+`setup/install.sh` provisions a Mac and can be run again at any time: Open Codex with your API keys and subscriptions, and Shed's fixes it hasn't released yet (`setup/opencodex`); Pi, Prime Agent and DeepSeek Harness at their latest versions; Pi's subagent and background-jobs extensions (`setup/pi`); the bridge as a launchd service; the Mac app; and the `tailscale serve` publication. With `--no-opencodex`, Pi and Prime get the keys directly, and the model definitions their catalogs lack come from `setup/pi/models.json` and `setup/prime/models.json`. `setup/sync-remote.sh` keeps the bridge on another Mac in step with a checkout, and `setup/uninstall.sh` removes the service, the publication, the routes of published sites, the sync agents and the app, and nothing of the agents or Open Codex.

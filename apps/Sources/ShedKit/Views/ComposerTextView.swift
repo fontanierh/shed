@@ -175,11 +175,11 @@ struct ComposerTextView: NSViewRepresentable {
         }
 
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            sender.draggingPasteboard.files.isEmpty ? super.draggingEntered(sender) : .copy
+            sender.draggingPasteboard.hasFiles ? .copy : super.draggingEntered(sender)
         }
 
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-            sender.draggingPasteboard.files.isEmpty ? super.draggingUpdated(sender) : .copy
+            sender.draggingPasteboard.hasFiles ? .copy : super.draggingUpdated(sender)
         }
 
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {

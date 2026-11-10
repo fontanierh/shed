@@ -5,8 +5,6 @@ struct NewSessionSheet: View {
     let store: SessionStore
     /// What to send once the session starts, from the home page's composer.
     var initialMessage = ""
-    /// A folder to start in instead of the last one, from the home page.
-    var initialFolder: String? = nil
     @State private var message = ""
     @Environment(\.dismiss) private var dismiss
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
@@ -159,7 +157,6 @@ struct NewSessionSheet: View {
         }
         .onAppear {
             restoreFolder()
-            if let initialFolder { cwd = initialFolder }
             if message.isEmpty { message = initialMessage }
             fitModel()
         }

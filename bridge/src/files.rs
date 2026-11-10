@@ -45,7 +45,6 @@ pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
         "path": dir,
         "parent": parent,
         "home": home,
-        "git": std::path::Path::new(&dir).join(".git").exists(),
         "entries": entries,
     }))
 }

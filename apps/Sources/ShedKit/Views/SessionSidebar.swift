@@ -6,8 +6,8 @@ struct SessionSidebar: View {
     var newSession: () -> Void = {}
     /// The computers Shed controls.
     var openSettings: () -> Void = {}
-    /// The home page's composer on iPhone, which has no home page of its own: a first message and a folder.
-    var start: ((_ message: String, _ folder: String?) -> Void)? = nil
+    /// The home page's composer on iPhone, which has no home page of its own: it opens New Session with a first message.
+    var start: ((_ message: String) -> Void)? = nil
     @State private var query = ""
     /// Sessions whose subagents are shown.
     @State private var expanded: Set<String> = []
@@ -134,9 +134,12 @@ struct SessionSidebar: View {
                         // calendar: on a phone the room goes to asking an agent.)
                         if store.connection == .connected {
                             GitHubCards(store: store, compact: true) { _, pulls in
-                                if let pulls {
-                                    SectionTitle("Pull requests").padding(.top, 14)
-                                    pulls.padding(.horizontal, 2)
+                                // A stack even while there is nothing to show: the cards load from a task on it.
+                                VStack(alignment: .leading, spacing: 2) {
+                                    if let pulls {
+                                        SectionTitle("Pull requests").padding(.top, 14)
+                                        pulls.padding(.horizontal, 2)
+                                    }
                                 }
                             }
                         }
@@ -185,7 +188,7 @@ struct SessionSidebar: View {
             }
 
             #if os(macOS)
-            // The phone starts sessions from the composer at the top of its list instead.
+            // The phone starts sessions from the composer under its list instead.
             NewSessionButton(action: newSession)
                 .disabled(store.connection != .connected)
                 .padding(12)
@@ -493,9 +496,7 @@ struct NewSessionButton: View {
                     .rotationEffect(.degrees(hovering ? 90 : 0))
                 Text("New Session").font(.system(size: 13.5, weight: .medium)).foregroundStyle(Palette.moon)
                 Spacer()
-                #if os(macOS)
                 Text("⌘N").font(.system(size: 11)).foregroundStyle(.tertiary)
-                #endif
             }
             .padding(.horizontal, 12)
             .frame(height: 44)
@@ -527,7 +528,7 @@ private struct EmptySidebar: View {
             #if os(macOS)
             Text("Start one with New Session.").font(.callout).foregroundStyle(.secondary)
             #else
-            Text("Ask an agent above to start one.").font(.callout).foregroundStyle(.secondary)
+            Text("Ask an agent below to start one.").font(.callout).foregroundStyle(.secondary)
             #endif
         }
         .padding(.bottom, 60)

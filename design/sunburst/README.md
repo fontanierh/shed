@@ -2,20 +2,24 @@
 
 References made with `gpt-image-2.6-sunburst`; the app implements them in SwiftUI and Core Animation.
 
+The repository keeps the prompts (`prompts/`, `motion/prompts/`) and the scripts. What they generate stays on the
+machine that ran them:
+
 - `stills/`: component sheets (sidebar, controls, transcript, composer, new session, panels, states, home, mobile).
   The mobile sheet puts the context bar above the composer; the app keeps the composer as it was on iPhone.
 - `motion/`: 512×512 GIF references for each animation, frame sheets in `motion/sheets/`.
 - `redo/`: real screenshots of the app (`shots/`) and Sunburst's cleaned-up redraws of them (`out/`), used to find gaps.
 
-Scripts (need `OPENAI_API_KEY` in the environment): `still.py <name>`, `motion.py <name>`, `redo.py <name> <shot> [notes]`.
+Scripts (need `OPENAI_API_KEY` in the environment): `still.py <name>`, `motion.py <name> [quality]`,
+`motion-ref.py <name> <reference image>…` (the same, with our own screens as references) and
+`redo.py <name> <shot> [notes]`. `run-stills.sh` and `run-motion.sh` run every prompt at once.
 
 ## Background
 
 `Views/Dither.swift` renders the ground once per size, off the main thread, cached: square dots on a 2 pt grid with
 a one-pixel gap. A curved beam sweeps through a corner (not across the middle): a thin red-orange warm edge with a
 soft fringe, cream, then cyan and blue thinning out into scattered dots. Everywhere else, dim dots in grey, red, green
-or blue. `Backdrop(beam:anchor:grain:)` sets its strength, where it passes, and how busy the dark noise is (lower
-behind text). Glass cards (`.card`) blur what's behind them, so text never sits on raw dots; the transcript has a
+or blue. `Backdrop(beam:base:anchor:shape:)` sets its strength, the ground colour, where it passes and how it curves. Glass cards (`.card`) blur what's behind them, so text never sits on raw dots; the transcript has a
 dark reading band. Core Animation adds a 7 s breath and a glint gliding along the curve; Reduce Motion keeps it still.
 
 ## Motion

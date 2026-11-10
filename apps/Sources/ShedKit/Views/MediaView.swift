@@ -122,7 +122,8 @@ enum MediaKind {
 
     init(_ url: URL) {
         switch url.pathExtension.lowercased() {
-        case "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp", "svg": self = .image
+        // Not SVG: ImageIO doesn't read it. It opens as a file, in Quick Look.
+        case "png", "jpg", "jpeg", "gif", "webp", "heic", "tif", "tiff", "bmp": self = .image
         case "mp4", "m4v", "mov": self = .video
         case "mp3", "m4a", "aac", "wav", "aif", "aiff", "flac": self = .audio
         // An https image link often has no extension at all.
@@ -152,15 +153,20 @@ struct MediaView: View {
 
 // MARK: Images
 
-/// Loads and decodes an image off the main thread, cached for the session so scrolling back doesn't refetch.
+/// Loads and decodes an image off the main thread, cached so scrolling back doesn't refetch. Decoded images are
+/// large: the cache keeps 256 MB of them at most, and lets go of them when memory runs short.
 @MainActor
 final class MediaCache {
     static let shared = MediaCache()
-    private var images: [URL: CGImage] = [:]
+    private let images: NSCache<NSURL, CGImage> = {
+        let cache = NSCache<NSURL, CGImage>()
+        cache.totalCostLimit = 256 << 20
+        return cache
+    }()
 
     func image(for request: URLRequest) async throws -> CGImage {
-        let key = request.url!
-        if let cached = images[key] { return cached }
+        let key = request.url! as NSURL
+        if let cached = images.object(forKey: key) { return cached }
         let (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             throw MediaError(status: http.statusCode)
@@ -171,7 +177,7 @@ final class MediaCache {
             else { throw MediaError(status: nil) }
             return image
         }.value
-        images[key] = image
+        images.setObject(image, forKey: key, cost: image.bytesPerRow * image.height)
         return image
     }
 }
@@ -404,7 +410,7 @@ struct PlayerView: UIViewControllerRepresentable {
 }
 #endif
 
-/// A compact player: a lantern-amber play button, the clip's name, and a rail to scrub along.
+/// A compact player: a play button, the clip's name, and a rail to scrub along.
 struct MediaAudio: View {
     let request: URLRequest
     let name: String

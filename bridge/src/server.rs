@@ -341,12 +341,11 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let (items, earlier) = session.state.lock().await.earlier_page(&before);
             json!({ "items": items, "earlier": earlier })
         }
-        ClientOp::ListAgentModels { agent } => json!({ "models": crate::rpc::list_models(agent).await? }),
-        ClientOp::ListDir { path, hidden } => crate::files::list_dir(path.as_deref(), hidden)?,
-        ClientOp::GitOverview { paths, days } => {
-            let folders = crate::git::folders(&app.summaries().await, paths);
-            crate::git::overview(folders, days).await?
+        ClientOp::ListAgentModels { agent } => {
+            json!({ "models": crate::rpc::list_models(agent).await? })
         }
+        ClientOp::ListDir { path, hidden } => crate::files::list_dir(path.as_deref(), hidden)?,
+        ClientOp::GitBranch { path } => crate::git::branch(&path).await,
         ClientOp::GithubOverview => crate::github::overview().await?,
     })
 }

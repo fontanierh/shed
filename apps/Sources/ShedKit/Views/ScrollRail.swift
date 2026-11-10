@@ -9,10 +9,6 @@ final class ScrollMetrics {
     var container: CGFloat = 0
     /// Bumped on every scroll so the rail can brighten and then rest.
     var moved = 0
-    /// Until when the transcript is easing to its end along with the keyboard. No view reads it.
-    var easingUntil = Date.distantPast
-    /// Until when the keyboard is sliding in or out, so the transcript's size changes are its doing.
-    var keyboardUntil = Date.distantPast
 
     var scrollable: Bool { content > container + 1 }
     var visible: CGFloat { scrollable ? container / content : 1 }

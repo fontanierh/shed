@@ -1,4 +1,4 @@
-// End-to-end check of a running bridge: node scripts/smoke.mjs <pi|prime> [port] [cwd] [model] [thinking]
+// End-to-end check of a running bridge: node scripts/smoke.mjs <pi|prime|deepseek> [port] [cwd] [model] [thinking]
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 

@@ -1,11 +1,12 @@
-//! One agent subprocess speaking the Pi/Prime JSONL RPC protocol on stdin/stdout.
+//! One agent subprocess speaking Pi's JSONL RPC protocol on stdin/stdout: Pi itself, or DeepSeek Harness through
+//! Shed's plugin (`crate::dsh`). Prime's sessions go through its daemon instead (`crate::prime`).
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -111,14 +112,15 @@ async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
     Ok(json!(models))
 }
 
-fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {
+fn command_line(opts: &SpawnOptions) -> Result<(String, Vec<String>)> {
     if opts.agent == AgentKind::Deepseek {
         // The session's model, reasoning effort and resumption go to the plugin once it starts.
         let layer = crate::dsh::install_profile()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
+            .context("the Shed profile for dsh can't be written")?
+            .to_string_lossy()
+            .into_owned();
         let args = ["--profile", crate::dsh::PROFILE, "--patch", &layer];
-        return ("dsh".into(), args.iter().map(|a| a.to_string()).collect());
+        return Ok(("dsh".into(), args.iter().map(|a| a.to_string()).collect()));
     }
     let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
     let program = match opts.agent {
@@ -144,14 +146,14 @@ fn command_line(opts: &SpawnOptions) -> (String, Vec<String>) {
         };
         args.extend([flag.into(), resume.clone()]);
     }
-    (program.into(), args)
+    Ok((program.into(), args))
 }
 
 impl RpcChild {
     pub fn spawn(
         opts: &SpawnOptions,
     ) -> Result<(Arc<RpcChild>, mpsc::UnboundedReceiver<ChildOutput>)> {
-        let (program, args) = command_line(opts);
+        let (program, args) = command_line(opts)?;
         let mut child = Command::new(&program)
             .args(&args)
             .current_dir(&opts.cwd)

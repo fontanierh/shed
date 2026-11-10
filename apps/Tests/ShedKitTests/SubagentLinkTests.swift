@@ -4,7 +4,7 @@ import XCTest
 final class SubagentLinkTests: XCTestCase {
     @MainActor private func summary(_ id: String, parent: String? = nil, name: String? = nil, createdAt: Double = 0,
                                     status: SessionStatus = .idle, lastActiveAt: Double? = nil) -> SessionSummary {
-        var summary = SessionSummary(id: id, agent: .prime, kind: parent == nil ? .root : .subagent, name: name, depth: 0,
+        var summary = SessionSummary(id: id, agent: .prime, kind: parent == nil ? .root : .subagent, name: name,
                                      runningSubagents: false, readOnly: false, cwd: "/tmp", title: id, status: status, error: nil,
                                      createdAt: createdAt, model: nil, thinkingLevel: nil, thinkingLevels: [], context: nil,
                                      cost: 0, queue: Queue(steering: [], followUp: []), autoCompaction: true,
@@ -52,13 +52,13 @@ final class SubagentLinkTests: XCTestCase {
         store.apply(.sessions([summary("p"), summary("c", parent: "p", name: "scout", createdAt: 10_000, lastActiveAt: 10_000)]), from: "test")
         let mention = SubagentMention(name: "scout", date: date(60))
         XCTAssertEqual(store.link(of: "test:p", to: mention), .open("test:c"))
-        // No bridge here: the attach fails as it does for a subagent the agent has let go of.
-        store.select("test:c")
-        var waited = 0
-        while !store.ended.contains("test:c"), waited < 2000 {
-            try? await Task.sleep(for: .milliseconds(10))
-            waited += 10
-        }
+        // A bridge out of reach says nothing about the subagent: that is an error like any other.
+        await store.attachFailed("test:c", BridgeError("timed out"))
+        XCTAssertFalse(store.ended.contains("test:c"))
+        XCTAssertEqual(store.errorMessage, "timed out")
+        store.errorMessage = nil
+        // What the bridge answers for a subagent the agent has let go of.
+        await store.attachFailed("test:c", BridgeError("session ended"))
         XCTAssertTrue(store.ended.contains("test:c"))
         XCTAssertNil(store.errorMessage)
         XCTAssertEqual(store.link(of: "test:p", to: mention), .ended)

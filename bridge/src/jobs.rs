@@ -76,10 +76,12 @@ impl ProcessTree {
     }
 
     pub async fn snapshot() -> Option<Self> {
-        let out = tokio::process::Command::new("/bin/ps")
-            .args(["-axo", "pid=,ppid=,etime=,time=,command="])
-            .output()
+        let mut ps = tokio::process::Command::new("/bin/ps");
+        ps.args(["-axo", "pid=,ppid=,etime=,time=,command="])
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), ps.output())
             .await
+            .ok()?
             .ok()?;
         Some(Self::parse(&String::from_utf8_lossy(&out.stdout)))
     }
@@ -579,13 +581,25 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
     };
     entries
         .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| serde_json::from_slice::<Value>(&std::fs::read(e.path()).ok()?).ok())
-        .filter_map(|j| {
+        .map(|e| e.path())
+        .filter(|path| path.extension().is_some_and(|x| x == "json"))
+        .filter_map(|path| {
+            Some((
+                serde_json::from_slice::<Value>(&std::fs::read(&path).ok()?).ok()?,
+                path,
+            ))
+        })
+        .filter_map(|(j, path)| {
             let pid = j["pid"].as_u64().map(|p| p as u32);
             let mut status = j["status"].as_str().unwrap_or("finished").to_string();
-            if status == "running" && !pid.is_some_and(alive) {
+            // Only Pi rewrites the record, so a job it left behind says "running" for good. Once seen gone, that is
+            // noted beside it: the pid can be given to another process later, and that one isn't this job.
+            let lost = path.with_extension("lost");
+            if status == "running" && (lost.exists() || !pid.is_some_and(alive)) {
                 status = "lost".into();
+                if !lost.exists() {
+                    let _ = std::fs::write(&lost, b"");
+                }
             }
             let started_at = j["startedAt"].as_str().and_then(parse_iso_ms);
             Some(BackgroundJob {
@@ -601,6 +615,11 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
             })
         })
         .collect()
+}
+
+/// A deleted session's job records and logs go with it.
+pub fn forget(session_id: &str) {
+    let _ = std::fs::remove_dir_all(pi_dir(session_id));
 }
 
 /// The running Pi jobs of a session, for the summary: how many, and the one stuck on a permission prompt or else

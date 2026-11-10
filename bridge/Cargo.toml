@@ -2,7 +2,7 @@
 name = "shed-bridge"
 version = "0.1.0"
 edition = "2021"
-description = "Serves Pi and Prime Agent sessions to the Shed apps over one WebSocket protocol"
+description = "Serves Pi, Prime Agent and DeepSeek Harness sessions to the Shed apps over one WebSocket protocol"
 license = "MIT"
 repository = "https://github.com/fontanierh/shed"
 publish = false

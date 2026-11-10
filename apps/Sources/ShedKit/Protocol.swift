@@ -25,7 +25,6 @@ public struct Item: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public var kind: ItemKind
     public var text: String
-    public var toolCallId: String?
     public var toolName: String?
     public var args: String?
     public var output: String?
@@ -63,7 +62,6 @@ public enum SubagentLink: Equatable, Sendable {
 
 public struct ItemSet: Codable, Sendable {
     public var text: String?
-    public var toolCallId: String?
     public var toolName: String?
     public var args: String?
     public var output: String?
@@ -72,7 +70,6 @@ public struct ItemSet: Codable, Sendable {
 
     func apply(to item: inout Item) {
         if let text { item.text = text }
-        if let toolCallId { item.toolCallId = toolCallId }
         if let toolName { item.toolName = toolName }
         if let args { item.args = args }
         if let output { item.output = output }
@@ -139,9 +136,6 @@ public struct RunSpend: Codable, Equatable, Sendable {
     public let tokensPerMinute: Double?
     /// Dollars since the run started, when priced.
     public let runCost: Double?
-    public let runTokens: Int
-    /// When the run started (epoch ms).
-    public let since: Double
 }
 
 public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
@@ -151,7 +145,6 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let kind: SessionKind
     public internal(set) var parentId: String?
     public let name: String?
-    public let depth: Int
     public let runningSubagents: Bool
     public let readOnly: Bool
     public let cwd: String
@@ -316,7 +309,6 @@ public struct DirListing: Decodable, Sendable {
     public let path: String
     public let parent: String?
     public let home: String
-    public let git: Bool
     public let entries: [Entry]
 }
 
@@ -338,6 +330,26 @@ public enum ServerMessage: Sendable {
     case itemPatch(sessionId: String, itemId: String, set: ItemSet?, append: ItemAppend?)
 }
 
+/// What can be read of a list: one session the app can't decode must not hide all the others.
+private struct Readable<Value: Decodable>: Decodable {
+    var values: [Value] = []
+
+    private struct Skipped: Decodable {}
+
+    init(from decoder: Decoder) throws {
+        var list = try decoder.unkeyedContainer()
+        while !list.isAtEnd {
+            do {
+                values.append(try list.decode(Value.self))
+            } catch {
+                NSLog("Shed: a %@ in a list from the bridge couldn't be read: %@", String(describing: Value.self), String(describing: error))
+                // A failed decode leaves the list where it was: step over the element.
+                _ = try list.decode(Skipped.self)
+            }
+        }
+    }
+}
+
 extension ServerMessage: Decodable {
     private enum CodingKeys: String, CodingKey {
         case type, sessions, session, sessionId, items, earlier, item, itemId, set, append
@@ -346,7 +358,7 @@ extension ServerMessage: Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
-        case "sessions": self = .sessions(try c.decode([SessionSummary].self, forKey: .sessions))
+        case "sessions": self = .sessions(try c.decode(Readable<SessionSummary>.self, forKey: .sessions).values)
         case "session": self = .session(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(try c.decode(String.self, forKey: .sessionId))
         case "snapshot":

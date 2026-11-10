@@ -1,6 +1,6 @@
 node_modules/
 .build/
-*.xcodeproj/xcuserdata/
+xcuserdata/
 DerivedData/
 .DS_Store
 apps/build/
@@ -8,7 +8,7 @@ target/
 # Sunburst renders and screenshots of real sessions: large, and they show private data.
 design/sunburst/stills/
 design/sunburst/motion/sheets/
-design/sunburst/motion/materialize*.gif
+design/sunburst/motion/*.gif
 design/sunburst/motion/*-frames.png
 design/sunburst/redo/shots/
 design/sunburst/redo/out/

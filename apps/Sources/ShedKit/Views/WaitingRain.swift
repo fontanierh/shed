@@ -18,7 +18,7 @@ struct WaitingRain {
     /// When the last new drops start.
     let stop: Date?
 
-    fileprivate func update(_ view: RainView) {
+    @MainActor fileprivate func update(_ view: RainView) {
         view.start = start
         if let stop { view.stop(at: stop) }
     }

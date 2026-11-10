@@ -235,7 +235,10 @@ mod tests {
         assert_eq!(content_type("/a.b/Makefile"), "application/octet-stream");
         assert_eq!(upload_name("../../etc/passwd"), "passwd");
         assert_eq!(upload_name(".."), "attachment");
-        assert_eq!(upload_name("Screenshot 2026-11-04 at 10.12.03.png"), "Screenshot 2026-11-04 at 10.12.03.png");
+        assert_eq!(
+            upload_name("Screenshot 2026-11-04 at 10.12.03.png"),
+            "Screenshot 2026-11-04 at 10.12.03.png"
+        );
     }
 
     #[tokio::test]

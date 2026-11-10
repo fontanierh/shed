@@ -36,6 +36,9 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
 public struct SiteEntry: Identifiable, Equatable {
     public let site: Site
     public let session: SessionSummary
+    /// Whether its address opens on this device: it is on the tailnet, or this computer serves it. Unpublished, the
+    /// address is the loopback of the computer that serves it.
+    public let opens: Bool
 
     public var id: String { "\(session.id)#\(site.port)" }
 }
@@ -328,22 +331,21 @@ public final class SessionStore {
         session.parentId.flatMap { sessions[$0] }
     }
 
-    /// The computer with the most top-level sessions: where the work happens.
-    public var busiestEnvironment: BridgeEnvironment? {
-        let counts = Dictionary(sessions.values.filter { !$0.isSubagent }.compactMap { Self.split($0.id)?.env }.map { ($0, 1) },
-                                uniquingKeysWith: +)
-        return environments.max { counts[$0.id, default: 0] < counts[$1.id, default: 0] }
-    }
-
     /// Every subagent still at work (running, or idle with background jobs), across all sessions.
     public var activeSubagents: [SessionSummary] {
         sessions.values.filter { $0.isSubagent && $0.isActive && !ended.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
     }
 
     /// Every site any session serves, newest session first, so the app can list them all in one place.
+    /// The sites a session serves.
+    public func sites(of session: SessionSummary) -> [SiteEntry] {
+        let local = environment(of: session.id)?.isLocal == true
+        return session.servedSites.map { SiteEntry(site: $0, session: session, opens: $0.published || local) }
+    }
+
     public var allSites: [SiteEntry] {
         sessions.values
-            .flatMap { session in session.servedSites.map { SiteEntry(site: $0, session: session) } }
+            .flatMap { sites(of: $0) }
             .sorted { a, b in
                 if a.session.createdAt != b.session.createdAt { return a.session.createdAt > b.session.createdAt }
                 return a.site.port < b.site.port
@@ -408,21 +410,26 @@ public final class SessionStore {
             guard let (env, raw) = Self.split(id) else { return }
             try await call(env, "attach", ["sessionId": raw], repeatable: true)
         } catch {
-            // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
-            if sessions[id] == nil {
-                if selectedId == id { select(nil) }
-                return
-            }
-            // A subagent its agent has let go of. The bridge may list it a while longer, but there is nothing to
-            // open: no alert, its screen says so for a moment, then gives way to its parent.
-            if error is BridgeError, let parent = sessions[id]?.parentId {
-                ended.insert(id)
-                try? await Task.sleep(for: .milliseconds(1400))
-                if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
-                return
-            }
-            report(error)
+            await attachFailed(id, error)
         }
+    }
+
+    func attachFailed(_ id: String, _ error: Error) async {
+        // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
+        if sessions[id] == nil {
+            if selectedId == id { select(nil) }
+            return
+        }
+        // A subagent its agent has let go of, which is the one thing the bridge answers with these words. It may
+        // list it a while longer, but there is nothing to open: no alert, its screen says so for a moment, then
+        // gives way to its parent. Any other failure (a bridge out of reach) says nothing about the subagent.
+        if (error as? BridgeError)?.message == "session ended", let parent = sessions[id]?.parentId {
+            ended.insert(id)
+            try? await Task.sleep(for: .milliseconds(1400))
+            if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
+            return
+        }
+        report(error)
     }
 
     // MARK: Incoming messages
@@ -448,9 +455,11 @@ public final class SessionStore {
             sessions[summary.id] = summary
         case .sessionRemoved(let id):
             let id = Self.tag(env, id)
+            // An open subagent that goes gives way to its parent, as when its agent lets go of it.
+            let parent = sessions[id]?.parentId.flatMap { sessions[$0] == nil ? nil : $0 }
             sessions[id] = nil
             ended.remove(id)
-            if selectedId == id { select(nil) }
+            if selectedId == id { select(parent) }
         case .snapshot(let raw, var snapshot, let earlier):
             let sessionId = Self.tag(env, raw)
             guard sessionId == selectedId else { return }
@@ -782,14 +791,16 @@ public final class SessionStore {
         return try await client(env).call("list_dir", fields, as: DirListing.self)
     }
 
-    /// The git repositories an environment's sessions work in, read with that computer's `git`. `folders` adds more.
     /// The GitHub account signed in with `gh` on that computer: contributions and open pull requests.
     public func githubOverview(in env: String) async throws -> GitHubOverview {
         try await client(env).call("github_overview", [:], as: GitHubOverview.self)
     }
 
-    public func gitOverview(in env: String, folders: [String] = []) async throws -> GitOverview {
-        try await client(env).call("git_overview", ["paths": folders], as: GitOverview.self)
+    /// The branch of the repository `folder` is in on that computer, read with its `git`. Nil when it is detached or in
+    /// no repository.
+    public func gitBranch(in env: String, of folder: String) async throws -> String? {
+        struct Reply: Decodable { let branch: String? }
+        return try await client(env).call("git_branch", ["path": folder], as: Reply.self).branch
     }
 
     // MARK: Background commands

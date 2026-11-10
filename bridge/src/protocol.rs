@@ -34,8 +34,6 @@ pub struct Item {
     pub kind: ItemKind,
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
@@ -56,7 +54,6 @@ impl Item {
             id: String::new(),
             kind,
             text: text.into(),
-            tool_call_id: None,
             tool_name: None,
             args: None,
             output: None,
@@ -74,8 +71,6 @@ pub struct ItemSet {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,
@@ -90,7 +85,6 @@ pub struct ItemSet {
 impl ItemSet {
     pub fn is_empty(&self) -> bool {
         self.text.is_none()
-            && self.tool_call_id.is_none()
             && self.tool_name.is_none()
             && self.args.is_none()
             && self.output.is_none()
@@ -101,9 +95,6 @@ impl ItemSet {
     pub fn apply(&self, item: &mut Item) {
         if let Some(v) = &self.text {
             item.text = v.clone();
-        }
-        if let Some(v) = &self.tool_call_id {
-            item.tool_call_id = Some(v.clone());
         }
         if let Some(v) = &self.tool_name {
             item.tool_name = Some(v.clone());
@@ -236,7 +227,6 @@ pub struct SessionSummary {
     /// Subagent name (Prime `sessionName`, Pi agent name).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    pub depth: u32,
     pub running_subagents: bool,
     /// Pi subagents are views of a tool call and accept no commands.
     pub read_only: bool,
@@ -300,11 +290,9 @@ pub struct Spend {
     /// Tokens a minute over the same stretch. Both need half a minute of the run to say.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_per_minute: Option<f64>,
-    /// Dollars and tokens since the run started, at `since` (epoch ms).
+    /// Dollars since the run started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_cost: Option<f64>,
-    pub run_tokens: u64,
-    pub since: u64,
 }
 
 /// A background command a session is waiting on.
@@ -531,13 +519,9 @@ pub enum ClientOp {
         #[serde(default)]
         hidden: bool,
     },
-    /// The git repositories the sessions work in, read with the machine's `git`: branches, uncommitted changes,
-    /// recent commits and the user's commits per day. `paths` adds folders beyond the sessions'.
-    GitOverview {
-        #[serde(default)]
-        paths: Vec<String>,
-        #[serde(default = "default_days")]
-        days: u32,
+    /// The branch of the repository `path` is in, read with the machine's `git`.
+    GitBranch {
+        path: String,
     },
     /// The GitHub account `gh` is signed in to on this computer: contributions per day over the last year and open
     /// pull requests.
@@ -550,10 +534,6 @@ fn is_zero(n: &usize) -> bool {
 
 fn default_lines() -> u32 {
     80
-}
-
-fn default_days() -> u32 {
-    182
 }
 
 #[derive(Debug, Deserialize)]

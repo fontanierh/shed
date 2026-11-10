@@ -9,7 +9,6 @@ struct SessionView: View {
     @State private var restartingKernel = false
     @State private var showingSubagents = false
     @State private var showingSites = false
-    /// The running background commands, fetched when their count changes, so the transcript can name what it waits on.
 
     /// Where the session stands once idle, so a quiet session is never a mystery: the commands and subagents that
     /// will wake it, each opening its list, or plainly that nothing will.
@@ -123,7 +122,7 @@ struct SessionView: View {
         .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
         .sheet(isPresented: $showingSites) {
             NavigationStack {
-                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+                SitesPanel(entries: store.sites(of: session),
                            title: "Sites", empty: "Servers this session starts appear here.")
             }
             .presentationDetents([.medium, .large])
@@ -289,8 +288,7 @@ struct SessionView: View {
                     // or a blur, so scrolling under it costs nothing.
                     LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
                                            .init(color: Palette.canvas.opacity(0.94), location: 0.3),
-                                           .init(color: Palette.canvas.opacity(0.97), location: narrow ? 0.62 : 1),
-                                           .init(color: Palette.canvas.opacity(narrow ? 0.2 : 0.97), location: 1)],
+                                           .init(color: Palette.canvas.opacity(0.97), location: 1)],
                                    startPoint: .top, endPoint: .bottom)
                         .padding(.top, -28)
                         // Only under the column, its sides fading out, so the beam beside it stays lit.
@@ -711,7 +709,7 @@ struct SessionHeader: View {
                 }
                 .layoutPriority(2)
                 AgentBadge(agent: session.agent)
-                StatusLabel(session: session, activeSubagents: 0)
+                StatusLabel(session: session)
                     .fixedSize()
                 // The folder, not the whole path: the path is in its tooltip and the … menu.
                 HStack(spacing: 6) {
@@ -777,8 +775,8 @@ struct SessionHeader: View {
         .confirmRestartKernel($restartingKernel) { store.restartKernel() }
         .task(id: session.cwd) {
             guard let env = store.environment(of: session.id)?.id,
-                  let overview = try? await store.gitOverview(in: env, folders: [session.cwd]) else { return }
-            withAnimation(.easeOut(duration: 0.2)) { branch = overview.repo(containing: session.cwd)?.branch }
+                  let found = try? await store.gitBranch(in: env, of: session.cwd) else { return }
+            withAnimation(.easeOut(duration: 0.2)) { branch = found }
         }
         .padding(.leading, 20)
         .padding(.trailing, 12)
@@ -803,7 +801,6 @@ struct SessionHeader: View {
 
 struct StatusLabel: View {
     let session: SessionSummary
-    let activeSubagents: Int
 
     var body: some View {
         HStack(spacing: 6) {
@@ -818,11 +815,10 @@ struct StatusLabel: View {
         .accessibilityElement(children: .combine)
     }
 
-    // A Prime agent keeps going while its subagents and background jobs run, so say so next to "idle".
+    // An agent keeps going while its background commands run, so say so next to "idle".
     private var text: String {
         var parts = [session.status == .running ? "working" : session.status.rawValue]
         if !session.status.isBusy, session.backgroundJobs > 0, let jobs = session.activityText() { parts.append(jobs) }
-        if activeSubagents > 0 { parts.append(activeSubagents == 1 ? "1 subagent at work" : "\(activeSubagents) subagents at work") }
         return parts.joined(separator: " · ")
     }
 }
@@ -1446,7 +1442,6 @@ struct EffortRow: View {
     }
 }
 
-/// The goal the agent keeps working toward across turns: what it is, how far it has gone, and a way to drop it.
 /// What the agent asks, above the composer: its options to pick from, or an answer typed below. The ✕ skips it.
 struct QuestionCard: View {
     let store: SessionStore
@@ -1594,6 +1589,7 @@ struct QuestionCard: View {
     }
 }
 
+/// The goal the agent keeps working toward across turns: what it is, how far it has gone, and a way to drop it.
 struct GoalCard: View {
     let goal: Goal
     let cancel: () -> Void

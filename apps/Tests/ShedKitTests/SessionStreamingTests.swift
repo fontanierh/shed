@@ -4,7 +4,7 @@ import Observation
 
 final class SessionStreamingTests: XCTestCase {
     @MainActor private func summary(_ id: String, status: SessionStatus = .running) -> SessionSummary {
-        SessionSummary(id: id, agent: .deepseek, kind: .root, name: nil, depth: 0, runningSubagents: false,
+        SessionSummary(id: id, agent: .deepseek, kind: .root, name: nil, runningSubagents: false,
                        readOnly: false, cwd: "/tmp", title: id, status: status, error: nil, createdAt: 0,
                        model: nil, thinkingLevel: nil, thinkingLevels: [], context: nil,
                        cost: 0, queue: Queue(steering: [], followUp: []), autoCompaction: true,

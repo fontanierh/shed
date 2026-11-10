@@ -216,7 +216,8 @@ struct JobStatusIcon: View {
     static func look(exitCode: Int?, lost: Bool = false) -> (String, Color) {
         if lost { return ("questionmark.circle.fill", .secondary) }
         if signal(exitCode) != nil { return ("stop.circle.fill", .secondary) }
-        return exitCode == 0 ? ("checkmark.circle.fill", Palette.ice) : ("xmark.circle.fill", Palette.danger)
+        // Finished without a code (DeepSeek's often are) is finished, as the titles say.
+        return (exitCode ?? 0) == 0 ? ("checkmark.circle.fill", Palette.ice) : ("xmark.circle.fill", Palette.danger)
     }
 
     /// The signal that ended a command: Prime reports it negated (-15), a shell as 128 + the signal (143).
@@ -281,7 +282,8 @@ private struct JobDetail: View {
                 if job.isRunning {
                     Button(role: .destructive) {
                         cancelling = true
-                        Task { await store.killJob(sessionId, job.id) }
+                        // Back to a button once the bridge has answered: a command it couldn't stop is still running.
+                        Task { await store.killJob(sessionId, job.id); cancelling = false }
                     } label: {
                         Text(cancelling ? "Cancelling…" : "Cancel command")
                     }
@@ -512,7 +514,7 @@ private struct Seal: View {
     }
 }
 
-/// An amber arc chasing its tail.
+/// An arc chasing its tail.
 struct Spinner: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 

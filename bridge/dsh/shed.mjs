@@ -199,14 +199,6 @@ export function apply(ctx) {
       return { ...(await describe()), events, children: resume ? await children(events) : [] };
     },
 
-    async history() {
-      return { events: history() };
-    },
-
-    async state() {
-      return describe();
-    },
-
     async prompt({ text, images = [], mode = "followup" }) {
       const { agent } = live();
       const blocks = [];
@@ -273,11 +265,6 @@ export function apply(ctx) {
       return { models: groups.flat() };
     },
 
-    async model_info({ provider, model }) {
-      const info = await ctx.llm.resolveModelInfo(provider, model);
-      return { contextWindow: info.contextWindow ?? null, reasoning: info.reasoning ?? null };
-    },
-
     async command({ line }) {
       const commands = ctx.get("commands");
       if (!commands) throw new Error("this dsh profile has no slash commands");
@@ -292,17 +279,20 @@ export function apply(ctx) {
     },
 
     // The tail, read without moving the cursor the agent's own job_output reads from.
-    async job_output({ jobId, owner, bytes = 16384 }) {
+    async job_output({ jobId }) {
       const jobs = ctx.get("jobs");
-      const caller = owner ?? live().agent.session.id;
+      if (!jobs) throw new Error("this dsh profile has no background jobs");
+      const caller = live().agent.session.id;
       const job = jobs.get(jobId, caller);
-      const read = jobs.readAt(jobId, Math.max(job.output.earliest, job.output.total - bytes), caller);
+      const read = jobs.readAt(jobId, Math.max(job.output.earliest, job.output.total - 16384), caller);
       const text = read.chunks.map((chunk) => (typeof chunk === "string" ? chunk : (chunk.text ?? ""))).join("");
       return { text, job };
     },
 
-    async kill_job({ jobId, owner }) {
-      await ctx.get("jobs").kill(jobId, owner ?? live().agent.session.id, "killed from Shed");
+    async kill_job({ jobId }) {
+      const jobs = ctx.get("jobs");
+      if (!jobs) throw new Error("this dsh profile has no background jobs");
+      await jobs.kill(jobId, live().agent.session.id, "killed from Shed");
       return {};
     },
 

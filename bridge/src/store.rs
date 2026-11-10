@@ -9,6 +9,22 @@ use serde_json::json;
 
 use crate::rpc::AgentKind;
 
+/// A model's default window: under its own "provider/id", or, for a model reached through Open Codex, under the
+/// provider it comes from. Open Codex names the API-key accounts `openai-apikey/…` and `anthropic-apikey/…`, and
+/// lists the ChatGPT subscription's models bare: all of them are "openai/…" or "anthropic/…" here, so one entry
+/// covers a model however it is reached.
+pub fn default_window(windows: &HashMap<String, u64>, provider: &str, id: &str) -> Option<u64> {
+    if let Some(window) = windows.get(&format!("{provider}/{id}")) {
+        return Some(*window);
+    }
+    if provider != crate::opencodex::PROVIDER {
+        return None;
+    }
+    let (namespace, model) = id.split_once('/').unwrap_or(("openai", id));
+    let namespace = namespace.strip_suffix("-apikey").unwrap_or(namespace);
+    windows.get(&format!("{namespace}/{model}")).copied()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
@@ -34,21 +50,25 @@ impl Store {
 
     pub fn token(&self) -> Result<String> {
         let path = self.dir.join("config.json");
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            let config: serde_json::Value = serde_json::from_str(&raw)?;
-            if let Some(token) = config["token"].as_str() {
-                return Ok(token.to_string());
-            }
+        let mut config = match std::fs::read_to_string(&path) {
+            Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
+                .with_context(|| format!("{} is not valid JSON", path.display()))?,
+            Err(_) => json!({}),
+        };
+        if let Some(token) = config["token"].as_str() {
+            return Ok(token.to_string());
         }
         let token = format!(
             "{}{}",
             uuid::Uuid::new_v4().simple(),
             uuid::Uuid::new_v4().simple()
         );
-        write_private(
-            &path,
-            &serde_json::to_vec_pretty(&json!({ "token": token }))?,
-        )?;
+        // What is already there stays: the installer writes its settings before the bridge first starts.
+        config
+            .as_object_mut()
+            .with_context(|| format!("{} is not a JSON object", path.display()))?
+            .insert("token".into(), json!(token));
+        write_private(&path, &serde_json::to_vec_pretty(&config)?)?;
         Ok(token)
     }
 
@@ -64,10 +84,20 @@ impl Store {
     }
 
     pub fn load_sessions(&self) -> Vec<SessionRecord> {
-        std::fs::read_to_string(self.dir.join("sessions.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default()
+        let path = self.dir.join("sessions.json");
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        serde_json::from_str(&raw).unwrap_or_else(|e| {
+            // Kept aside: the next save writes the list anew.
+            let aside = path.with_extension("json.bad");
+            let _ = std::fs::copy(&path, &aside);
+            eprintln!(
+                "sessions.json can't be read ({e}); kept as {}",
+                aside.display()
+            );
+            Vec::new()
+        })
     }
 
     pub fn save_sessions(&self, records: &[SessionRecord]) -> Result<()> {
@@ -78,7 +108,7 @@ impl Store {
     }
 
     /// The window each model keeps to by default, by "provider/id" (`defaultContextWindows` in config.json, which
-    /// setup/install.sh fills in).
+    /// setup/install.sh fills in). `default_window` looks one model up in it.
     pub fn default_windows(&self) -> HashMap<String, u64> {
         std::fs::read_to_string(self.dir.join("config.json"))
             .ok()
@@ -153,4 +183,76 @@ fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(name: &str) -> Store {
+        let dir = std::env::temp_dir().join(format!("shed-store-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Store { dir }
+    }
+
+    #[test]
+    fn the_first_token_keeps_what_the_installer_wrote() {
+        let store = store("token");
+        let path = store.dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"opencodex": false, "defaultContextWindows": {"a/b": 272000}}"#,
+        )
+        .unwrap();
+        let token = store.token().unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["token"], token.as_str());
+        assert_eq!(config["opencodex"], false);
+        assert_eq!(store.default_windows()["a/b"], 272000);
+        // And it is the same one from then on.
+        assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_default_window_covers_its_model_through_open_codex() {
+        let windows: HashMap<String, u64> = [
+            ("openai/gpt-6.1-terra".to_string(), 272_000),
+            ("opencodex/mistral/large".to_string(), 64_000),
+        ]
+        .into();
+        let window = |provider, id| default_window(&windows, provider, id);
+        assert_eq!(window("openai", "gpt-6.1-terra"), Some(272_000));
+        // The ChatGPT subscription's bare id, and the API key's account.
+        assert_eq!(window("opencodex", "gpt-6.1-terra"), Some(272_000));
+        assert_eq!(
+            window("opencodex", "openai-apikey/gpt-6.1-terra"),
+            Some(272_000)
+        );
+        // Its own key comes first, and nothing else matches by accident.
+        assert_eq!(window("opencodex", "mistral/large"), Some(64_000));
+        assert_eq!(window("opencodex", "gpt-6.1-terra-fast"), None);
+        assert_eq!(window("opencodex", "anthropic-apikey/gpt-6.1-terra"), None);
+        assert_eq!(window("mistral", "gpt-6.1-terra"), None);
+    }
+
+    #[test]
+    fn a_token_is_made_where_there_is_no_config() {
+        let store = store("fresh");
+        let token = store.token().unwrap();
+        assert_eq!(token.len(), 64);
+        assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_list_of_sessions_that_cannot_be_read_is_kept_aside() {
+        let store = store("sessions");
+        std::fs::write(store.dir.join("sessions.json"), "[{\"id\": 1}]").unwrap();
+        assert!(store.load_sessions().is_empty());
+        assert!(store.dir.join("sessions.json.bad").is_file());
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
 }

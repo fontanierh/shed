@@ -24,9 +24,7 @@ public struct RootView: View {
                 } else if case .disconnected = store.connection {
                     Unreachable(store: store, showSettings: $showSettings)
                 } else {
-                    HomeView(store: store) { message, folder in
-                        newSession = NewSessionDraft(message: message, folder: folder)
-                    }
+                    HomeView(store: store) { newSession = NewSessionDraft(message: $0) }
                 }
             }
             .transition(.opacity)
@@ -40,7 +38,7 @@ public struct RootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(item: $newSession) { draft in
-            NewSessionSheet(store: store, initialMessage: draft.message, initialFolder: draft.folder)
+            NewSessionSheet(store: store, initialMessage: draft.message)
         }
         .sheet(isPresented: $showSettings) { EnvironmentSettings(store: store) }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
@@ -54,11 +52,10 @@ public struct RootView: View {
     }
 }
 
-/// What New Session opens with: a first message and a folder, from the home page.
+/// What New Session opens with: a first message, from the home page.
 struct NewSessionDraft: Identifiable {
     let id = UUID()
     var message = ""
-    var folder: String? = nil
 }
 
 /// The bridge can't be reached: a computer with a red dot, and the way back.
@@ -157,7 +154,8 @@ private struct Line: View {
 
     var body: some View {
         let state = store.connection(of: env.id)
-        Group {
+        // A stack, not a group: it is there while it is empty, so the task below has a view to run on.
+        VStack(spacing: 0) {
             if shown {
                 switch state {
                 case .connected:

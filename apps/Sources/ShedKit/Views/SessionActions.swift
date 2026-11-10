@@ -70,13 +70,14 @@ extension ModelInfo {
     static func newestFirst(_ models: [ModelInfo], matching query: String = "") -> [ModelInfo] {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
         let shown = q.isEmpty ? models : models.filter { $0.name.lowercased().contains(q) || $0.key.lowercased().contains(q) }
-        return shown.sorted { a, b in
-            let (ka, kb) = (a.recency, b.recency)
+        // Each id is read once, not once a comparison: the pickers sort again at every letter typed.
+        return shown.map { ($0, $0.recency) }.sorted { a, b in
+            let (ka, kb) = (a.1, b.1)
             if ka.version != kb.version { return !ka.version.lexicographicallyPrecedes(kb.version) }
             if ka.size != kb.size { return ka.size < kb.size }
             if ka.date != kb.date { return ka.date > kb.date }
-            return a.key < b.key
-        }
+            return a.0.key < b.0.key
+        }.map(\.0)
     }
 
     /// By provider, `first`'s leading and the rest in `groupOrder`, each newest first.
@@ -204,7 +205,8 @@ extension ModelInfo {
             guard let match = part.wholeMatch(of: /v?[a-z]?(\d{1,2}(?:\.\d+)*)[a-z]?/), !part.hasSuffix("b") || part.count <= 2 else { return nil }
             return match.output.1.split(separator: ".").compactMap { Int($0) }
         }.first ?? []
-        let size = ["nano", "mini", "small", "lite", "flash"].firstIndex { name.contains($0) }.map { 5 - $0 } ?? 0
+        // Whole words: "gemini" is not a mini.
+        let size = ["nano", "mini", "small", "lite", "flash"].firstIndex { parts.contains($0[...]) }.map { 5 - $0 } ?? 0
         let date = name.firstMatch(of: /\d{4}-\d{2}-\d{2}|\d{8}/).map { String($0.output) } ?? "9999"
         return (version, size, date)
     }

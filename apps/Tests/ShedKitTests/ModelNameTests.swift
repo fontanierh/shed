@@ -51,6 +51,13 @@ final class ModelNameTests: XCTestCase {
         XCTAssertEqual(twin.chipName(among: [mine, twin, other]), "ChatGPT · GPT-6.1 Terra")
     }
 
+    /// The full model before its smaller ones, and "gemini" is not a mini.
+    func testFullModelsComeBeforeSmallOnes() {
+        let ids = ["google/gemini-3-5-flash", "google/gemini-3-5-flash-lite", "google/gemini-3-5-pro", "gpt-6.1-mini", "gpt-6.1"]
+        XCTAssertEqual(ModelInfo.newestFirst(ids.map { model($0) }).map(\.id),
+                       ["gpt-6.1", "gpt-6.1-mini", "google/gemini-3-5-pro", "google/gemini-3-5-flash", "google/gemini-3-5-flash-lite"])
+    }
+
     func testEffortNames() {
         XCTAssertEqual(ModelInfo.effortName("high"), "High")
         XCTAssertEqual(ModelInfo.effortName(nil), "Default")

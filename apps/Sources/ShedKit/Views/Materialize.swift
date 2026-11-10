@@ -23,7 +23,7 @@ struct Materialize: View {
     @Environment(\.displayScale) private var scale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    static let cell: CGFloat = 2
+    nonisolated static let cell: CGFloat = 2
     @State private var arrival: Task<Void, Never>?
     /// How long the cover takes to lift when the conversation's layout couldn't be read.
     static let lift = 0.5
@@ -34,6 +34,8 @@ struct Materialize: View {
                 // The loading rain on Core Animation: it keeps falling while the conversation is laid out, which
                 // holds the app for a moment as it arrives. It thins out as the conversation starts printing.
                 WaitingRain(start: rainStart, stop: revealStart.map { $0.addingTimeInterval(0.35) })
+                    // A new wait, a new rain: one that has stopped doesn't start again.
+                    .id(rainStart)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                     .transition(.identity)
@@ -132,7 +134,7 @@ struct Materialize: View {
     }
 
     /// A stable pseudo-random number in 0..<1 for a cell (and anything else worth telling apart).
-    static func hash(_ a: Int, _ b: Int, _ c: Int = 0) -> Double {
+    nonisolated static func hash(_ a: Int, _ b: Int, _ c: Int = 0) -> Double {
         var h = UInt64(bitPattern: Int64(a)) &* 0x9E37_79B9_7F4A_7C15
         h ^= UInt64(bitPattern: Int64(b)) &* 0xC2B2_AE3D_27D4_EB4F
         h ^= UInt64(bitPattern: Int64(c)) &* 0x1656_67B1_9E37_79F9
@@ -163,7 +165,7 @@ struct Materialize: View {
     }
 
     /// How fast every drop falls, in cells a second: the rain keeps the same pace from loading to landing.
-    static let speed = 380.0
+    nonisolated static let speed = 380.0
 
     /// A falling drop: a faint pale head with a soft trail above it, cooling and thinning out.
     static func drop(_ ink: inout Ink, col: Int, head y: Int, alpha a: Double) {
@@ -294,7 +296,7 @@ enum Reveal {
 import UIKit
 
 /// Finds the conversation on screen under the effect and reads which grid cells hold something.
-final class Probe {
+@MainActor final class Probe {
     weak var view: UIView?
     /// The conversation's scroll view while it's masked, and the mask.
     private weak var masked: UIScrollView?

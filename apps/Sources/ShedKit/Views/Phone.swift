@@ -41,9 +41,7 @@ public struct PhoneRootView: View {
                     NavigationStack {
                         SessionSidebar(store: store, newSession: { newSession = NewSessionDraft() },
                                        openSettings: { showSettings = true },
-                                       start: { message, folder in
-                                           newSession = NewSessionDraft(message: message, folder: folder)
-                                       })
+                                       start: { newSession = NewSessionDraft(message: $0) })
                             .toolbar(.hidden, for: .navigationBar)
                             .containerBackground(.clear, for: .navigation)
                             .safeAreaInset(edge: .top, spacing: 0) {
@@ -131,7 +129,7 @@ public struct PhoneRootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(item: $newSession) { draft in
-            NewSessionSheet(store: store, initialMessage: draft.message, initialFolder: draft.folder)
+            NewSessionSheet(store: store, initialMessage: draft.message)
         }
         .sheet(isPresented: $showSettings) { NavigationStack { EnvironmentSettings(store: store) } }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
@@ -188,7 +186,7 @@ public struct PhoneRootView: View {
 }
 
 /// The phone's navigation stack around a view, for a picture of it.
-final class NavigationViewHandle {
+@MainActor final class NavigationViewHandle {
     weak var view: UIView?
 
     struct Picture {

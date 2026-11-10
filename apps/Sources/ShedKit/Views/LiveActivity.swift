@@ -25,9 +25,7 @@ public struct ShedActivity: ActivityAttributes, Sendable {
     }
 
     public var sessionId: String
-    public var title: String
     public var agent: String
-    public var folder: String
 }
 
 /// Starts an activity when a top-level session gets to work, keeps it current, and ends it when the session settles.
@@ -93,7 +91,7 @@ final class LiveActivities {
                     for old in all where old.attributes.sessionId == session.id && old.activityState != .active {
                         Task { await old.end(nil, dismissalPolicy: .immediate) }
                     }
-                    let attributes = ShedActivity(sessionId: session.id, title: session.title, agent: session.agent.displayName, folder: session.folderName)
+                    let attributes = ShedActivity(sessionId: session.id, agent: session.agent.displayName)
                     do {
                         _ = try ActivityKit.Activity<ShedActivity>.request(attributes: attributes, content: .init(state: state, staleDate: nil))
                     } catch {
@@ -116,6 +114,12 @@ final class LiveActivities {
                     self?.ending[id] = nil
                     await existing.end(.init(state: done, staleDate: nil), dismissalPolicy: .after(.now + 15 * 60))
                 }
+            } else if existing == nil, ending[session.id] == nil {
+                // A run that never got a card (the app was in the background) leaves nothing for the next one to
+                // count from.
+                since[session.id] = nil
+                spending[session.id] = nil
+                startCost[session.id] = nil
             }
         }
         // Sessions that went away. An empty list is a reconnect in progress, not every session closing.

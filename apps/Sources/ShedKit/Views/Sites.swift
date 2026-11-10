@@ -71,7 +71,7 @@ struct SitesButton: View {
         .buttonStyle(PressStyle())
         .help(count == 0 ? "Sites" : count == 1 ? "1 site running" : "\(count) sites running")
         .popover(isPresented: $open, arrowEdge: .bottom) {
-            SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+            SitesPanel(entries: store.sites(of: session),
                        title: session.isSubagent ? (session.name ?? "Subagent") : session.title,
                        empty: "Servers this session starts appear here.")
                 .frame(width: 420)
@@ -116,7 +116,6 @@ struct AllSitesButton: View {
 
     enum EmptyCopy {
         static let all = "Servers the agents start appear here, published on your tailnet so you can open them from any of your devices."
-        static let none = "No sites running."
     }
 }
 
@@ -171,11 +170,6 @@ struct SitesPanel: View {
 private struct SiteRow: View {
     let entry: SiteEntry
     @State private var copied = false
-    #if os(iOS)
-    private static let isPhone = true
-    #else
-    private static let isPhone = false
-    #endif
 
     var body: some View {
         let site = entry.site
@@ -193,7 +187,7 @@ private struct SiteRow: View {
                 HStack(spacing: 6) {
                     Text(site.host).font(.mono(11)).foregroundStyle(.secondary).lineLimit(1)
                     if !site.published, site.reason == nil {
-                        Text("this Mac only").font(.system(size: 11)).foregroundStyle(.tertiary)
+                        Text(entry.opens ? "this Mac only" : "on its Mac only").font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
                     if site.exposed {
                         Label("on your LAN too", systemImage: "exclamationmark.triangle.fill")
@@ -212,8 +206,8 @@ private struct SiteRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            // Unpublished, the address is the Mac's own loopback: on the phone it would open, or copy, the phone's.
-            if site.published || !Self.isPhone {
+            // Unpublished, the address is its Mac's own loopback: anywhere else it would open, or copy, this device's.
+            if entry.opens {
                 HStack(spacing: 6) {
                     Button {
                         SiteOpener.copy(site.url)

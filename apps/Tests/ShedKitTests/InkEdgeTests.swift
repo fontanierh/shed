@@ -29,6 +29,15 @@ final class InkEdgeTests: XCTestCase {
         XCTAssertNil(InkEdge.fresh(from: old, to: [line(0, y: 0, width: 300)]))
     }
 
+    /// Only a block's last lines are read. One leaving that window at the top as a new one starts is not a reflow.
+    func testTheWindowMovingOnIsNotAReflow() {
+        let old = (0..<40).map { line($0, y: CGFloat($0) * 20, width: 300) }
+        let new = (1..<41).map { line($0, y: CGFloat($0) * 20, width: $0 == 40 ? 60 : 300) }
+        XCTAssertEqual(InkEdge.fresh(from: old, to: new), [CGRect(x: 0, y: 800, width: 60, height: 20)])
+        // A line gone from inside the window still is.
+        XCTAssertNil(InkEdge.fresh(from: old, to: new.filter { $0.line != 20 }))
+    }
+
     /// A block arriving whole prints as one piece.
     func testManyLinesPrintAsOne() {
         let new = (0..<14).map { line($0, y: CGFloat($0) * 20, width: 200) }

@@ -156,15 +156,20 @@ impl PrimeDaemon {
         let mut delay = Duration::from_secs(1);
         loop {
             match self.connect_once(&tx).await {
-                Ok(()) => delay = Duration::from_secs(1),
+                // It was connected and lost: the next try doesn't wait as long as after a row of failures.
+                Ok(()) => {
+                    delay = Duration::from_secs(1);
+                    let _ = tx.send(DaemonEvent::Disconnected(
+                        "Prime daemon connection closed".into(),
+                    ));
+                }
                 Err(e) => {
                     let _ = tx.send(DaemonEvent::Disconnected(e.to_string()));
                 }
             }
             *self.writer.lock().await = None;
-            for (_, waiter) in self.pending.lock().unwrap().drain() {
-                let _ = waiter.send(Err("Prime daemon disconnected".into()));
-            }
+            // Dropped, not answered: an answer here would read as the daemon refusing the command.
+            self.pending.lock().unwrap().clear();
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(30));
         }
@@ -237,7 +242,7 @@ impl PrimeDaemon {
         let _ = tx.send(DaemonEvent::Roster(rows));
         tokio::spawn(self.clone().wake_open_sessions(running));
         let _ = reader.await;
-        bail!("Prime daemon connection closed")
+        Ok(())
     }
 
     fn dispatch(&self, message: Value, tx: &mpsc::UnboundedSender<DaemonEvent>) {
