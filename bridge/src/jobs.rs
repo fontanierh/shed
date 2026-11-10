@@ -77,8 +77,12 @@ impl ProcessTree {
 
     pub async fn snapshot() -> Option<Self> {
         let mut ps = tokio::process::Command::new("/bin/ps");
-        ps.args(["-axo", "pid=,ppid=,etime=,time=,command="]).kill_on_drop(true);
-        let out = tokio::time::timeout(std::time::Duration::from_secs(10), ps.output()).await.ok()?.ok()?;
+        ps.args(["-axo", "pid=,ppid=,etime=,time=,command="])
+            .kill_on_drop(true);
+        let out = tokio::time::timeout(std::time::Duration::from_secs(10), ps.output())
+            .await
+            .ok()?
+            .ok()?;
         Some(Self::parse(&String::from_utf8_lossy(&out.stdout)))
     }
 
@@ -579,7 +583,12 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
         .flatten()
         .map(|e| e.path())
         .filter(|path| path.extension().is_some_and(|x| x == "json"))
-        .filter_map(|path| Some((serde_json::from_slice::<Value>(&std::fs::read(&path).ok()?).ok()?, path)))
+        .filter_map(|path| {
+            Some((
+                serde_json::from_slice::<Value>(&std::fs::read(&path).ok()?).ok()?,
+                path,
+            ))
+        })
         .filter_map(|(j, path)| {
             let pid = j["pid"].as_u64().map(|p| p as u32);
             let mut status = j["status"].as_str().unwrap_or("finished").to_string();

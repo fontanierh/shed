@@ -159,7 +159,9 @@ impl PrimeDaemon {
                 // It was connected and lost: the next try doesn't wait as long as after a row of failures.
                 Ok(()) => {
                     delay = Duration::from_secs(1);
-                    let _ = tx.send(DaemonEvent::Disconnected("Prime daemon connection closed".into()));
+                    let _ = tx.send(DaemonEvent::Disconnected(
+                        "Prime daemon connection closed".into(),
+                    ));
                 }
                 Err(e) => {
                     let _ = tx.send(DaemonEvent::Disconnected(e.to_string()));

@@ -61,7 +61,10 @@ pub fn install_profile() -> Result<PathBuf> {
     };
     write("package.json", &format!("{package:#}\n"))?;
     write("cordis.yml", "[]\n")?;
-    write("pnpm-workspace.yaml", "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n")?;
+    write(
+        "pnpm-workspace.yaml",
+        "packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n",
+    )?;
     write("shed.mjs", PLUGIN)?;
     if !dir.join("cordis.patch.yml").exists() {
         write(
@@ -255,7 +258,10 @@ impl Dsh {
                 continue;
             };
             let parent = child["parent"].as_str().map(str::to_string);
-            let events = child["events"].as_array().map(Vec::as_slice).unwrap_or_default();
+            let events = child["events"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             feed.replay_subagent(child_id, parent, events);
             // One stored without events made no entry to describe.
             if feed.sessions.contains_key(child_id) {
@@ -296,7 +302,9 @@ impl Dsh {
                 })
             }
             "get_messages" => Ok(json!({ "messages": self.feed.lock().unwrap().root_messages() })),
-            "get_available_models" => Ok(json!({ "models": self.feed.lock().unwrap().pi_models() })),
+            "get_available_models" => {
+                Ok(json!({ "models": self.feed.lock().unwrap().pi_models() }))
+            }
             "get_available_thinking_levels" => {
                 Ok(json!({ "levels": self.feed.lock().unwrap().efforts() }))
             }
@@ -337,8 +345,11 @@ impl Dsh {
                         .flatten()
                         .map(|q| json!({ "id": q["id"], "selected": [], "custom": text }))
                         .collect();
-                    self.call("answer", json!({ "id": question["id"], "answers": answers }))
-                        .await?;
+                    self.call(
+                        "answer",
+                        json!({ "id": question["id"], "answers": answers }),
+                    )
+                    .await?;
                     return Ok(Value::Null);
                 }
                 let images: Vec<Value> = fields["images"]
@@ -352,7 +363,10 @@ impl Dsh {
                     .unwrap_or_default();
                 let mode = if kind == "steer" { "steer" } else { "followup" };
                 let sent = self
-                    .call("prompt", json!({ "text": text, "images": images, "mode": mode }))
+                    .call(
+                        "prompt",
+                        json!({ "text": text, "images": images, "mode": mode }),
+                    )
                     .await?;
                 // Until dsh takes it into a turn, it waits in the session's inbox: shown as queued.
                 let queued = {
@@ -387,9 +401,14 @@ impl Dsh {
                 let ended = self.feed.lock().unwrap().compactions != before;
                 match &result {
                     _ if ended => {}
-                    Ok(r) if r["kind"] == "success" => self.emit(json!({ "type": "compaction_end" })),
-                    Ok(r) => self.emit(json!({ "type": "compaction_end", "errorMessage": r["text"] })),
-                    Err(e) => self.emit(json!({ "type": "compaction_end", "errorMessage": e.to_string() })),
+                    Ok(r) if r["kind"] == "success" => {
+                        self.emit(json!({ "type": "compaction_end" }))
+                    }
+                    Ok(r) => {
+                        self.emit(json!({ "type": "compaction_end", "errorMessage": r["text"] }))
+                    }
+                    Err(e) => self
+                        .emit(json!({ "type": "compaction_end", "errorMessage": e.to_string() })),
                 }
                 result.map(|_| Value::Null)
             }
@@ -400,11 +419,20 @@ impl Dsh {
                 self.call("job_output", json!({ "jobId": fields["jobId"] }))
                     .await
             }
-            "dsh_kill_job" => self.call("kill_job", json!({ "jobId": fields["jobId"] })).await,
-            "dsh_answer" => {
-                let answers = fields["answers"].as_array().filter(|a| !a.is_empty()).cloned();
-                self.call("answer", json!({ "id": fields["questionId"], "answers": answers }))
+            "dsh_kill_job" => {
+                self.call("kill_job", json!({ "jobId": fields["jobId"] }))
                     .await
+            }
+            "dsh_answer" => {
+                let answers = fields["answers"]
+                    .as_array()
+                    .filter(|a| !a.is_empty())
+                    .cloned();
+                self.call(
+                    "answer",
+                    json!({ "id": fields["questionId"], "answers": answers }),
+                )
+                .await
             }
             other => bail!("DeepSeek Harness has no {other} command"),
         }
@@ -587,7 +615,10 @@ impl Feed {
                 "reasoning": self.reasoning.is_object(),
             })
         });
-        let effort = self.model.as_ref().and_then(|m| m["reasoningEffort"].as_str());
+        let effort = self
+            .model
+            .as_ref()
+            .and_then(|m| m["reasoningEffort"].as_str());
         let queued = |steer: bool| -> Vec<Value> {
             self.queue
                 .iter()
@@ -697,7 +728,9 @@ impl Feed {
                 vec![json!({ "type": "dsh_question", "question": self.question })]
             }
             "error" if id == self.root => {
-                let text = line["message"].as_str().unwrap_or("DeepSeek Harness failed");
+                let text = line["message"]
+                    .as_str()
+                    .unwrap_or("DeepSeek Harness failed");
                 vec![json!({ "type": "message_end", "message": {
                     "role": "assistant", "content": [], "stopReason": "error",
                     "errorMessage": text, "timestamp": now_ms(),
@@ -825,7 +858,11 @@ impl Feed {
             }
             // The summary the compaction writes shows once the session reads its history back, at the end.
             "compaction/start" if root => {
-                let reason = if data["sourceCommandId"].is_string() { "manual" } else { "threshold" };
+                let reason = if data["sourceCommandId"].is_string() {
+                    "manual"
+                } else {
+                    "threshold"
+                };
                 out.push(json!({ "type": "compaction_start", "reason": reason }));
             }
             "compaction/end" if root => {
@@ -839,7 +876,10 @@ impl Feed {
                 if root {
                     self.window = data["contextWindow"].as_u64().or(self.window);
                 } else if let Some(model) = data["model"].as_str() {
-                    c.model = Some(format!("{}/{model}", data["provider"].as_str().unwrap_or("")));
+                    c.model = Some(format!(
+                        "{}/{model}",
+                        data["provider"].as_str().unwrap_or("")
+                    ));
                 }
             }
             "subagent/catalog" => {
@@ -851,8 +891,7 @@ impl Feed {
             }
             "job/registered" | "job/settled" => {
                 if let Some(job) = data["jobId"].as_str() {
-                    self.jobs
-                        .insert(job.to_string(), kind == "job/registered");
+                    self.jobs.insert(job.to_string(), kind == "job/registered");
                     let running = self.jobs.values().filter(|r| **r).count();
                     out.push(json!({ "type": "dsh_jobs", "running": running }));
                 }
@@ -876,7 +915,9 @@ impl Feed {
         match frame["type"].as_str().unwrap_or("") {
             "start" => {
                 c.blocks.clear();
-                vec![json!({ "type": "message_start", "message": { "role": "assistant", "content": [] } })]
+                vec![
+                    json!({ "type": "message_start", "message": { "role": "assistant", "content": [] } }),
+                ]
             }
             "chunk" => {
                 let chunk = &frame["chunk"];
@@ -893,7 +934,11 @@ impl Feed {
                         vec![update(&format!("{kind}_start"), index, json!({}))]
                     }
                     kind @ ("text-delta" | "reasoning-delta") => {
-                        let block = if kind == "text-delta" { "text" } else { "thinking" };
+                        let block = if kind == "text-delta" {
+                            "text"
+                        } else {
+                            "thinking"
+                        };
                         let mut out = Vec::new();
                         if c.blocks.insert(index, block).is_none() {
                             out.push(update(&format!("{block}_start"), index, json!({})));
@@ -914,7 +959,9 @@ impl Feed {
                                 json!({ "id": chunk["id"], "toolName": chunk["name"] }),
                             ));
                         }
-                        if let Some(delta) = chunk["argumentsDelta"].as_str().filter(|d| !d.is_empty()) {
+                        if let Some(delta) =
+                            chunk["argumentsDelta"].as_str().filter(|d| !d.is_empty())
+                        {
                             out.push(update("toolcall_delta", index, json!({ "delta": delta })));
                         }
                         out
@@ -966,7 +1013,14 @@ impl Feed {
 fn committed(event: &Value) -> bool {
     matches!(
         event["type"].as_str(),
-        Some("user/message" | "assistant/message" | "tool/call" | "tool/result" | "turn/end" | "agent/request-error")
+        Some(
+            "user/message"
+                | "assistant/message"
+                | "tool/call"
+                | "tool/result"
+                | "turn/end"
+                | "agent/request-error"
+        )
     )
 }
 
@@ -991,12 +1045,16 @@ fn user_message(data: &Value) -> Option<Value> {
     // Compaction's summary of what it condensed: the transcript shows it as a compaction.
     if source == "compact-checkpoint" {
         let text: Vec<&str> = content.iter().filter_map(|b| b["text"].as_str()).collect();
-        return Some(json!({ "role": "compactionSummary", "summary": text.join("\n"), "timestamp": now_ms() }));
+        return Some(
+            json!({ "role": "compactionSummary", "summary": text.join("\n"), "timestamp": now_ms() }),
+        );
     }
     // A late answer to a question the agent stopped waiting on: what the user answered, as they'd have typed it.
     if source == "user-question-reply" {
         if let Some(text) = content[0]["text"].as_str().and_then(question_reply) {
-            return Some(json!({ "role": "user", "content": [{ "type": "text", "text": text }], "timestamp": now_ms() }));
+            return Some(
+                json!({ "role": "user", "content": [{ "type": "text", "text": text }], "timestamp": now_ms() }),
+            );
         }
     }
     // What another agent sent, or a subagent's closing notice, reads as one message rather than separate lines.
@@ -1024,8 +1082,16 @@ fn question_reply(text: &str) -> Option<String> {
                 .filter_map(|l| l.as_str().map(str::to_string))
                 .collect();
             picked.extend(answer["custom"].as_str().map(str::to_string));
-            let said = if picked.is_empty() { "Skipped".to_string() } else { picked.join(", ") };
-            match questions.iter().find(|q| q["id"] == answer["id"]).and_then(|q| q["question"].as_str()) {
+            let said = if picked.is_empty() {
+                "Skipped".to_string()
+            } else {
+                picked.join(", ")
+            };
+            match questions
+                .iter()
+                .find(|q| q["id"] == answer["id"])
+                .and_then(|q| q["question"].as_str())
+            {
                 Some(question) if questions.len() > 1 => format!("{question} {said}"),
                 _ => said,
             }
@@ -1037,7 +1103,9 @@ fn question_reply(text: &str) -> Option<String> {
 /// How the model ended the reply, from the finish chunk its stream closes with: "stop", "tool-calls", "max-tokens".
 fn finish(data: &Value) -> Option<&str> {
     data["stream"].as_array()?.iter().rev().find_map(|frame| {
-        (frame["chunk"]["type"] == "finish").then(|| frame["chunk"]["reason"]["kind"].as_str()).flatten()
+        (frame["chunk"]["type"] == "finish")
+            .then(|| frame["chunk"]["reason"]["kind"].as_str())
+            .flatten()
     })
 }
 
@@ -1138,7 +1206,10 @@ mod tests {
     const FEED: &str = include_str!("dsh_feed.jsonl");
 
     fn replay() -> (Feed, Vec<Value>) {
-        let lines: Vec<Value> = FEED.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let lines: Vec<Value> = FEED
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         let mut feed = Feed {
             root: lines
                 .iter()
@@ -1161,7 +1232,10 @@ mod tests {
         let (feed, events) = replay();
         let kinds = kinds(&events);
         assert_eq!(kinds.first(), Some(&"agent_start"));
-        assert_eq!(&kinds[kinds.len() - 3..], ["turn_end", "agent_end", "agent_settled"]);
+        assert_eq!(
+            &kinds[kinds.len() - 3..],
+            ["turn_end", "agent_end", "agent_settled"]
+        );
         assert!(!feed.running);
         assert_eq!(feed.window, Some(1_000_000));
         assert!(feed.tokens.is_some_and(|t| t > 0));
@@ -1177,8 +1251,12 @@ mod tests {
         let mut last = None;
         for event in &events {
             match event["type"].as_str() {
-                Some("message_start") if event["message"]["role"] == "assistant" => streamed.clear(),
-                Some("message_update") if event["assistantMessageEvent"]["type"] == "text_delta" => {
+                Some("message_start") if event["message"]["role"] == "assistant" => {
+                    streamed.clear()
+                }
+                Some("message_update")
+                    if event["assistantMessageEvent"]["type"] == "text_delta" =>
+                {
                     streamed += event["assistantMessageEvent"]["delta"].as_str().unwrap();
                 }
                 Some("message_end") if event["message"]["role"] == "assistant" => {
@@ -1213,10 +1291,16 @@ mod tests {
                 .collect()
         };
         assert_eq!(shape(&live.items), shape(&read_back));
-        let tools: Vec<_> = read_back.iter().filter_map(|i| i.tool_name.as_deref()).collect();
+        let tools: Vec<_> = read_back
+            .iter()
+            .filter_map(|i| i.tool_name.as_deref())
+            .collect();
         assert_eq!(tools, ["bash", "subagent", "job_output"]);
         // The user's prompt shows; dsh's runtime context doesn't.
-        let users: Vec<_> = read_back.iter().filter(|i| i.kind == ItemKind::User).collect();
+        let users: Vec<_> = read_back
+            .iter()
+            .filter(|i| i.kind == ItemKind::User)
+            .collect();
         assert!(users[0].text.starts_with("Do three things"));
         assert!(!read_back.iter().any(|i| i.text.contains("runtime context")));
     }
@@ -1235,14 +1319,20 @@ mod tests {
     #[test]
     fn a_subagent_gets_its_own_transcript() {
         let (feed, events) = replay();
-        let updates: Vec<_> = events.iter().filter(|e| e["type"] == "dsh_subagent").collect();
+        let updates: Vec<_> = events
+            .iter()
+            .filter(|e| e["type"] == "dsh_subagent")
+            .collect();
         let last = updates.last().unwrap();
         assert_eq!(last["status"], "done");
         assert_eq!(last["parent"], Value::Null);
         assert_eq!(last["title"], "Read notes.txt for pi");
-        let items = crate::transcript::Transcript::rebuild(last["messages"].as_array().unwrap(), 1000);
+        let items =
+            crate::transcript::Transcript::rebuild(last["messages"].as_array().unwrap(), 1000);
         assert!(items.iter().any(|i| i.tool_name.as_deref() == Some("read")));
-        assert!(items.iter().any(|i| i.kind == ItemKind::Text && i.text.contains("3.14159")));
+        assert!(items
+            .iter()
+            .any(|i| i.kind == ItemKind::Text && i.text.contains("3.14159")));
         // Running while it worked.
         assert!(updates.iter().any(|u| u["status"] == "running"));
         assert_eq!(feed.sessions.len(), 2);
@@ -1258,7 +1348,10 @@ mod tests {
             .filter(|l| l["event"] == "session" && l["sessionId"] == root.as_str())
             .map(|l| l["data"].clone())
             .collect();
-        let mut resumed = Feed { root, ..Default::default() };
+        let mut resumed = Feed {
+            root,
+            ..Default::default()
+        };
         resumed.replay(&history);
         assert!(!resumed.running);
         assert_eq!(resumed.root_messages().len(), feed.root_messages().len());
@@ -1267,8 +1360,15 @@ mod tests {
     #[test]
     fn a_resumed_sessions_subagent_reads_back_as_it_ran() {
         let (feed, events) = replay();
-        let live = events.iter().rfind(|e| e["type"] == "dsh_subagent").unwrap().clone();
-        let lines: Vec<Value> = FEED.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let live = events
+            .iter()
+            .rfind(|e| e["type"] == "dsh_subagent")
+            .unwrap()
+            .clone();
+        let lines: Vec<Value> = FEED
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
         let history = |id: &str| -> Vec<Value> {
             lines
                 .iter()
@@ -1277,7 +1377,10 @@ mod tests {
                 .collect()
         };
         let child = live["id"].as_str().unwrap();
-        let mut resumed = Feed { root: feed.root.clone(), ..Default::default() };
+        let mut resumed = Feed {
+            root: feed.root.clone(),
+            ..Default::default()
+        };
         resumed.replay(&history(&feed.root));
         resumed.replay_subagent(child, None, &history(child));
         let read_back = resumed.subagent(child);
@@ -1289,16 +1392,24 @@ mod tests {
 
     #[test]
     fn a_question_shows_until_answered() {
-        let mut feed = Feed { root: "root".into(), ..Default::default() };
+        let mut feed = Feed {
+            root: "root".into(),
+            ..Default::default()
+        };
         let question = json!({ "callId": "call_1", "state": "open",
             "questions": [{ "id": "mode", "question": "Which mode?", "options": [{ "label": "Fast" }] }] });
         let events = feed.receive(&json!({ "event": "questions", "active": [question] }));
         assert_eq!(events[0]["type"], "dsh_question");
         assert_eq!(events[0]["question"]["id"], "call_1");
         assert_eq!(events[0]["question"]["continued"], false);
-        assert_eq!(events[0]["question"]["questions"][0]["options"][0]["label"], "Fast");
+        assert_eq!(
+            events[0]["question"]["questions"][0]["options"][0]["label"],
+            "Fast"
+        );
         // Unchanged: nothing to tell.
-        assert!(feed.receive(&json!({ "event": "questions", "active": [question] })).is_empty());
+        assert!(feed
+            .receive(&json!({ "event": "questions", "active": [question] }))
+            .is_empty());
         // The agent carried on without the answer; it can still be given.
         let mut continued = question.clone();
         continued["state"] = json!("continued");
@@ -1316,16 +1427,31 @@ mod tests {
         let message = user_message(&json!({ "source": { "kind": "user-question-reply" },
             "content": [{ "type": "text", "text": reply.to_string() }] }))
         .unwrap();
-        assert_eq!(message["content"][0]["text"], "Which pet? A hamster\nSizes? Skipped");
+        assert_eq!(
+            message["content"][0]["text"],
+            "Which pet? A hamster\nSizes? Skipped"
+        );
     }
 
     #[test]
     fn a_compaction_shows_while_it_runs() {
-        let mut feed = Feed { root: "root".into(), ..Default::default() };
+        let mut feed = Feed {
+            root: "root".into(),
+            ..Default::default()
+        };
         let event = |kind: &str, data: Value| json!({ "event": "session", "sessionId": "root", "data": { "type": kind, "data": data } });
-        let started = feed.receive(&event("compaction/start", json!({ "compactionId": "c1", "turn": null })));
-        assert_eq!(started[0], json!({ "type": "compaction_start", "reason": "threshold" }));
-        let ended = feed.receive(&event("compaction/end", json!({ "compactionId": "c1", "turn": null, "error": "summary failed" })));
+        let started = feed.receive(&event(
+            "compaction/start",
+            json!({ "compactionId": "c1", "turn": null }),
+        ));
+        assert_eq!(
+            started[0],
+            json!({ "type": "compaction_start", "reason": "threshold" })
+        );
+        let ended = feed.receive(&event(
+            "compaction/end",
+            json!({ "compactionId": "c1", "turn": null, "error": "summary failed" }),
+        ));
         assert_eq!(ended[0]["type"], "compaction_end");
         assert_eq!(ended[0]["errorMessage"], "summary failed");
         assert_eq!(feed.compactions, 1);
@@ -1354,7 +1480,10 @@ mod tests {
         let message = assistant_message(&data["message"], finish(&data));
         assert_eq!(message["stopReason"], "length");
         let items = crate::transcript::Transcript::rebuild(&[message], 100);
-        assert_eq!(items.last().unwrap().text, "Stopped at the model's output limit");
+        assert_eq!(
+            items.last().unwrap().text,
+            "Stopped at the model's output limit"
+        );
         assert_eq!(finish(&json!({})), None);
     }
 

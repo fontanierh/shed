@@ -94,7 +94,10 @@ mod tests {
         assert!(git(repo, &commit).await.is_some());
         assert_eq!(branch(repo).await["branch"], "trunk");
         // From a folder inside it too: sessions often work in one.
-        assert_eq!(branch(dir.join("repo/src").to_str().unwrap()).await["branch"], "trunk");
+        assert_eq!(
+            branch(dir.join("repo/src").to_str().unwrap()).await["branch"],
+            "trunk"
+        );
 
         assert!(git(repo, &["checkout", "-q", "--detach"]).await.is_some());
         assert_eq!(branch(repo).await["branch"], Value::Null);

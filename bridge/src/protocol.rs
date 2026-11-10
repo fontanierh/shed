@@ -532,7 +532,9 @@ pub enum ClientOp {
         hidden: bool,
     },
     /// The branch of the repository `path` is in, read with the machine's `git`.
-    GitBranch { path: String },
+    GitBranch {
+        path: String,
+    },
     /// The GitHub account `gh` is signed in to on this computer: contributions per day over the last year and open
     /// pull requests.
     GithubOverview,

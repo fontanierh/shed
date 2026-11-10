@@ -76,7 +76,10 @@ impl Store {
             // Kept aside: the next save writes the list anew.
             let aside = path.with_extension("json.bad");
             let _ = std::fs::copy(&path, &aside);
-            eprintln!("sessions.json can't be read ({e}); kept as {}", aside.display());
+            eprintln!(
+                "sessions.json can't be read ({e}); kept as {}",
+                aside.display()
+            );
             Vec::new()
         })
     }
@@ -181,9 +184,14 @@ mod tests {
     fn the_first_token_keeps_what_the_installer_wrote() {
         let store = store("token");
         let path = store.dir.join("config.json");
-        std::fs::write(&path, r#"{"opencodex": false, "defaultContextWindows": {"a/b": 272000}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"opencodex": false, "defaultContextWindows": {"a/b": 272000}}"#,
+        )
+        .unwrap();
         let token = store.token().unwrap();
-        let config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["token"], token.as_str());
         assert_eq!(config["opencodex"], false);
         assert_eq!(store.default_windows()["a/b"], 272000);

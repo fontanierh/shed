@@ -408,7 +408,10 @@ impl App {
 
     /// Replaces each session's sites with the ones it serves now, and forgets the sites of every other session.
     /// Wholesale rather than one at a time: a server that moves to another port must not leave the old one listed.
-    pub async fn set_sites(&self, found: std::collections::HashMap<String, Vec<crate::protocol::Site>>) {
+    pub async fn set_sites(
+        &self,
+        found: std::collections::HashMap<String, Vec<crate::protocol::Site>>,
+    ) {
         for session in self.sessions.read().await.clone() {
             let sites = found.get(&session.id).cloned().unwrap_or_default();
             let mut st = session.state.lock().await;
@@ -692,7 +695,10 @@ impl App {
     pub async fn delete_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
         let key = limit_key(session, &*session.state.lock().await).to_string();
         self.forget_limit(&key);
-        self.compacting_for_limit.lock().unwrap().remove(&session.id);
+        self.compacting_for_limit
+            .lock()
+            .unwrap()
+            .remove(&session.id);
         match session.backend {
             Backend::Prime => return self.close_session(session).await,
             Backend::Pi => self.close_session(session).await?,
@@ -708,7 +714,12 @@ impl App {
         let mut i = 0;
         while i < family.len() {
             let parent = family[i].clone();
-            family.extend(subagents.iter().filter(|s| s.1.as_deref() == Some(parent.as_str())).map(|s| s.0.clone()));
+            family.extend(
+                subagents
+                    .iter()
+                    .filter(|s| s.1.as_deref() == Some(parent.as_str()))
+                    .map(|s| s.0.clone()),
+            );
             i += 1;
         }
         for id in family.iter().skip(1) {
@@ -769,7 +780,8 @@ impl App {
         let mut logged = String::new();
         // Per top-level session: the family's totals when the run started, and its recent (time, cost, tokens).
         let mut runs: HashMap<String, (u64, f64, u64)> = HashMap::new();
-        let mut samples: HashMap<String, std::collections::VecDeque<(u64, f64, u64)>> = HashMap::new();
+        let mut samples: HashMap<String, std::collections::VecDeque<(u64, f64, u64)>> =
+            HashMap::new();
         loop {
             ticker.tick().await;
             let Some(gateway) = crate::opencodex::gateway() else {
@@ -790,7 +802,13 @@ impl App {
                     .model
                     .as_ref()
                     .is_some_and(|m| m.provider == crate::opencodex::PROVIDER);
-                rows.push((s.clone(), st.summary.parent_id.clone(), working, agent_session_id(s.agent, &st), gateway_model));
+                rows.push((
+                    s.clone(),
+                    st.summary.parent_id.clone(),
+                    working,
+                    agent_session_id(s.agent, &st),
+                    gateway_model,
+                ));
             }
             let now = now_ms();
             for top in rows.iter().filter(|r| r.1.is_none()) {
@@ -807,16 +825,27 @@ impl App {
                 let mut i = 0;
                 while i < family.len() {
                     let id = family[i].clone();
-                    family.extend(rows.iter().filter(|r| r.1.as_deref() == Some(id.as_str())).map(|r| r.0.id.clone()));
+                    family.extend(
+                        rows.iter()
+                            .filter(|r| r.1.as_deref() == Some(id.as_str()))
+                            .map(|r| r.0.id.clone()),
+                    );
                     i += 1;
                 }
                 let members: Vec<_> = rows.iter().filter(|r| family.contains(&r.0.id)).collect();
                 let mut failed = false;
                 for member in &members {
-                    let Some(conversation) = member.3.as_deref().map(crate::opencodex::conversation) else {
+                    let Some(conversation) =
+                        member.3.as_deref().map(crate::opencodex::conversation)
+                    else {
                         continue;
                     };
-                    if let Err(e) = tallies.entry(conversation.clone()).or_default().update(&gateway, &conversation).await {
+                    if let Err(e) = tallies
+                        .entry(conversation.clone())
+                        .or_default()
+                        .update(&gateway, &conversation)
+                        .await
+                    {
                         let e = e.to_string();
                         if e != logged {
                             eprintln!("Open Codex spend: {e}");
@@ -835,10 +864,15 @@ impl App {
                         .copied()
                         .unwrap_or_default()
                 };
-                let (cost, tokens, priced) = members.iter().map(|m| own(m)).fold((0.0, 0, false), |acc, t| {
-                    (acc.0 + t.cost, acc.1 + t.tokens, acc.2 || t.priced)
-                });
-                let run = *runs.entry(session.id.clone()).or_insert((now, cost, tokens));
+                let (cost, tokens, priced) = members
+                    .iter()
+                    .map(|m| own(m))
+                    .fold((0.0, 0, false), |acc, t| {
+                        (acc.0 + t.cost, acc.1 + t.tokens, acc.2 || t.priced)
+                    });
+                let run = *runs
+                    .entry(session.id.clone())
+                    .or_insert((now, cost, tokens));
                 let recent = samples.entry(session.id.clone()).or_default();
                 recent.push_back((now, cost, tokens));
                 // Keep the last sample before the window as its baseline.
@@ -849,9 +883,11 @@ impl App {
                 // Under half a minute of history says little about a rate.
                 let minutes = (now - base.0) as f64 / 60_000.0;
                 let spend = Spend {
-                    per_minute: (priced && minutes >= 0.5).then(|| (cost - base.1).max(0.0) / minutes),
+                    per_minute: (priced && minutes >= 0.5)
+                        .then(|| (cost - base.1).max(0.0) / minutes),
                     // A family that lost a member counts fewer tokens than before: never below zero.
-                    tokens_per_minute: (minutes >= 0.5).then(|| tokens.saturating_sub(base.2) as f64 / minutes),
+                    tokens_per_minute: (minutes >= 0.5)
+                        .then(|| tokens.saturating_sub(base.2) as f64 / minutes),
                     run_cost: priced.then(|| (cost - run.1).max(0.0)),
                     run_tokens: tokens.saturating_sub(run.2),
                     since: run.0,
@@ -865,7 +901,11 @@ impl App {
                     let mut changed = false;
                     // Prime counts what its subagents spend into their parent; Pi's and dsh's add up in the apps.
                     let tally = own(member);
-                    let figure = if member.0.id == session.id && session.agent == AgentKind::Prime { cost } else { tally.cost };
+                    let figure = if member.0.id == session.id && session.agent == AgentKind::Prime {
+                        cost
+                    } else {
+                        tally.cost
+                    };
                     if member.4 && (tally.priced || priced) && st.gateway_cost != figure {
                         st.gateway_cost = figure;
                         st.summary.cost = st.summary.cost.max(figure);
@@ -1309,7 +1349,8 @@ impl App {
             }
         }
         if let Some(own) = reported {
-            st.summary.cost = self.prime_cost(st.session_file.as_deref(), own, st.summary.cost)
+            st.summary.cost = self
+                .prime_cost(st.session_file.as_deref(), own, st.summary.cost)
                 .max(st.gateway_cost);
         }
         if let Some(pid) = row["workerPid"].as_u64() {
@@ -1462,7 +1503,10 @@ impl App {
         let looping = st.transcript.take_looping();
         self.flush_changes(&session.id, &mut st);
         // Titled once, from the first message: after a compaction the transcript starts at a later one.
-        if !st.named && session.backend == Backend::Pi && st.summary.title == default_title(&session.cwd) {
+        if !st.named
+            && session.backend == Backend::Pi
+            && st.summary.title == default_title(&session.cwd)
+        {
             if let Some(first) = st.transcript.first_user_text() {
                 let title = first_line(first, 60);
                 if !title.is_empty() && title != st.summary.title {
@@ -1668,7 +1712,13 @@ impl App {
     /// Mirror one of a DeepSeek session's subagents as a read-only session. dsh runs them in the session's own
     /// process, each with its own conversation, and can nest them; the feed gives one child's whole state at a time.
     async fn update_dsh_subagent(self: &Arc<Self>, root: &Arc<Session>, child: &Value) {
-        let short = |dsh_id: &str| dsh_id.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect::<String>();
+        let short = |dsh_id: &str| {
+            dsh_id
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .take(8)
+                .collect::<String>()
+        };
         let Some(dsh_id) = child["id"].as_str() else {
             return;
         };

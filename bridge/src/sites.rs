@@ -73,13 +73,24 @@ impl Config {
 /// A command's output, or None when it can't run or takes too long. One watcher looks after every session's sites:
 /// a `tailscale` or `lsof` that waits must not stop it.
 async fn output(command: &mut tokio::process::Command) -> Option<std::process::Output> {
-    command.kill_on_drop(true).stdin(std::process::Stdio::null());
-    tokio::time::timeout(Duration::from_secs(15), command.output()).await.ok()?.ok()
+    command
+        .kill_on_drop(true)
+        .stdin(std::process::Stdio::null());
+    tokio::time::timeout(Duration::from_secs(15), command.output())
+        .await
+        .ok()?
+        .ok()
 }
 
 /// Every listening TCP socket on the machine, by the pid that holds it. One `lsof` for all sessions.
 pub async fn listeners() -> Option<HashMap<u32, Vec<Listener>>> {
-    let out = output(tokio::process::Command::new("/usr/sbin/lsof").args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"])).await?;
+    let out = output(tokio::process::Command::new("/usr/sbin/lsof").args([
+        "-nP",
+        "-iTCP",
+        "-sTCP:LISTEN",
+        "-Fpcn",
+    ]))
+    .await?;
     Some(parse_lsof(&String::from_utf8_lossy(&out.stdout)))
 }
 
@@ -380,8 +391,17 @@ fn owner_of(cwd: &str, started_ms: u64, sessions: &[Candidate], home: &str) -> O
 
 /// The folder each of `pids` runs in. One `lsof` for all of them.
 async fn working_folders(pids: &[u32]) -> HashMap<u32, String> {
-    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-    let Some(out) = output(tokio::process::Command::new("/usr/sbin/lsof").args(["-a", "-d", "cwd", "-p", &list, "-Fpn"])).await else {
+    let list = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let Some(out) = output(
+        tokio::process::Command::new("/usr/sbin/lsof")
+            .args(["-a", "-d", "cwd", "-p", &list, "-Fpn"]),
+    )
+    .await
+    else {
         return HashMap::new();
     };
     parse_folders(&String::from_utf8_lossy(&out.stdout))
@@ -453,7 +473,9 @@ impl crate::session::App {
                 .filter(|key| !titles.contains_key(key))
                 .collect();
             let fetched = futures_util::future::join_all(
-                missing.iter().map(|(port, _)| title(reaches[port].host(), *port)),
+                missing
+                    .iter()
+                    .map(|(port, _)| title(reaches[port].host(), *port)),
             )
             .await;
             for (key, title) in missing.into_iter().zip(fetched) {
@@ -643,7 +665,9 @@ impl crate::session::App {
             .filter(|pid| !detached.folders.contains_key(pid))
             .filter(|pid| {
                 let ports = &listeners[pid];
-                ports.iter().any(|l| !detached.owners.contains_key(&(*pid, l.port)))
+                ports
+                    .iter()
+                    .any(|l| !detached.owners.contains_key(&(*pid, l.port)))
             })
             .collect();
         if !unknown.is_empty() {
@@ -662,10 +686,15 @@ impl crate::session::App {
                 let key = (*pid, listener.port);
                 let session_id = match detached.owners.get(&key) {
                     Some(id) => Some(id.clone()),
-                    None => detached.folders.get(pid).cloned().flatten().and_then(|folder| {
-                        let started = now.saturating_sub(tree.elapsed(*pid)? * 1000);
-                        owner_of(&folder, started, &candidates, &home)
-                    }),
+                    None => detached
+                        .folders
+                        .get(pid)
+                        .cloned()
+                        .flatten()
+                        .and_then(|folder| {
+                            let started = now.saturating_sub(tree.elapsed(*pid)? * 1000);
+                            owner_of(&folder, started, &candidates, &home)
+                        }),
                 };
                 let Some(session_id) = session_id else {
                     continue;
@@ -805,9 +834,18 @@ mod tests {
         // Vite on a recent Node: `localhost` there is the IPv6 loopback alone.
         assert_eq!(reach(["[::1]"]), Reach::Local("localhost"));
         // On the tailnet address itself: there already, and a route at its port would shadow it.
-        assert_eq!(reach(["100.121.116.92"]), Reach::Tailnet("100.121.116.92".into()));
-        assert_eq!(reach(["192.168.1.20"]), Reach::Elsewhere("192.168.1.20".into()));
-        assert_eq!(reach(["192.168.1.20", "127.0.0.1"]), Reach::Local("127.0.0.1"));
+        assert_eq!(
+            reach(["100.121.116.92"]),
+            Reach::Tailnet("100.121.116.92".into())
+        );
+        assert_eq!(
+            reach(["192.168.1.20"]),
+            Reach::Elsewhere("192.168.1.20".into())
+        );
+        assert_eq!(
+            reach(["192.168.1.20", "127.0.0.1"]),
+            Reach::Local("127.0.0.1")
+        );
     }
 
     #[test]
@@ -905,8 +943,14 @@ mod tests {
         // The newest session that was there before the server started.
         assert_eq!(owner("/Users/me/src/app", 500_000).as_deref(), Some("new"));
         // The nearest folder wins.
-        assert_eq!(owner("/Users/me/src/app/web/dist", 500_000).as_deref(), Some("web"));
-        assert_eq!(owner("/Users/me/src/app/api", 500_000).as_deref(), Some("new"));
+        assert_eq!(
+            owner("/Users/me/src/app/web/dist", 500_000).as_deref(),
+            Some("web")
+        );
+        assert_eq!(
+            owner("/Users/me/src/app/api", 500_000).as_deref(),
+            Some("new")
+        );
         // A server older than every session there is nobody's, and the home folder claims nothing.
         assert_eq!(owner("/Users/me/src/app", 10), None);
         assert_eq!(owner("/Users/me/Library", 500_000), None);

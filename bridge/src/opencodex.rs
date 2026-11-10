@@ -41,7 +41,13 @@ pub fn gateway() -> Option<Gateway> {
     if ours == &json!(false) || (ours.is_null() && !home().join(".opencodex").is_dir()) {
         return None;
     }
-    let text = |key: &str, default: &str| ours[key].as_str().unwrap_or(default).trim_end_matches('/').to_string();
+    let text = |key: &str, default: &str| {
+        ours[key]
+            .as_str()
+            .unwrap_or(default)
+            .trim_end_matches('/')
+            .to_string()
+    };
     Some(Gateway {
         url: text("url", "http://127.0.0.1:10100"),
         management: text("managementUrl", "http://127.0.0.1:10101"),
@@ -55,7 +61,15 @@ pub fn gateway() -> Option<Gateway> {
 /// GET a JSON document. The admin token goes in on stdin, never in the arguments, where `ps` would show it.
 async fn get(url: &str, token: Option<&str>) -> Result<Value> {
     let mut child = tokio::process::Command::new("/usr/bin/curl")
-        .args(["-sS", "--fail-with-body", "--max-time", "15", "-K", "-", url])
+        .args([
+            "-sS",
+            "--fail-with-body",
+            "--max-time",
+            "15",
+            "-K",
+            "-",
+            url,
+        ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -103,7 +117,10 @@ pub async fn catalog(gateway: &Gateway) -> Result<Vec<Value>> {
 }
 
 fn offered(model: &Value) -> bool {
-    !model["id"].as_str().unwrap_or_default().starts_with(CLAUDE_SUBSCRIPTION)
+    !model["id"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with(CLAUDE_SUBSCRIPTION)
 }
 
 /// The reasoning efforts a model takes, as Open Codex names them.
@@ -138,7 +155,11 @@ fn input(model: &Value) -> Value {
     let images = listed
         .as_array()
         .is_some_and(|m| m.iter().any(|m| m == "image"));
-    json!(if images { vec!["text", "image"] } else { vec!["text"] })
+    json!(if images {
+        vec!["text", "image"]
+    } else {
+        vec!["text"]
+    })
 }
 
 fn window(model: &Value) -> u64 {
@@ -183,7 +204,14 @@ fn dsh_model(model: &Value) -> Option<Value> {
         json!(false)
     } else {
         let mut map = serde_json::Map::new();
-        map.insert("off".into(), if efforts.iter().any(|e| e == "none") { json!("none") } else { Value::Null });
+        map.insert(
+            "off".into(),
+            if efforts.iter().any(|e| e == "none") {
+                json!("none")
+            } else {
+                Value::Null
+            },
+        );
         for level in ["low", "medium", "high", "max"] {
             if efforts.iter().any(|e| e == level) {
                 map.insert(level.into(), json!(level));
@@ -258,7 +286,10 @@ fn move_default(settings: &mut Value, models: &[Value]) {
         other => other,
     };
     let target = format!("{namespace}/{id}");
-    let target = models.iter().any(|m| m["id"] == target.as_str()).then_some(target);
+    let target = models
+        .iter()
+        .any(|m| m["id"] == target.as_str())
+        .then_some(target);
     if let Some(target) = target {
         settings["defaultProvider"] = json!(PROVIDER);
         settings["defaultModel"] = json!(target);
@@ -315,7 +346,9 @@ pub fn dsh_layer() -> Option<String> {
         }
     });
     // JSON is YAML, so it needs no escaping of its own.
-    Some(format!("- id: llm-pi-ai\n  config:\n    providers: {providers}\n"))
+    Some(format!(
+        "- id: llm-pi-ai\n  config:\n    providers: {providers}\n"
+    ))
 }
 
 /// The id Open Codex files a session's requests under: the first half of the SHA-256 of the session id it sends.
@@ -340,7 +373,11 @@ impl Tally {
         let token = std::fs::read_to_string(&gateway.token_file)
             .map_err(|e| anyhow!("Open Codex admin token: {e}"))?;
         let token = token.trim();
-        let since = if self.through == 0 { 0 } else { self.through + 1 };
+        let since = if self.through == 0 {
+            0
+        } else {
+            self.through + 1
+        };
         let mut cursor: Option<String> = None;
         let mut latest = self.through;
         // Added up apart and kept only when every page came: a failed page leaves the tally as it was, so the next
@@ -360,7 +397,9 @@ impl Tally {
             for entry in page["entries"].as_array().into_iter().flatten() {
                 latest = latest.max(entry["timestamp"].as_u64().unwrap_or(0));
                 tokens += entry["totalTokens"].as_u64().unwrap_or(0);
-                if let Some(entry_cost) = entry["displayMetrics"]["cost"]["estimate"]["cost"]["total"].as_f64() {
+                if let Some(entry_cost) =
+                    entry["displayMetrics"]["cost"]["estimate"]["cost"]["total"].as_f64()
+                {
                     cost += entry_cost;
                     priced = true;
                 }
@@ -397,7 +436,10 @@ mod tests {
         assert_eq!(map["medium"], Value::Null);
         assert_eq!(map["off"], Value::Null);
         assert!(level_map(&json!({ "id": "plain" })).is_none());
-        assert_eq!(dsh_model(&json!({ "id": "plain" })).unwrap()["reasoningEfforts"], false);
+        assert_eq!(
+            dsh_model(&json!({ "id": "plain" })).unwrap()["reasoningEfforts"],
+            false
+        );
     }
 
     #[test]
@@ -407,12 +449,14 @@ mod tests {
             json!({ "id": "gpt-6-astra" }),
             json!({ "id": "openai-apikey/gpt-5.6" }),
         ];
-        let mut settings = json!({ "defaultProvider": "mistral", "defaultModel": "deepseek-v4-1-flash-1017" });
+        let mut settings =
+            json!({ "defaultProvider": "mistral", "defaultModel": "deepseek-v4-1-flash-1017" });
         move_default(&mut settings, &models);
         assert_eq!(settings["defaultProvider"], PROVIDER);
         assert_eq!(settings["defaultModel"], "mistral/deepseek-v4-1-flash-1017");
         // An API-key default stays on the API key, never the subscription's bare id.
-        let mut subscription = json!({ "defaultProvider": "openai", "defaultModel": "gpt-6-astra" });
+        let mut subscription =
+            json!({ "defaultProvider": "openai", "defaultModel": "gpt-6-astra" });
         move_default(&mut subscription, &models);
         assert_eq!(subscription["defaultProvider"], "openai");
         let mut key = json!({ "defaultProvider": "openai", "defaultModel": "gpt-5.6" });
