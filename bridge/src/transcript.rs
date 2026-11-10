@@ -283,7 +283,6 @@ impl Transcript {
             return;
         }
         let mut item = Item::new(ItemKind::Tool, "");
-        item.tool_call_id = Some(call_id.clone());
         item.tool_name = Some(str_field(event, "toolName").unwrap_or("tool".into()));
         item.args = Some(String::new());
         item.status = Some(ToolStatus::Pending);
@@ -326,7 +325,6 @@ impl Transcript {
             }
             "toolcall_start" => {
                 let mut item = Item::new(ItemKind::Tool, "");
-                item.tool_call_id = str_field(delta, "id");
                 item.tool_name = str_field(delta, "toolName");
                 item.args = Some(String::new());
                 item.status = Some(ToolStatus::Preparing);
@@ -389,7 +387,6 @@ impl Transcript {
                     let set = ItemSet {
                         args: Some(args_of(&call["arguments"])),
                         status: Some(ToolStatus::Pending),
-                        tool_call_id: call_id,
                         tool_name: str_field(call, "name"),
                         ..Default::default()
                     };
@@ -446,7 +443,6 @@ impl Transcript {
                     let call_id = str_field(block, "id").unwrap_or_default();
                     let set = ItemSet {
                         args: Some(args_of(&block["arguments"])),
-                        tool_call_id: Some(call_id.clone()),
                         tool_name: str_field(block, "name"),
                         ..Default::default()
                     };

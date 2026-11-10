@@ -253,7 +253,6 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         kind,
         parent_id: None,
         name: None,
-        depth: 0,
         running_subagents: false,
         read_only: false,
         cwd: cwd.to_string(),
@@ -889,8 +888,6 @@ impl App {
                     tokens_per_minute: (minutes >= 0.5)
                         .then(|| tokens.saturating_sub(base.2) as f64 / minutes),
                     run_cost: priced.then(|| (cost - run.1).max(0.0)),
-                    run_tokens: tokens.saturating_sub(run.2),
-                    since: run.0,
                 };
                 if ended {
                     runs.remove(&session.id);
@@ -1299,7 +1296,6 @@ impl App {
         };
         s.parent_id = row["parentActiveSessionId"].as_str().map(str::to_string);
         s.name = row["sessionName"].as_str().map(str::to_string);
-        s.depth = row["rlmDepth"].as_u64().unwrap_or(0) as u32;
         s.running_subagents = row["hasRunningSubagents"] == true;
         s.last_active_at = row["lastActivityAt"]
             .as_str()
@@ -1623,7 +1619,6 @@ impl App {
                     let mut summary =
                         new_summary(&id, AgentKind::Pi, SessionKind::Subagent, &parent.cwd);
                     summary.parent_id = Some(parent.id.clone());
-                    summary.depth = 1;
                     summary.read_only = true;
                     let session = Arc::new(Session {
                         id: id.clone(),
@@ -1723,9 +1718,9 @@ impl App {
             return;
         };
         let id = format!("{}.{}", root.id, short(dsh_id));
-        let (parent_id, depth) = match child["parent"].as_str() {
-            Some(parent) => (format!("{}.{}", root.id, short(parent)), 2),
-            None => (root.id.clone(), 1),
+        let parent_id = match child["parent"].as_str() {
+            Some(parent) => format!("{}.{}", root.id, short(parent)),
+            None => root.id.clone(),
         };
         let session = match self.find(&id).await {
             Ok(s) => s,
@@ -1733,7 +1728,6 @@ impl App {
                 let mut summary =
                     new_summary(&id, AgentKind::Deepseek, SessionKind::Subagent, &root.cwd);
                 summary.parent_id = Some(parent_id);
-                summary.depth = depth;
                 summary.read_only = true;
                 let session = Arc::new(Session {
                     id: id.clone(),
