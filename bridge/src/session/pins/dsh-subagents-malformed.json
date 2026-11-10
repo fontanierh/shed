@@ -1,0 +1,454 @@
+{
+  "malformed": {
+    "createdAt": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.createdAt": 1600000000000,
+          "new.dsh1.f117882d.summary.createdAt": "now"
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.createdAt": 7,
+          "new.dsh1.f117882d.summary.createdAt": 7
+        },
+        "when": "7"
+      }
+    ],
+    "error": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.error": null,
+          "new.dsh1.f117882d.summary.error": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.error": "text",
+          "new.dsh1.f117882d.summary.error": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "id": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "Earlier"
+            }
+          ],
+          "known.dsh1.f117882d.summary.createdAt": 1600000000000,
+          "known.dsh1.f117882d.summary.error": null,
+          "known.dsh1.f117882d.summary.lastActiveAt": 1600000005000,
+          "known.dsh1.f117882d.summary.model.id": "model-0",
+          "known.dsh1.f117882d.summary.model.name": "model-0",
+          "known.dsh1.f117882d.summary.status": "running",
+          "known.dsh1.f117882d.summary.title": "Earlier",
+          "known.parentRunningSubagents": true,
+          "new.dsh1.f117882d": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "Earlier"
+            }
+          ],
+          "known.dsh1.f117882d.summary.createdAt": 1600000000000,
+          "known.dsh1.f117882d.summary.error": null,
+          "known.dsh1.f117882d.summary.lastActiveAt": 1600000005000,
+          "known.dsh1.f117882d.summary.model.id": "model-0",
+          "known.dsh1.f117882d.summary.model.name": "model-0",
+          "known.dsh1.f117882d.summary.status": "running",
+          "known.dsh1.f117882d.summary.title": "Earlier",
+          "known.parentRunningSubagents": true,
+          "new.dsh1.f117882d": null,
+          "new.parentRunningSubagents": true
+        },
+        "when": "null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "Earlier"
+            }
+          ],
+          "known.dsh1.f117882d.summary.createdAt": 1600000000000,
+          "known.dsh1.f117882d.summary.error": null,
+          "known.dsh1.f117882d.summary.lastActiveAt": 1600000005000,
+          "known.dsh1.f117882d.summary.model.id": "model-0",
+          "known.dsh1.f117882d.summary.model.name": "model-0",
+          "known.dsh1.f117882d.summary.status": "running",
+          "known.dsh1.f117882d.summary.title": "Earlier",
+          "known.dsh1.text": {
+            "items": [
+              {
+                "at": "now",
+                "id": "i1",
+                "kind": "user",
+                "text": "Read notes.txt"
+              }
+            ],
+            "levelsFor": null,
+            "named": false,
+            "primeSession": null,
+            "rosterMark": [
+              "",
+              0
+            ],
+            "sessionFile": null,
+            "summary": {
+              "agent": "deepseek",
+              "autoCompaction": true,
+              "backgroundJobs": 0,
+              "cost": 0.0,
+              "createdAt": 1700000000000,
+              "cwd": "/work/project",
+              "error": "the model refused",
+              "id": "dsh1.text",
+              "kind": "subagent",
+              "lastActiveAt": 1700000005000,
+              "model": {
+                "id": "model-1",
+                "name": "model-1",
+                "provider": "example",
+                "reasoning": true
+              },
+              "name": "subagent",
+              "parentId": "dsh1.0a1b2c3d",
+              "queue": {
+                "followUp": [],
+                "steering": []
+              },
+              "readOnly": true,
+              "runningSubagents": false,
+              "sites": [],
+              "status": "error",
+              "thinkingLevels": [],
+              "title": "Read notes.txt"
+            },
+            "toolCalls": null,
+            "workerPid": null
+          },
+          "known.parentRunningSubagents": true,
+          "new.dsh1.f117882d": null,
+          "new.dsh1.text": {
+            "items": [
+              {
+                "at": "now",
+                "id": "i1",
+                "kind": "user",
+                "text": "Read notes.txt"
+              }
+            ],
+            "levelsFor": null,
+            "named": false,
+            "primeSession": null,
+            "rosterMark": [
+              "",
+              0
+            ],
+            "sessionFile": null,
+            "summary": {
+              "agent": "deepseek",
+              "autoCompaction": true,
+              "backgroundJobs": 0,
+              "cost": 0.0,
+              "createdAt": 1700000000000,
+              "cwd": "/work/project",
+              "error": "the model refused",
+              "id": "dsh1.text",
+              "kind": "subagent",
+              "lastActiveAt": 1700000005000,
+              "model": {
+                "id": "model-1",
+                "name": "model-1",
+                "provider": "example",
+                "reasoning": true
+              },
+              "name": "subagent",
+              "parentId": "dsh1.0a1b2c3d",
+              "queue": {
+                "followUp": [],
+                "steering": []
+              },
+              "readOnly": true,
+              "runningSubagents": false,
+              "sites": [],
+              "status": "error",
+              "thinkingLevels": [],
+              "title": "Read notes.txt"
+            },
+            "toolCalls": null,
+            "workerPid": null
+          }
+        },
+        "when": "\"text\""
+      }
+    ],
+    "lastActiveAt": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.lastActiveAt": "now",
+          "new.dsh1.f117882d.summary.lastActiveAt": "now"
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.lastActiveAt": 7,
+          "new.dsh1.f117882d.summary.lastActiveAt": 7
+        },
+        "when": "7"
+      }
+    ],
+    "messages": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [],
+          "new.dsh1.f117882d.items": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "messages.0": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [],
+          "new.dsh1.f117882d.items": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "messages.0.content": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i2",
+              "kind": "user",
+              "text": ""
+            }
+          ],
+          "new.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": ""
+            }
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i2",
+              "kind": "user",
+              "text": "text"
+            }
+          ],
+          "new.dsh1.f117882d.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "text"
+            }
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "messages.0.role": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.items": [],
+          "new.dsh1.f117882d.items": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "model": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.model": null,
+          "new.dsh1.f117882d.summary.model": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "parent": [
+      {
+        "differs": {
+          "new.dsh1.f117882d.summary.parentId": "dsh1"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "new.dsh1.f117882d.summary.parentId": "dsh1.text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "status": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.status": "done",
+          "new.dsh1.f117882d.summary.status": "done"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "title": [
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.title": "subagent",
+          "new.dsh1.f117882d.summary.title": "subagent"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.dsh1.f117882d.summary.title": "text",
+          "new.dsh1.f117882d.summary.title": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "type": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ]
+  },
+  "wellFormed": {
+    "known": {
+      "dsh1.f117882d": {
+        "items": [
+          {
+            "at": "now",
+            "id": "i2",
+            "kind": "user",
+            "text": "Read notes.txt"
+          }
+        ],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "deepseek",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.0,
+          "createdAt": 1700000000000,
+          "cwd": "/work/project",
+          "error": "the model refused",
+          "id": "dsh1.f117882d",
+          "kind": "subagent",
+          "lastActiveAt": 1700000005000,
+          "model": {
+            "id": "model-1",
+            "name": "model-1",
+            "provider": "example",
+            "reasoning": true
+          },
+          "name": "subagent",
+          "parentId": "dsh1",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "error",
+          "thinkingLevels": [],
+          "title": "Read notes.txt"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      },
+      "parentRunningSubagents": false
+    },
+    "new": {
+      "dsh1.f117882d": {
+        "items": [
+          {
+            "at": "now",
+            "id": "i1",
+            "kind": "user",
+            "text": "Read notes.txt"
+          }
+        ],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "deepseek",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.0,
+          "createdAt": 1700000000000,
+          "cwd": "/work/project",
+          "error": "the model refused",
+          "id": "dsh1.f117882d",
+          "kind": "subagent",
+          "lastActiveAt": 1700000005000,
+          "model": {
+            "id": "model-1",
+            "name": "model-1",
+            "provider": "example",
+            "reasoning": true
+          },
+          "name": "subagent",
+          "parentId": "dsh1.0a1b2c3d",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "error",
+          "thinkingLevels": [],
+          "title": "Read notes.txt"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      },
+      "parentRunningSubagents": false
+    }
+  }
+}

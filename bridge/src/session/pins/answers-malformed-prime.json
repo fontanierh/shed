@@ -1,0 +1,634 @@
+{
+  "malformed": {
+    "get_available_models": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models.0": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models.0.id": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models.0.provider": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models.0.thinkingLevelMap": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_models.models.0.thinkingLevelMap.max": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "null"
+      }
+    ],
+    "get_available_models.models.0.thinkingLevelMap.off": [
+      {
+        "differs": {
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
+        },
+        "when": "missing | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "null"
+      }
+    ],
+    "get_available_thinking_levels": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_thinking_levels.levels": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_available_thinking_levels.levels.0": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_session_stats": [
+      {
+        "differs": {
+          "summary.context": null,
+          "summary.cost": 0.25,
+          "summary.model.contextWindow": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_session_stats.contextUsage": [
+      {
+        "differs": {
+          "summary.context": null,
+          "summary.model.contextWindow": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_session_stats.contextUsage.contextWindow": [
+      {
+        "differs": {
+          "summary.context": null,
+          "summary.model.contextWindow": null
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.context.percent": 714285.7142857143,
+          "summary.context.window": 7,
+          "summary.model.contextWindow": 7
+        },
+        "when": "7"
+      }
+    ],
+    "get_session_stats.contextUsage.percent": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_session_stats.contextUsage.tokens": [
+      {
+        "differs": {
+          "summary.context.percent": null,
+          "summary.context.tokens": null
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.context.percent": 0.002573529411764706,
+          "summary.context.tokens": 7
+        },
+        "when": "7"
+      }
+    ],
+    "get_session_stats.cost": [
+      {
+        "differs": {
+          "summary.cost": 0.25
+        },
+        "when": "missing | null | true | -3 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.cost": 7.0
+        },
+        "when": "7"
+      },
+      {
+        "differs": {
+          "summary.cost": 1.5
+        },
+        "when": "1.5"
+      }
+    ],
+    "get_session_stats.sessionFile": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state": [
+      {
+        "differs": {
+          "asked": [
+            "get_state",
+            "get_session_stats"
+          ],
+          "fails": "Prime daemon is not connected",
+          "items": null,
+          "levelsFor": null,
+          "named": null,
+          "rosterMark": null,
+          "sessionFile": null,
+          "summary": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "asked": [
+            "get_state",
+            "get_session_stats"
+          ],
+          "levelsFor": null,
+          "named": false,
+          "sessionFile": "/work/sessions/earlier.jsonl",
+          "summary.autoCompaction": true,
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.contextWindow": 200000,
+          "summary.model.id": "model-0",
+          "summary.model.name": "Model Zero",
+          "summary.queue.followUp": [],
+          "summary.queue.steering": [
+            "earlier"
+          ],
+          "summary.standardWindow": null,
+          "summary.status": "idle",
+          "summary.thinkingLevel": "low",
+          "summary.thinkingLevels": [],
+          "summary.title": "Earlier"
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.autoCompactionEnabled": [
+      {
+        "differs": {
+          "summary.autoCompaction": true
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.isCompacting": [
+      {
+        "differs": {},
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.status": "compacting"
+        },
+        "when": "true"
+      }
+    ],
+    "get_state.isStreaming": [
+      {
+        "differs": {
+          "summary.status": "idle"
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "get_state.model": [
+      {
+        "differs": {
+          "asked": [
+            "get_state",
+            "get_session_stats"
+          ],
+          "levelsFor": null,
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.contextWindow": 200000,
+          "summary.model.id": "model-0",
+          "summary.model.name": "Model Zero",
+          "summary.standardWindow": null,
+          "summary.thinkingLevels": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.model.id": [
+      {
+        "differs": {
+          "asked": [
+            "get_state",
+            "get_session_stats"
+          ],
+          "levelsFor": null,
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.contextWindow": 200000,
+          "summary.model.id": "model-0",
+          "summary.model.name": "Model Zero",
+          "summary.standardWindow": null,
+          "summary.thinkingLevels": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "levelsFor": "example/text",
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.id": "text",
+          "summary.standardWindow": null,
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.model.name": [
+      {
+        "differs": {
+          "summary.model.name": "model-1"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.model.name": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.model.provider": [
+      {
+        "differs": {
+          "levelsFor": "/model-1",
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.provider": "",
+          "summary.standardWindow": null,
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "levelsFor": "text/model-1",
+          "summary.context.percent": 12.5,
+          "summary.context.window": 400000,
+          "summary.model.provider": "text",
+          "summary.standardWindow": null,
+          "summary.thinkingLevels": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.model.reasoning": [
+      {
+        "differs": {
+          "asked": [
+            "get_state",
+            "get_session_stats"
+          ],
+          "summary.model.reasoning": false,
+          "summary.thinkingLevels": [
+            "off"
+          ]
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "get_state.sessionActions": [
+      {
+        "differs": {
+          "summary.queue.followUp": [],
+          "summary.queue.steering": [
+            "earlier"
+          ]
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "summary.queue.followUp": [],
+          "summary.queue.steering": []
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.sessionActions.followUps": [
+      {
+        "differs": {
+          "summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.sessionActions.followUps.0": [
+      {
+        "differs": {
+          "summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.sessionActions.followUps.0.content": [
+      {
+        "differs": {
+          "summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.sessionActions.steering": [
+      {
+        "differs": {
+          "summary.queue.steering": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "get_state.sessionActions.steering.0": [
+      {
+        "differs": {
+          "summary.queue.steering": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.queue.steering": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.sessionFile": [
+      {
+        "differs": {
+          "sessionFile": "/work/sessions/earlier.jsonl"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "sessionFile": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.sessionName": [
+      {
+        "differs": {
+          "named": false,
+          "summary.title": "Earlier"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.title": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "get_state.thinkingLevel": [
+      {
+        "differs": {
+          "summary.thinkingLevel": "low"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "summary.thinkingLevel": "text"
+        },
+        "when": "\"text\""
+      }
+    ]
+  },
+  "wellFormed": {
+    "asked": [
+      "get_state",
+      "get_session_stats",
+      "get_available_models"
+    ],
+    "items": [],
+    "levelsFor": "example/model-1",
+    "named": true,
+    "primeSession": null,
+    "rosterMark": [
+      "",
+      0
+    ],
+    "sessionFile": "/work/sessions/p1.jsonl",
+    "summary": {
+      "agent": "prime",
+      "autoCompaction": false,
+      "backgroundJobs": 0,
+      "context": {
+        "percent": 18.38235294117647,
+        "tokens": 50000,
+        "window": 272000
+      },
+      "cost": 0.75,
+      "createdAt": "now",
+      "cwd": "/work/project",
+      "id": "s1",
+      "kind": "root",
+      "model": {
+        "contextWindow": 400000,
+        "id": "model-1",
+        "name": "Model One",
+        "provider": "example",
+        "reasoning": true
+      },
+      "queue": {
+        "followUp": [
+          "then open a pull request"
+        ],
+        "steering": [
+          "look at src"
+        ]
+      },
+      "readOnly": false,
+      "runningSubagents": false,
+      "sites": [],
+      "standardWindow": 272000,
+      "status": "running",
+      "thinkingLevel": "medium",
+      "thinkingLevels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "title": "Tests"
+    },
+    "toolCalls": null,
+    "workerPid": null
+  }
+}

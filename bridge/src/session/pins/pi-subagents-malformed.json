@@ -1,0 +1,389 @@
+{
+  "malformed": {
+    "mode": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results": [
+      {
+        "differs": {
+          "known.pi1.call1.0.items": [
+            {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "Earlier"
+            }
+          ],
+          "known.pi1.call1.0.summary.cost": 0.5,
+          "known.pi1.call1.0.summary.model.id": "model-0",
+          "known.pi1.call1.0.summary.model.name": "model-0",
+          "known.pi1.call1.0.summary.status": "running",
+          "known.pi1.call1.0.summary.title": "scout: Earlier",
+          "known.pi1.call1.1": null,
+          "new.pi1.call1.0": null,
+          "new.pi1.call1.1": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0": [
+      {
+        "differs": {
+          "known.pi1.call1.0.items": [],
+          "known.pi1.call1.0.summary.cost": 0.0,
+          "known.pi1.call1.0.summary.error": "refused",
+          "known.pi1.call1.0.summary.model.id": "model-0",
+          "known.pi1.call1.0.summary.model.name": "model-0",
+          "known.pi1.call1.0.summary.name": "reviewer",
+          "known.pi1.call1.0.summary.status": "error",
+          "known.pi1.call1.0.summary.title": "reviewer: Review it",
+          "known.pi1.call1.1": null,
+          "new.pi1.call1.0.items": [],
+          "new.pi1.call1.0.summary.cost": 0.0,
+          "new.pi1.call1.0.summary.error": "refused",
+          "new.pi1.call1.0.summary.model": null,
+          "new.pi1.call1.0.summary.name": "reviewer",
+          "new.pi1.call1.0.summary.status": "error",
+          "new.pi1.call1.0.summary.title": "reviewer: Review it",
+          "new.pi1.call1.1": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.items": [],
+          "known.pi1.call1.0.summary.cost": 0.0,
+          "known.pi1.call1.0.summary.model.id": "model-0",
+          "known.pi1.call1.0.summary.model.name": "model-0",
+          "known.pi1.call1.0.summary.name": "subagent",
+          "known.pi1.call1.0.summary.title": "subagent: ",
+          "new.pi1.call1.0.items": [],
+          "new.pi1.call1.0.summary.cost": 0.0,
+          "new.pi1.call1.0.summary.model": null,
+          "new.pi1.call1.0.summary.name": "subagent",
+          "new.pi1.call1.0.summary.title": "subagent: "
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.agent": [
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.name": "subagent",
+          "known.pi1.call1.0.summary.title": "subagent: Find the entry point",
+          "new.pi1.call1.0.summary.name": "subagent",
+          "new.pi1.call1.0.summary.title": "subagent: Find the entry point"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.name": "text",
+          "known.pi1.call1.0.summary.title": "text: Find the entry point",
+          "new.pi1.call1.0.summary.name": "text",
+          "new.pi1.call1.0.summary.title": "text: Find the entry point"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "results.0.exitCode": [
+      {
+        "differs": {},
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.error": "a warning",
+          "known.pi1.call1.0.summary.status": "error",
+          "new.pi1.call1.0.summary.error": "a warning",
+          "new.pi1.call1.0.summary.status": "error"
+        },
+        "when": "7"
+      }
+    ],
+    "results.0.messages": [
+      {
+        "differs": {
+          "known.pi1.call1.0.items": [],
+          "new.pi1.call1.0.items": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.messages.0": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.messages.0.content": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.messages.0.role": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.model": [
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.model.id": "model-0",
+          "known.pi1.call1.0.summary.model.name": "model-0",
+          "new.pi1.call1.0.summary.model": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.stderr": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.stopReason": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.task": [
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.title": "scout: ",
+          "new.pi1.call1.0.summary.title": "scout: "
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.title": "scout: text",
+          "new.pi1.call1.0.summary.title": "scout: text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "results.0.usage": [
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.cost": 0.0,
+          "new.pi1.call1.0.summary.cost": 0.0
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.usage.contextTokens": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "results.0.usage.cost": [
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.cost": 0.0,
+          "new.pi1.call1.0.summary.cost": 0.0
+        },
+        "when": "missing | null | true | -3 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.cost": 7.0,
+          "new.pi1.call1.0.summary.cost": 7.0
+        },
+        "when": "7"
+      },
+      {
+        "differs": {
+          "known.pi1.call1.0.summary.cost": 1.5,
+          "new.pi1.call1.0.summary.cost": 1.5
+        },
+        "when": "1.5"
+      }
+    ]
+  },
+  "wellFormed": {
+    "known": {
+      "pi1.call1.0": {
+        "items": [
+          {
+            "at": "now",
+            "id": "i2",
+            "kind": "user",
+            "text": "Find the entry point"
+          }
+        ],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "pi",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.25,
+          "createdAt": "now",
+          "cwd": "/work/project",
+          "id": "pi1.call1.0",
+          "kind": "subagent",
+          "lastActiveAt": "now",
+          "model": {
+            "id": "model-1",
+            "name": "model-1",
+            "provider": "example",
+            "reasoning": true
+          },
+          "name": "scout",
+          "parentId": "pi1",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "done",
+          "thinkingLevels": [],
+          "title": "scout: Find the entry point"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      },
+      "pi1.call1.1": {
+        "items": [],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "pi",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.0,
+          "createdAt": "now",
+          "cwd": "/work/project",
+          "error": "refused",
+          "id": "pi1.call1.1",
+          "kind": "subagent",
+          "lastActiveAt": "now",
+          "name": "reviewer",
+          "parentId": "pi1",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "error",
+          "thinkingLevels": [],
+          "title": "reviewer: Review it"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      }
+    },
+    "new": {
+      "pi1.call1.0": {
+        "items": [
+          {
+            "at": "now",
+            "id": "i1",
+            "kind": "user",
+            "text": "Find the entry point"
+          }
+        ],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "pi",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.25,
+          "createdAt": "now",
+          "cwd": "/work/project",
+          "id": "pi1.call1.0",
+          "kind": "subagent",
+          "lastActiveAt": "now",
+          "model": {
+            "id": "model-1",
+            "name": "model-1",
+            "provider": "example",
+            "reasoning": true
+          },
+          "name": "scout",
+          "parentId": "pi1",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "done",
+          "thinkingLevels": [],
+          "title": "scout: Find the entry point"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      },
+      "pi1.call1.1": {
+        "items": [],
+        "levelsFor": null,
+        "named": false,
+        "primeSession": null,
+        "rosterMark": [
+          "",
+          0
+        ],
+        "sessionFile": null,
+        "summary": {
+          "agent": "pi",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.0,
+          "createdAt": "now",
+          "cwd": "/work/project",
+          "error": "refused",
+          "id": "pi1.call1.1",
+          "kind": "subagent",
+          "lastActiveAt": "now",
+          "name": "reviewer",
+          "parentId": "pi1",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": true,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "error",
+          "thinkingLevels": [],
+          "title": "reviewer: Review it"
+        },
+        "toolCalls": null,
+        "workerPid": null
+      }
+    }
+  }
+}
