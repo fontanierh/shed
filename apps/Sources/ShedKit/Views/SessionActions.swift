@@ -39,6 +39,33 @@ struct ContextWindowMenu: View {
     }
 }
 
+/// A ring with the share of the context window in use: blue, turning orange, then red near the limit.
+struct ContextGauge: View {
+    let context: ContextUsage
+
+    var body: some View {
+        let fraction = min(1, max(0, (context.percent ?? 0) / 100))
+        let tint: Color = fraction > 0.9 ? Palette.danger : fraction > 0.7 ? Palette.attention : Palette.accent
+        HStack(spacing: 7) {
+            ZStack {
+                Circle().stroke(Palette.rail, lineWidth: 2.5)
+                Circle().trim(from: 0, to: fraction)
+                    .stroke(tint, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .shadow(color: tint.opacity(0.7), radius: 3)
+            }
+            .frame(width: 15, height: 15)
+            .animation(.spring(response: 0.7, dampingFraction: 0.75), value: fraction)
+            Text("\(context.tokens.map(Format.tokens) ?? "?") / \(Format.tokens(context.window))")
+                .font(.system(size: 12.5).monospacedDigit())
+                .contentTransition(.numericText())
+                .fixedSize()
+        }
+        .pill()
+        .help("Context window: \(context.tokens.map { $0.formatted() } ?? "unknown") of \(context.window.formatted()) tokens (\(Int(fraction * 100))%)")
+    }
+}
+
 /// Asks for a new name for `target`, starting from its current title.
 struct RenameSessionAlert: ViewModifier {
     @Binding var target: SessionSummary?
