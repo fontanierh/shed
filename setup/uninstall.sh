@@ -1,6 +1,10 @@
 #!/bin/bash
-# Undo install.sh's system changes: the launchd service, the tailnet publication and the Mac app.
-# Leaves Pi, Prime Agent, their configuration and sessions, and ~/.agent-remote (token, registry) in place.
+# Undo install.sh's system changes: the bridge's launchd service, its tailnet publication and the Mac app.
+#
+# Left in place: Pi, Prime Agent and DeepSeek Harness with their configuration and sessions (Open Codex stays
+# their default provider); ~/.agent-remote (token, registry); Open Codex and its own login service
+# (com.opencodex.proxy); any `setup/sync-remote.sh --watch` agent (remove it with `--unwatch`); and the tailnet
+# routes of sites still published when the bridge stopped (`tailscale serve status` lists them).
 set -uo pipefail
 
 PORT="${AGENT_REMOTE_PORT:-7878}"

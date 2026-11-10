@@ -10,7 +10,8 @@
 #   OPENROUTER_API_KEY, or asked for when run in a terminal. SHED_TEAM_ID (and optionally SHED_BUNDLE_ID) builds
 #   the iPhone app onto a connected iPhone.
 #
-#   --no-opencodex  give the agents the keys directly instead of going through Open Codex
+#   --no-opencodex  give Pi and Prime the keys directly instead of going through Open Codex: the OpenAI, Anthropic,
+#                   Gemini and DeepSeek ones, from the environment only
 #   --no-service    build and install the bridge, but don't register it with launchd
 #   --no-app        skip building the Mac app
 #   --no-tailscale  don't publish the bridge on the tailnet
@@ -30,7 +31,7 @@ for arg in "$@"; do
     --no-app) APP=0 ;;
     --no-tailscale) TAILSCALE=0 ;;
     --no-iphone) IPHONE=0 ;;
-    -h | --help) sed -n '2,19p' "$0" | cut -c3-; exit 0 ;;
+    -h | --help) sed -n '2,18p' "$0" | cut -c3-; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -216,7 +217,9 @@ if ! command -v cargo >/dev/null; then
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 fi
 (cd "$ROOT/bridge" && cargo build --release)
-note "signed with $("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/release/agent-remote")"
+# On its own line: a signing that fails stops here instead of installing the build unsigned.
+identity="$("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/release/agent-remote")"
+note "signed with $identity"
 mkdir -p "$HOME/.agent-remote/bin" "$HOME/.agent-remote/logs"
 install -m 755 "$ROOT/bridge/target/release/agent-remote" "$HOME/.agent-remote/bin/agent-remote"
 note "installed ~/.agent-remote/bin/agent-remote"

@@ -61,7 +61,9 @@ if [ "$("${ssh[@]}" uname -m)" = "$(uname -m)" ]; then
   (cd "$ROOT/bridge" && cargo build --release --quiet)
   mkdir -p "$ROOT/bridge/target/remote"
   cp "$ROOT/bridge/target/release/agent-remote" "$ROOT/bridge/target/remote/agent-remote"
-  echo "  signed with $("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/remote/agent-remote")"
+  # On its own line: a signing that fails stops here instead of shipping the build unsigned.
+  identity="$("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/remote/agent-remote")"
+  echo "  signed with $identity"
   rsync -a -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$ROOT/bridge/target/remote/agent-remote" "$TARGET:shed/agent-remote"
   built=1
 fi
@@ -69,7 +71,8 @@ fi
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 cd ~/shed/bridge
-if [ -n "$1" ]; then
+# ssh drops an empty argument, so "not built" arrives as no argument at all.
+if [ -n "${1:-}" ]; then
   mkdir -p target/release && mv ~/shed/agent-remote target/release/agent-remote
 else
   cargo build --release --quiet
@@ -80,9 +83,11 @@ for extension in subagent background-jobs; do
 done
 cp ~/shed/setup/pi/agents/*.md ~/.pi/agent/agents/
 cp ~/shed/setup/pi/prompts/*.md ~/.pi/agent/prompts/
-node ~/shed/setup/lib/configure.mjs prime-models ~/shed/setup/prime/models.json ~/.prime/agent/models.json >/dev/null
-node ~/shed/setup/lib/configure.mjs pi-models ~/shed/setup/pi/models.json ~/.pi/agent/models.json >/dev/null
-node ~/shed/setup/lib/configure.mjs bridge-defaults ~/shed/setup/bridge-defaults.json ~/.agent-remote/config.json >/dev/null
+# The Node on the PATH, or the one Pi brought, as install.sh finds it.
+node="$(command -v node || echo "$HOME/.local/share/pi-node/current/bin/node")"
+"$node" ~/shed/setup/lib/configure.mjs prime-models ~/shed/setup/prime/models.json ~/.prime/agent/models.json >/dev/null
+"$node" ~/shed/setup/lib/configure.mjs pi-models ~/shed/setup/pi/models.json ~/.pi/agent/models.json >/dev/null
+"$node" ~/shed/setup/lib/configure.mjs bridge-defaults ~/shed/setup/bridge-defaults.json ~/.agent-remote/config.json >/dev/null
 # The same code signed again differs only in its signing time: compare the code's hash.
 cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
 new="$(cdhash target/release/agent-remote)"
