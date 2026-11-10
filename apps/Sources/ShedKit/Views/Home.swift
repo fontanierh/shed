@@ -361,7 +361,7 @@ struct LiveDot: View {
     }
 }
 
-// MARK: Git
+// MARK: GitHub
 
 /// The GitHub cards: contributions and open pull requests of the account `gh` is signed in to on a computer — this
 /// Mac's by default, where the user's own account usually is. `layout` places them.

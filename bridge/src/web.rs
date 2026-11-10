@@ -112,7 +112,7 @@ pub fn configured() -> bool {
 }
 
 /// Link `shed-web` to the running binary in its folder, and write the Python module, for agents started from here.
-/// Done at every start, so a bridge that sync updates brings both with it.
+/// Done at every start, so a bridge that `setup/sync-remote.sh` updates brings both with it.
 pub fn install() {
     let Ok(exe) = std::env::current_exe() else {
         return;

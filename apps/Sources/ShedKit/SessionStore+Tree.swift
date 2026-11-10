@@ -55,7 +55,6 @@ extension SessionStore {
         sessions.values.filter { $0.isSubagent && $0.isActive && !ended.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// The sites a session serves.
     public func sites(of session: SessionSummary) -> [SiteEntry] {
         let local = environment(of: session.id)?.isLocal == true
         return session.servedSites.map { SiteEntry(site: $0, session: session, opens: $0.published || local) }

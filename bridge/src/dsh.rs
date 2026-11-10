@@ -1233,8 +1233,9 @@ pub(crate) mod tests {
         println!("{}", install_profile().unwrap().display());
     }
 
-    /// What the plugin sent on Jim's Mac for: start a background job, have a subagent read a file, then answer with
-    /// both. Trimmed of dsh's bookkeeping events (system prompt, request headers, log delivery, inbox splices).
+    /// What the plugin sent in a real session asked to start a background job, have a subagent read a file, then
+    /// answer with both. Trimmed of dsh's bookkeeping events (system prompt, request headers, log delivery, inbox
+    /// splices).
     const FEED: &str = include_str!("dsh_feed.jsonl");
 
     fn replay() -> (Feed, Vec<Value>) {

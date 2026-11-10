@@ -272,8 +272,8 @@ fn tailscale() -> tokio::process::Command {
     tokio::process::Command::new(program)
 }
 
-/// The tailnet name this bridge is published under, e.g. `jims-macbook-pro.tail362838.ts.net`, and the ports
-/// `tailscale serve` already answers on. `None` when Tailscale isn't installed or isn't running.
+/// The tailnet name this bridge is published under, e.g. `my-mac.tailnet.ts.net`, and the ports `tailscale serve`
+/// already answers on. `None` when Tailscale isn't installed or isn't running.
 async fn serve_state() -> Option<(String, HashMap<u16, String>)> {
     let status = output(tailscale().args(["status", "--json"])).await?;
     if !status.status.success() {

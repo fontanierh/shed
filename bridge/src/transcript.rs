@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn flags_a_tool_call_streaming_only_whitespace_once() {
-        // What Dev1's model streamed for a quarter of an hour.
+        // What a looping model once streamed for a quarter of an hour.
         let mut transcript = Transcript::default();
         transcript.handle_event(&delta("toolcall_start", ""));
         transcript.handle_event(&delta("toolcall_delta", "{\"code\":\""));

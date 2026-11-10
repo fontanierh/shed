@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 const GH_TIMEOUT: Duration = Duration::from_secs(20);
 /// The home page asks on every visit; GitHub's numbers move slowly.
 const CACHE_FOR: Duration = Duration::from_secs(90);
-/// Open pull requests sent, most recently updated first.
+/// At most this many open pull requests are sent, the most recently updated first.
 const MAX_PRS: usize = 30;
 
 static CACHE: Mutex<Option<(Instant, Value)>> = Mutex::new(None);

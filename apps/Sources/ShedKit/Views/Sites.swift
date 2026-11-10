@@ -197,7 +197,6 @@ private struct SiteRow: View {
                     }
                 }
                 if !site.published, let reason = site.reason {
-                    // Why it can't be opened from here.
                     Text(reason).font(.system(size: 11)).foregroundStyle(Palette.accent.opacity(0.85)).lineLimit(2)
                 }
                 Text(entry.session.isSubagent ? (entry.session.name ?? "subagent") : entry.session.title)

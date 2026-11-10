@@ -1,6 +1,6 @@
-//! Agent sessions: Pi sessions are bridge-owned RPC children; Prime sessions (and their subagents)
-//! live in Prime's daemon and are mirrored from its roster; Pi subagents are read-only views of the
-//! parent's `subagent` tool call.
+//! Agent sessions: Pi and DeepSeek Harness sessions are RPC children the bridge owns; Prime sessions (and their
+//! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
+//! read-only views of what their parent session reports about them.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,11 +31,11 @@ pub struct Envelope {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
-    /// `pi --mode rpc` child owned by the bridge.
+    /// An agent process the bridge starts and owns: `pi --mode rpc`, or DeepSeek Harness through Shed's plugin.
     Pi,
     /// A session in Prime's daemon, addressed by its active-session id.
     Prime,
-    /// One child of a Pi `subagent` tool call.
+    /// One child of a Pi `subagent` tool call, or one subagent of a DeepSeek Harness session.
     PiSubagent,
 }
 
@@ -287,12 +287,12 @@ impl SessionState {
         }
     }
 
-    /// A Pi session with no process: one that was closed, or whose Pi exited.
+    /// A `Pi` session with no process: one that was closed, or whose agent exited.
     fn stopped(&self) -> bool {
         matches!(&self.own, BackendState::Pi { child: None })
     }
 
-    /// The Pi process of a running Pi session.
+    /// The agent process of a running `Pi` session.
     fn child(&self) -> Option<&Arc<RpcChild>> {
         match &self.own {
             BackendState::Pi { child } => child.as_ref(),
@@ -645,7 +645,6 @@ impl App {
         model: Option<String>,
         thinking: Option<String>,
     ) -> Result<()> {
-        // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
         // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
         let guide = self.store.dir().join("guide.md");
         if let Err(e) = std::fs::write(&guide, crate::guide::text(crate::rpc::AgentKind::Pi)) {
@@ -655,6 +654,7 @@ impl App {
             );
         }
         let env = vec![
+            // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
             (
                 "AGENT_REMOTE_JOBS_DIR".to_string(),
                 crate::jobs::pi_dir(&session.id)
