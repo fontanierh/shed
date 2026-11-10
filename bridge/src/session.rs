@@ -348,11 +348,22 @@ impl App {
         let token = store.token()?;
         let (prime, prime_events) = PrimeDaemon::start(store.client_id()?);
         let (hub, _) = broadcast::channel(4096);
+        let mut limits = store.load_limits();
+        let home = std::env::var("HOME").unwrap_or_default();
+        if crate::store::adopt_stray_limits(
+            &mut limits,
+            std::path::Path::new(&format!("{home}/.prime/agent/daemon-workers")),
+        ) {
+            if let Err(e) = store.save_limits(&limits) {
+                eprintln!("failed to save context windows: {e}");
+            }
+        }
         let sessions = store
             .load_sessions()
             .into_iter()
             .map(|r| {
                 let mut summary = new_summary(&r.id, r.agent, SessionKind::Root, &r.cwd);
+                summary.context_limit = limits.get(&r.id).copied();
                 summary.title = r.title.clone();
                 summary.status = SessionStatus::Stopped;
                 summary.created_at = r.created_at;
@@ -367,7 +378,7 @@ impl App {
                 })
             })
             .collect();
-        let limits = std::sync::Mutex::new(store.load_limits());
+        let limits = std::sync::Mutex::new(limits);
         let app = Arc::new(App {
             token,
             sessions: RwLock::new(sessions),
@@ -1338,10 +1349,13 @@ impl App {
             };
         }
         st.session_file = row["sessionFile"].as_str().map(str::to_string);
-        if st.prime_session.is_none() {
-            st.prime_session = row["sessionId"].as_str().map(str::to_string);
-            if let Some(key) = &st.prime_session {
-                self.rekey_limit(&session.id, key);
+        // The conversation's id: `new_session` replaces it, and the window chosen for the session goes with it, or a
+        // restarted bridge would look for the window under an id the session no longer has.
+        if let Some(current) = row["sessionId"].as_str() {
+            if st.prime_session.as_deref() != Some(current) {
+                let before = limit_key(&session, &st).to_string();
+                st.prime_session = Some(current.to_string());
+                self.rekey_limit(&before, current);
             }
         }
         if let Some(own) = reported {
