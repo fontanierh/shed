@@ -135,7 +135,7 @@ pub struct PrimeRow {
     pub queue: Option<Queue>,
     pub session_file: Option<String>,
     /// The conversation's id, which `new_session` replaces while `id` stays.
-    pub conversation: Option<String>,
+    pub conversation: Option<ConversationId>,
     /// What Prime's own list of sessions knows this one by, running or stopped; its `id` is only for while it runs.
     pub listed_as: Option<String>,
     pub worker_pid: Option<u32>,
@@ -148,7 +148,7 @@ pub struct PrimeRow {
 impl PrimeRow {
     /// `None` for a row without an `activeSessionId`: a session nobody can address.
     pub fn read(row: &Value) -> Option<PrimeRow> {
-        let conversation = text(&row["sessionId"]);
+        let conversation = text(&row["sessionId"]).map(ConversationId);
         Some(PrimeRow {
             id: text(&row["activeSessionId"])?,
             cwd: text(&row["cwd"]).unwrap_or_default(),
@@ -172,7 +172,10 @@ impl PrimeRow {
             cost: row["usage"]["cost"].as_f64(),
             queue: queue(row),
             session_file: text(&row["sessionFile"]),
-            listed_as: conversation.clone().or_else(|| text(&row["id"])),
+            listed_as: conversation
+                .as_ref()
+                .map(|conversation| conversation.as_str().to_string())
+                .or_else(|| text(&row["id"])),
             conversation,
             worker_pid: row["workerPid"].as_u64().map(|pid| pid as u32),
             running_tools: (row["isRunningTools"] == true)
@@ -183,11 +186,23 @@ impl PrimeRow {
     }
 }
 
+/// Prime's id for a conversation (its `sessionId`). A session keeps it when it is reopened under a new
+/// `activeSessionId`, and `new_session` replaces it. The bridge knows a running session by the other id, so the two
+/// must not be mixed up.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConversationId(String);
+
+impl ConversationId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A roster row of a Prime session that stopped. It has no `activeSessionId` left, only what the session was
 /// stored as.
 pub struct InactiveRow {
     pub session_file: Option<String>,
-    pub session_id: Option<String>,
+    pub conversation: Option<ConversationId>,
 }
 
 impl InactiveRow {
@@ -195,9 +210,11 @@ impl InactiveRow {
     pub fn read(row: &Value) -> Option<InactiveRow> {
         let row = InactiveRow {
             session_file: text(&row["sessionFile"]),
-            session_id: text(&row["sessionId"]).or_else(|| text(&row["id"])),
+            conversation: text(&row["sessionId"])
+                .or_else(|| text(&row["id"]))
+                .map(ConversationId),
         };
-        (row.session_file.is_some() || row.session_id.is_some()).then_some(row)
+        (row.session_file.is_some() || row.conversation.is_some()).then_some(row)
     }
 }
 
@@ -532,8 +549,9 @@ mod tests {
 
     #[test]
     fn a_stopped_prime_row_needs_a_file_or_an_id() {
-        let read =
-            |row: Value| InactiveRow::read(&row).map(|row| (row.session_file, row.session_id));
+        let read = |row: Value| {
+            InactiveRow::read(&row).map(|row| (row.session_file, row.conversation.map(|id| id.0)))
+        };
         assert_eq!(
             read(json!({ "sessionFile": "/work/s.jsonl", "sessionId": "s1", "id": "i1" })),
             Some((Some("/work/s.jsonl".into()), Some("s1".into())))

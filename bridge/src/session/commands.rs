@@ -20,7 +20,7 @@ impl App {
         if name.is_empty() {
             bail!("a session name can't be empty");
         }
-        let stopped = session.backend == Backend::Pi && session.state.lock().await.child.is_none();
+        let stopped = session.state.lock().await.stopped();
         if !stopped {
             self.command(session, "set_session_name", json!({ "name": name }))
                 .await?;
@@ -43,28 +43,31 @@ impl App {
         session: &Arc<Session>,
         text: String,
     ) -> Result<Value> {
-        let result = if session.backend == Backend::Prime {
-            let fields =
-                json!({ "message": text, "streamingBehavior": "steer", "queueIfBusy": true });
-            self.command(session, "prompt", fields).await
-        } else {
-            let busy = matches!(
-                session.state.lock().await.summary.status,
-                SessionStatus::Running | SessionStatus::Compacting
-            );
-            if busy {
-                self.command(session, "steer", json!({ "message": text }))
-                    .await
-            } else {
-                match self
-                    .command(session, "prompt", json!({ "message": text }))
-                    .await
-                {
-                    Err(e) if e.to_string().to_lowercase().contains("stream") => {
-                        self.command(session, "steer", json!({ "message": text }))
-                            .await
+        let result = match session.backend {
+            Backend::Prime => {
+                let fields =
+                    json!({ "message": text, "streamingBehavior": "steer", "queueIfBusy": true });
+                self.command(session, "prompt", fields).await
+            }
+            Backend::Pi | Backend::PiSubagent => {
+                let busy = matches!(
+                    session.state.lock().await.summary.status,
+                    SessionStatus::Running | SessionStatus::Compacting
+                );
+                if busy {
+                    self.command(session, "steer", json!({ "message": text }))
+                        .await
+                } else {
+                    match self
+                        .command(session, "prompt", json!({ "message": text }))
+                        .await
+                    {
+                        Err(e) if e.to_string().to_lowercase().contains("stream") => {
+                            self.command(session, "steer", json!({ "message": text }))
+                                .await
+                        }
+                        other => other,
                     }
-                    other => other,
                 }
             }
         };
@@ -82,45 +85,43 @@ impl App {
         instructions: Option<String>,
     ) -> Result<Value> {
         let instructions = instructions.filter(|text| !text.trim().is_empty());
-        if session.backend == Backend::Prime {
-            let message = match instructions {
-                Some(text) => format!("/compact {text}"),
-                None => "/compact".to_string(),
-            };
-            return self
-                .command(
-                    session,
-                    "prompt",
-                    json!({ "message": message, "streamingBehavior": "followUp" }),
-                )
-                .await;
+        match session.backend {
+            Backend::Prime => {
+                let message = match instructions {
+                    Some(text) => format!("/compact {text}"),
+                    None => "/compact".to_string(),
+                };
+                let fields = json!({ "message": message, "streamingBehavior": "followUp" });
+                self.command(session, "prompt", fields).await
+            }
+            Backend::Pi | Backend::PiSubagent => {
+                let fields = match instructions {
+                    Some(text) => json!({ "customInstructions": text }),
+                    None => json!({}),
+                };
+                self.command(session, "compact", fields).await
+            }
         }
-        let fields = match instructions {
-            Some(text) => json!({ "customInstructions": text }),
-            None => json!({}),
-        };
-        self.command(session, "compact", fields).await
     }
 
     /// Prime's `/goal clear`, steered in so a running turn picks it up at its next step instead of after the turn.
     pub async fn clear_goal(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        if session.backend != Backend::Prime {
-            bail!("Only Prime sessions have goals");
+        match session.backend {
+            Backend::Prime => {
+                let fields = json!({ "message": "/goal clear", "streamingBehavior": "steer" });
+                self.command(session, "prompt", fields).await
+            }
+            Backend::Pi | Backend::PiSubagent => bail!("Only Prime sessions have goals"),
         }
-        self.command(
-            session,
-            "prompt",
-            json!({ "message": "/goal clear", "streamingBehavior": "steer" }),
-        )
-        .await
     }
 
     /// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
     /// kernels run on this machine: kill the session's own kernel, found by the session id in its environment, along
     /// with whatever it started. Prime notices the kernel is gone and starts a fresh one on the next Python call.
     pub async fn restart_kernel(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        if session.backend != Backend::Prime {
-            bail!("Only Prime sessions have a Python kernel");
+        match session.backend {
+            Backend::Prime => {}
+            Backend::Pi | Backend::PiSubagent => bail!("Only Prime sessions have a Python kernel"),
         }
         let file = session
             .state
@@ -185,10 +186,9 @@ impl App {
     /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
     /// is queued.
     pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let command = if session.backend == Backend::Prime {
-            "abort_and_send_queued"
-        } else {
-            "abort"
+        let command = match session.backend {
+            Backend::Prime => "abort_and_send_queued",
+            Backend::Pi | Backend::PiSubagent => "abort",
         };
         self.command(session, command, json!({})).await
     }

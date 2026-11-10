@@ -6,10 +6,11 @@ use std::time::Instant;
 
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 use super::{
-    default_title, first_line, limit_key, new_summary, now_ms, App, Backend, Session, SessionState,
+    default_title, first_line, limit_key, new_summary, now_ms, App, Backend, BackendState, Session,
+    SessionState,
 };
 use crate::agent_wire::{self, Attached, InactiveRow, PrimeRow};
 use crate::history;
@@ -42,8 +43,10 @@ impl App {
                             self.remove(&s.id).await;
                             continue;
                         }
-                        let was_attached =
-                            std::mem::replace(&mut s.state.lock().await.attached, false);
+                        let was_attached = match s.state.lock().await.prime_mut() {
+                            Some(prime) => std::mem::replace(&mut prime.attached, false),
+                            None => false,
+                        };
                         if was_attached {
                             let app = self.clone();
                             tokio::spawn(async move {
@@ -69,7 +72,7 @@ impl App {
                 // The row has no id left to find the session by, only what it was stored as.
                 DaemonEvent::Inactive(InactiveRow {
                     session_file,
-                    session_id,
+                    conversation,
                 }) => {
                     let prime: Vec<Arc<Session>> = self
                         .sessions
@@ -86,8 +89,9 @@ impl App {
                             // top-level session's, which `new_session` replaces.
                             (session_file.is_some() && st.session_file == session_file)
                                 || (st.summary.kind == SessionKind::Subagent
-                                    && session_id.is_some()
-                                    && st.prime_session == session_id)
+                                    && conversation.is_some()
+                                    && st.prime().and_then(|prime| prime.conversation.as_ref())
+                                        == conversation.as_ref())
                         };
                         if ended {
                             self.remove(&s.id).await;
@@ -126,13 +130,13 @@ impl App {
                 let mut summary =
                     new_summary(&row.id, AgentKind::Prime, SessionKind::Root, &row.cwd);
                 summary.created_at = row.created_at.unwrap_or_else(now_ms);
-                let session = Arc::new(Session {
-                    id: row.id.clone(),
-                    agent: AgentKind::Prime,
-                    backend: Backend::Prime,
-                    cwd: row.cwd,
-                    state: Mutex::new(SessionState::new(summary, None)),
-                });
+                let state = SessionState::new(summary, None, BackendState::prime());
+                let session = Arc::new(Session::new(
+                    row.id.clone(),
+                    AgentKind::Prime,
+                    row.cwd,
+                    state,
+                ));
                 let mut sessions = self.sessions.write().await;
                 match sessions.iter().find(|s| s.id == row.id) {
                     Some(existing) => existing.clone(),
@@ -178,10 +182,13 @@ impl App {
         // `new_session` replaces the conversation, and the window chosen for the session goes with it, or a
         // restarted bridge would look for the window under an id the session no longer has.
         if let Some(current) = row.conversation {
-            if st.prime_session.as_deref() != Some(current.as_str()) {
+            let known = st.prime().and_then(|prime| prime.conversation.as_ref());
+            if known != Some(&current) {
                 let before = limit_key(&session, &st).to_string();
                 self.rekey_limit(&before, &current);
-                st.prime_session = Some(current);
+                if let Some(prime) = st.prime_mut() {
+                    prime.conversation = Some(current);
+                }
             }
         }
         if let Some(own) = row.cost {
@@ -189,17 +196,21 @@ impl App {
                 .prime_cost(st.session_file.as_deref(), own, st.summary.cost)
                 .max(st.gateway_cost);
         }
-        if let Some(pid) = row.worker_pid {
-            st.worker_pid = Some(pid);
-        }
-        st.tools = match (row.running_tools, st.tools) {
-            (None, _) => None,
-            (Some(calls), Some((n, since))) if n == calls => Some((n, since)),
-            (Some(calls), _) => Some((calls, Instant::now())),
-        };
         let mark = (row.activity, row.message_count);
-        let refresh = st.roster_mark != mark || st.summary.thinking_levels.is_empty();
-        st.roster_mark = mark;
+        let mut changed = true;
+        if let Some(prime) = st.prime_mut() {
+            if let Some(pid) = row.worker_pid {
+                prime.worker_pid = Some(pid);
+            }
+            prime.tools = match (row.running_tools, prime.tools) {
+                (None, _) => None,
+                (Some(calls), Some((n, since))) if n == calls => Some((n, since)),
+                (Some(calls), _) => Some((calls, Instant::now())),
+            };
+            changed = prime.roster_mark != mark;
+            prime.roster_mark = mark;
+        }
+        let refresh = changed || st.summary.thinking_levels.is_empty();
         self.publish_summary(&st);
         if refresh {
             self.schedule_refresh(&session, &mut st);
@@ -215,7 +226,7 @@ impl App {
         }
         let current = {
             let st = session.state.lock().await;
-            st.attached.then(|| {
+            st.prime().is_some_and(|prime| prime.attached).then(|| {
                 st.transcript
                     .items
                     .first()
@@ -248,7 +259,9 @@ impl App {
         let Attached { messages, goal } = Attached::read(&data);
         self.load_history(session, &messages).await;
         let mut st = session.state.lock().await;
-        st.attached = true;
+        if let Some(prime) = st.prime_mut() {
+            prime.attached = true;
+        }
         st.summary.goal = goal;
         self.publish_summary(&st);
         st.transcript.reset(&messages);
@@ -259,24 +272,29 @@ impl App {
     /// Prime: read the history before the last compaction from the session's file, off the session lock. A
     /// failure only leaves the earlier history out.
     pub(super) async fn load_history(&self, session: &Session, messages: &[Value]) {
-        if session.backend != Backend::Prime {
-            return;
-        }
         let summary = agent_wire::compaction_summary(messages);
         let (file, previous) = {
             let mut st = session.state.lock().await;
+            let Some(prime) = st.prime_mut() else {
+                return;
+            };
             if summary.is_none() {
-                st.history = None;
+                prime.history = None;
                 return;
             }
-            (st.session_file.clone(), st.history.clone())
+            let previous = prime.history.clone();
+            (st.session_file.clone(), previous)
         };
         let (Some(file), Some(summary)) = (file, summary.map(str::to_string)) else {
             return;
         };
         let path = file.clone();
         match tokio::task::spawn_blocking(move || history::load(&path, &summary, previous)).await {
-            Ok(Ok(history)) => session.state.lock().await.history = history,
+            Ok(Ok(history)) => {
+                if let Some(prime) = session.state.lock().await.prime_mut() {
+                    prime.history = history;
+                }
+            }
             Ok(Err(e)) => eprintln!("history of {}: {file}: {e}", session.id),
             Err(e) => eprintln!("history of {}: {e}", session.id),
         }

@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use super::*;
-use crate::agent_wire::{InactiveRow, PrimeRow};
+use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
 use crate::prime::DaemonEvent;
 use crate::protocol::{Goal, ModelInfo};
 
@@ -522,7 +522,7 @@ async fn prime_events() {
     rig.settle("its row changes: working, named, a follow-up queued")
         .await;
 
-    p1.state.lock().await.attached = true;
+    p1.state.lock().await.prime_mut().unwrap().attached = true;
     let event = |event: Value| DaemonEvent::SessionEvent {
         active_session_id: "p1".into(),
         event,
@@ -807,10 +807,10 @@ async fn kept(rig: &Rig, session: &Session) -> Value {
         "sessionFile": st.session_file,
         "named": st.named,
         "levelsFor": st.levels_for,
-        "primeSession": st.prime_session,
-        "workerPid": st.worker_pid,
-        "toolCalls": st.tools.map(|(calls, _)| calls),
-        "rosterMark": [st.roster_mark.0, st.roster_mark.1],
+        "primeSession": st.prime().and_then(|prime| prime.conversation.as_ref()).map(ConversationId::as_str),
+        "workerPid": st.worker_pid(),
+        "toolCalls": st.prime().and_then(|prime| prime.tools).map(|(calls, _)| calls),
+        "rosterMark": st.prime().map_or((String::new(), 0), |prime| prime.roster_mark.clone()),
         "items": st.transcript.items,
     });
     rig.steady(&mut kept);
@@ -889,18 +889,15 @@ async fn malformed_state_and_stats() {
                 context_window: Some(200_000),
                 reasoning: true,
             });
-            let mut state = SessionState::new(summary, Some("/work/sessions/earlier.jsonl".into()));
+            let file = Some("/work/sessions/earlier.jsonl".into());
+            let mut state = SessionState::new(summary, file, own(backend, backend == Backend::Pi));
             state.levels_for = Some("example/model-0".into());
-            if backend == Backend::Pi {
-                state.child = Some(crate::rpc::RpcChild::inert());
-            }
-            let session = Arc::new(Session {
-                id: "s1".into(),
+            let session = Arc::new(Session::new(
+                "s1".into(),
                 agent,
-                backend,
-                cwd: "/work/project".into(),
-                state: Mutex::new(state),
-            });
+                "/work/project".into(),
+                state,
+            ));
             let mut refreshed = match rig.app.refresh(&session).await {
                 Ok(()) => kept(rig, &session).await,
                 Err(error) => json!({ "fails": error.to_string() }),
@@ -913,6 +910,21 @@ async fn malformed_state_and_stats() {
             refreshed
         })
         .await;
+    }
+}
+
+/// What a session of this backend starts with. One that is `live` has its agent: a Pi process that does nothing, or
+/// Prime's daemon attached.
+fn own(backend: Backend, live: bool) -> BackendState {
+    match backend {
+        Backend::Pi => BackendState::Pi {
+            child: live.then(crate::rpc::RpcChild::inert),
+        },
+        Backend::Prime => BackendState::Prime(PrimeState {
+            attached: live,
+            ..Default::default()
+        }),
+        Backend::PiSubagent => BackendState::subagent(),
     }
 }
 
@@ -1027,15 +1039,14 @@ async fn malformed_events() {
             summary.queue.steering = vec!["earlier".into()];
             summary.background_jobs = 1;
             summary.question = Some(json!({ "text": "Earlier?" }));
-            let mut state = SessionState::new(summary, None);
+            let mut state = SessionState::new(summary, None, BackendState::pi());
             state.named = true;
-            let session = Arc::new(Session {
-                id: "s1".into(),
-                agent: AgentKind::Pi,
-                backend: Backend::Pi,
-                cwd: "/work/project".into(),
-                state: Mutex::new(state),
-            });
+            let session = Arc::new(Session::new(
+                "s1".into(),
+                AgentKind::Pi,
+                "/work/project".into(),
+                state,
+            ));
             rig.app.sessions.write().await.push(session.clone());
             rig.app.handle_event(&session, event).await;
             let mut kept = kept(rig, &session).await;
@@ -1113,18 +1124,13 @@ async fn commands() {
             if case == "send while it works" {
                 summary.status = SessionStatus::Running;
             }
-            let mut state = SessionState::new(summary, None);
-            state.attached = backend == Backend::Prime;
-            if backend == Backend::Pi && answering {
-                state.child = Some(crate::rpc::RpcChild::inert());
-            }
-            let session = &Arc::new(Session {
-                id: "s1".into(),
+            let state = SessionState::new(summary, None, own(backend, answering));
+            let session = &Arc::new(Session::new(
+                "s1".into(),
                 agent,
-                backend,
-                cwd: "/work/project".into(),
-                state: Mutex::new(state),
-            });
+                "/work/project".into(),
+                state,
+            ));
             let before = kept(rig, session).await;
             let app = &rig.app;
             let answer = match case {

@@ -10,7 +10,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
-use crate::agent_wire::{self, DshSubagent, PiSubagentCall, SessionEvent};
+use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
 use crate::history::{self, History};
 use crate::prime::PrimeDaemon;
 use crate::protocol::{
@@ -65,13 +65,78 @@ pub struct Session {
     pub state: Mutex<SessionState>,
 }
 
+impl Session {
+    /// The backend is read off the state, so the two can't disagree.
+    fn new(id: String, agent: AgentKind, cwd: String, state: SessionState) -> Session {
+        Session {
+            id,
+            agent,
+            backend: state.own.backend(),
+            cwd,
+            state: Mutex::new(state),
+        }
+    }
+}
+
+/// What the bridge keeps for one kind of session only.
+enum BackendState {
+    Pi {
+        /// None while the session is stopped.
+        child: Option<Arc<RpcChild>>,
+    },
+    Prime(PrimeState),
+    PiSubagent {
+        /// Transcript length last sent, to avoid resending unchanged snapshots.
+        sent_messages: usize,
+    },
+}
+
+impl BackendState {
+    fn pi() -> BackendState {
+        BackendState::Pi { child: None }
+    }
+
+    fn prime() -> BackendState {
+        BackendState::Prime(PrimeState::default())
+    }
+
+    fn subagent() -> BackendState {
+        BackendState::PiSubagent {
+            sent_messages: usize::MAX,
+        }
+    }
+
+    fn backend(&self) -> Backend {
+        match self {
+            BackendState::Pi { .. } => Backend::Pi,
+            BackendState::Prime(_) => Backend::Prime,
+            BackendState::PiSubagent { .. } => Backend::PiSubagent,
+        }
+    }
+}
+
+#[derive(Default)]
+struct PrimeState {
+    /// Attached to the daemon, so its events arrive and the transcript is live.
+    attached: bool,
+    /// Roster fields whose change warrants a stats refresh.
+    roster_mark: (String, u64),
+    /// The conversation, which outlives the `activeSessionId` the bridge knows the session by (a reopened session
+    /// gets a new one). What its chosen context window is saved under.
+    conversation: Option<ConversationId>,
+    /// The worker process running this session, for counting its background jobs.
+    worker_pid: Option<u32>,
+    /// Running a tool call, which one (Prime's count of calls so far) and since when.
+    tools: Option<(u64, Instant)>,
+    /// The conversation before the last compaction, which the daemon no longer returns.
+    history: Option<Arc<History>>,
+}
+
 pub struct SessionState {
     pub summary: SessionSummary,
     pub transcript: Transcript,
     pub seq: u64,
-    child: Option<Arc<RpcChild>>,
-    /// Prime: attached to the daemon, so its events arrive and the transcript is live.
-    attached: bool,
+    own: BackendState,
     session_file: Option<String>,
     named: bool,
     stopping: bool,
@@ -79,24 +144,11 @@ pub struct SessionState {
     removed: bool,
     refresh_scheduled: bool,
     levels_for: Option<String>,
-    /// Prime roster fields whose change warrants a stats refresh.
-    roster_mark: (String, u64),
-    /// Pi subagents: transcript length last sent, to avoid resending unchanged snapshots.
-    sent_messages: usize,
-    /// Prime: the conversation's `sessionId`, which outlives the `activeSessionId` the bridge knows it by (a reopened
-    /// session gets a new one). What its chosen context window is saved under.
-    prime_session: Option<String>,
     /// What Open Codex counted for the session (with its subagents, for Prime): its agent reports nothing for models
     /// Open Codex prices, so this is the least the session has cost.
     gateway_cost: f64,
-    /// Prime: the worker process running this session, for counting its background jobs.
-    pub(crate) worker_pid: Option<u32>,
-    /// Prime: running a tool call, which one (Prime's count of calls so far) and since when.
-    tools: Option<(u64, Instant)>,
     /// Watching what the session waits on for a stall.
     stall: crate::stall::Tracker,
-    /// Prime: the conversation before the last compaction, which the daemon no longer returns.
-    history: Option<Arc<History>>,
 }
 
 /// One line per stopped loop in ~/.agent-remote/logs/loops.jsonl, with what was streaming, to tell why models loop.
@@ -212,33 +264,73 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
 }
 
 impl SessionState {
-    fn new(summary: SessionSummary, session_file: Option<String>) -> SessionState {
+    fn new(
+        summary: SessionSummary,
+        session_file: Option<String>,
+        own: BackendState,
+    ) -> SessionState {
         SessionState {
             summary,
             transcript: Transcript::default(),
             seq: 0,
-            child: None,
-            attached: false,
+            own,
             session_file,
             named: false,
             stopping: false,
             removed: false,
             refresh_scheduled: false,
             levels_for: None,
-            roster_mark: (String::new(), 0),
-            sent_messages: usize::MAX,
-            prime_session: None,
             gateway_cost: 0.0,
-            worker_pid: None,
-            tools: None,
             stall: Default::default(),
-            history: None,
         }
+    }
+
+    /// A Pi session with no process: one that was closed, or whose Pi exited.
+    fn stopped(&self) -> bool {
+        matches!(&self.own, BackendState::Pi { child: None })
+    }
+
+    /// The Pi process of a running Pi session.
+    fn child(&self) -> Option<&Arc<RpcChild>> {
+        match &self.own {
+            BackendState::Pi { child } => child.as_ref(),
+            BackendState::Prime(_) | BackendState::PiSubagent { .. } => None,
+        }
+    }
+
+    fn prime(&self) -> Option<&PrimeState> {
+        match &self.own {
+            BackendState::Prime(prime) => Some(prime),
+            BackendState::Pi { .. } | BackendState::PiSubagent { .. } => None,
+        }
+    }
+
+    fn prime_mut(&mut self) -> Option<&mut PrimeState> {
+        match &mut self.own {
+            BackendState::Prime(prime) => Some(prime),
+            BackendState::Pi { .. } | BackendState::PiSubagent { .. } => None,
+        }
+    }
+
+    /// Records how long a subagent's transcript is now, and says whether that differs from what was last sent.
+    fn note_sent(&mut self, messages: usize) -> bool {
+        match &mut self.own {
+            BackendState::PiSubagent { sent_messages } => {
+                std::mem::replace(sent_messages, messages) != messages
+            }
+            BackendState::Pi { .. } | BackendState::Prime(_) => true,
+        }
+    }
+
+    /// The Prime worker process running this session.
+    pub(crate) fn worker_pid(&self) -> Option<u32> {
+        self.prime().and_then(|prime| prime.worker_pid)
     }
 
     /// History applies while the current context starts with the summary that cut it off.
     fn earlier(&self) -> &[Item] {
-        match (&self.history, self.transcript.items.first()) {
+        let history = self.prime().and_then(|prime| prime.history.as_ref());
+        match (history, self.transcript.items.first()) {
             (Some(history), Some(first)) if first.kind == ItemKind::Compaction => &history.items,
             _ => &[],
         }
@@ -269,7 +361,7 @@ impl SessionState {
 impl Session {
     /// The pid of the agent process this session runs in, for finding the ports it listens on.
     pub async fn pid(&self) -> Option<u32> {
-        let child = self.state.lock().await.child.clone();
+        let child = self.state.lock().await.child().cloned();
         child.as_ref().and_then(|child| child.pid())
     }
 }
@@ -313,15 +405,9 @@ impl App {
                 summary.title = r.title.clone();
                 summary.status = SessionStatus::Stopped;
                 summary.created_at = r.created_at;
-                let mut state = SessionState::new(summary, r.session_file);
+                let mut state = SessionState::new(summary, r.session_file, BackendState::pi());
                 state.named = r.title != default_title(&r.cwd);
-                Arc::new(Session {
-                    id: r.id,
-                    agent: r.agent,
-                    backend: Backend::Pi,
-                    cwd: r.cwd,
-                    state: Mutex::new(state),
-                })
+                Arc::new(Session::new(r.id, r.agent, r.cwd, state))
             })
             .collect();
         let limits = std::sync::Mutex::new(limits);
@@ -490,8 +576,8 @@ impl App {
             .state
             .lock()
             .await
-            .child
-            .clone()
+            .child()
+            .cloned()
             .ok_or_else(|| anyhow!("session is not running"))
     }
 
@@ -517,13 +603,8 @@ impl App {
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         let summary = new_summary(&id, agent, SessionKind::Root, &cwd);
-        let session = Arc::new(Session {
-            id,
-            agent,
-            backend: Backend::Pi,
-            cwd,
-            state: Mutex::new(SessionState::new(summary, None)),
-        });
+        let state = SessionState::new(summary, None, BackendState::pi());
+        let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
         self.start_pi(&session, None, model, thinking).await?;
         tokio::spawn(self.clone().save_registry());
@@ -535,12 +616,15 @@ impl App {
         self: &Arc<Self>,
         session: &Arc<Session>,
     ) -> Result<SessionSummary> {
-        if session.backend != Backend::Pi {
-            bail!("only Pi sessions can be resumed; Prime sessions stay live in its daemon");
+        match session.backend {
+            Backend::Pi => {}
+            Backend::Prime | Backend::PiSubagent => {
+                bail!("only Pi sessions can be resumed; Prime sessions stay live in its daemon")
+            }
         }
         let resume = {
             let st = session.state.lock().await;
-            if st.child.is_some() {
+            if st.child().is_some() {
                 bail!("session is already running");
             }
             st.session_file
@@ -588,7 +672,9 @@ impl App {
             let mut st = session.state.lock().await;
             match spawned {
                 Ok(pair) => {
-                    st.child = Some(pair.0.clone());
+                    if let BackendState::Pi { child } = &mut st.own {
+                        *child = Some(pair.0.clone());
+                    }
                     st.stopping = false;
                     st.summary.status = SessionStatus::Starting;
                     st.summary.error = None;
@@ -624,7 +710,7 @@ impl App {
                 let child = {
                     let mut st = session.state.lock().await;
                     st.stopping = true;
-                    st.child.clone()
+                    st.child().cloned()
                 };
                 if let Some(child) = child {
                     child.close().await;
@@ -706,8 +792,8 @@ impl App {
                 ChildOutput::Event(event) => self.handle_event(&session, &event).await,
                 ChildOutput::Exited(reason) => {
                     let mut st = session.state.lock().await;
-                    if st.child.as_ref().is_some_and(|c| Arc::ptr_eq(c, &child)) {
-                        st.child = None;
+                    if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
+                        st.own = BackendState::pi();
                         st.summary.question = None;
                         if st.stopping {
                             st.summary.status = SessionStatus::Stopped;
@@ -840,23 +926,26 @@ impl App {
             "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
              Carry on from where you were; if you were writing a tool call, write it again."
         );
-        if session.backend == Backend::Prime {
-            // Queued as a steer first, so stopping the reply delivers it straight away.
-            let _ = self
-                .command(
-                    session,
-                    "prompt",
-                    json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true }),
-                )
-                .await;
-            let _ = self
-                .command(session, "abort_and_send_queued", json!({}))
-                .await;
-        } else {
-            let _ = self.command(session, "abort", json!({})).await;
-            let _ = self
-                .command(session, "prompt", json!({ "message": note }))
-                .await;
+        match session.backend {
+            Backend::Prime => {
+                // Queued as a steer first, so stopping the reply delivers it straight away.
+                let _ = self
+                    .command(
+                        session,
+                        "prompt",
+                        json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true }),
+                    )
+                    .await;
+                let _ = self
+                    .command(session, "abort_and_send_queued", json!({}))
+                    .await;
+            }
+            Backend::Pi | Backend::PiSubagent => {
+                let _ = self.command(session, "abort", json!({})).await;
+                let _ = self
+                    .command(session, "prompt", json!({ "message": note }))
+                    .await;
+            }
         }
         let mut st = session.state.lock().await;
         self.schedule_refresh(session, &mut st);
@@ -864,7 +953,13 @@ impl App {
 
     /// Reload the whole transcript from the agent and send it to attached clients.
     pub async fn resnapshot(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
-        if session.backend == Backend::Prime && !session.state.lock().await.attached {
+        let detached = session
+            .state
+            .lock()
+            .await
+            .prime()
+            .is_some_and(|prime| !prime.attached);
+        if detached {
             return Ok(());
         }
         let data = self.command(session, "get_messages", json!({})).await?;
@@ -906,7 +1001,9 @@ pub fn expand_dir(path: &str) -> Result<String> {
 
 /// What a session's chosen context window is saved under: a Prime conversation's `sessionId`, else the session's id.
 fn limit_key<'a>(session: &'a Session, st: &'a SessionState) -> &'a str {
-    st.prime_session.as_deref().unwrap_or(&session.id)
+    st.prime()
+        .and_then(|prime| prime.conversation.as_ref())
+        .map_or(&session.id, |conversation| conversation.as_str())
 }
 
 mod commands;

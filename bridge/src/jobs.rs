@@ -344,7 +344,7 @@ impl App {
                     jobs.extend(activities(&shells).filter_map(|a| prime_job(a, SHELL)));
                 }
                 // The count comes from the processes, so list every running one, listed by Prime or not.
-                let worker = session.state.lock().await.worker_pid;
+                let worker = session.state.lock().await.worker_pid();
                 let tree = ProcessTree::snapshot().await;
                 if let (Some(worker), Some(tree)) = (worker, &tree) {
                     let known: HashSet<u32> = jobs.iter().filter_map(|job| job.pid).collect();
@@ -449,7 +449,7 @@ impl App {
                 .state
                 .lock()
                 .await
-                .worker_pid
+                .worker_pid()
                 .ok_or_else(|| anyhow!("This command is no longer available."))?;
             let tree = ProcessTree::snapshot()
                 .await
