@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -478,11 +478,19 @@ fn write_if_changed(path: &PathBuf, bytes: &[u8]) -> Result<()> {
     // Unique per write: two syncs at once must not rename each other's temp file away.
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     std::fs::write(&tmp, bytes)?;
-    // The agents keep some of these to their user alone.
-    if let Ok(old) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&tmp, old.permissions());
+    // The agents keep some of these to their user alone, and they hold keys: a copy that can't be given the same
+    // permissions never takes the file's place.
+    let replaced = std::fs::metadata(path)
+        .map_or(Ok(()), |old| {
+            std::fs::set_permissions(&tmp, old.permissions())
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(e) = replaced {
+        if let Err(left) = std::fs::remove_file(&tmp) {
+            eprintln!("can't remove {}: {left}", tmp.display());
+        }
+        return Err(e).with_context(|| format!("replacing {}", path.display()));
     }
-    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

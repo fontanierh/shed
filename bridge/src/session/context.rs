@@ -32,7 +32,9 @@ impl App {
         let (app, session) = (self.clone(), session.clone());
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(150)).await;
-            let _ = app.refresh(&session).await;
+            if let Err(e) = app.refresh(&session).await {
+                eprintln!("refreshing {} failed: {e}", session.id);
+            }
         });
     }
 
@@ -169,7 +171,9 @@ impl App {
                     session.id
                 );
             }
-            let _ = app.refresh(&session).await;
+            if let Err(e) = app.refresh(&session).await {
+                eprintln!("refreshing {} failed: {e}", session.id);
+            }
         });
     }
 

@@ -18,6 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::channel::Offer;
 use crate::rpc::{ChildOutput, SpawnOptions};
 
 /// The plugin and the profile layer that loads it, kept with the bridge so both always match.
@@ -190,7 +191,7 @@ impl Dsh {
                 };
                 if message["event"] == "ready" {
                     if let Some(up) = up.take() {
-                        let _ = up.send(());
+                        up.offer(());
                     }
                     continue;
                 }
@@ -204,9 +205,9 @@ impl Dsh {
                     reason = e.clone();
                 }
                 for (_, waiter) in dsh.pending.lock().unwrap().drain() {
-                    let _ = waiter.send(Err(reason.clone()));
+                    waiter.offer(Err(reason.clone()));
                 }
-                let _ = dsh.events.send(ChildOutput::Exited(reason));
+                dsh.events.offer(ChildOutput::Exited(reason));
             }
         });
 
@@ -222,10 +223,12 @@ impl Dsh {
                 Err(_) => Err(anyhow!("dsh exited before it started")),
             };
             let failed = opened.is_err();
-            let _ = ready_tx.send(Some(opened.map_err(|e| e.to_string())));
+            ready_tx.offer(Some(opened.map_err(|e| e.to_string())));
             // No session, so no reason to keep dsh running: it exits once its stdin closes.
             if failed {
-                let _ = opener.stdin.lock().await.shutdown().await;
+                if let Err(e) = opener.stdin.lock().await.shutdown().await {
+                    eprintln!("dsh: closing its input after a failed open: {e}");
+                }
             }
         });
         dsh
@@ -457,8 +460,14 @@ impl Dsh {
 
     pub async fn close(&self) {
         let close = self.call("close", json!({}));
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), close).await;
-        let _ = self.stdin.lock().await.shutdown().await;
+        match tokio::time::timeout(std::time::Duration::from_secs(10), close).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => eprintln!("dsh: close failed: {e}"),
+            Err(_) => eprintln!("dsh: no answer to close after 10 seconds"),
+        }
+        if let Err(e) = self.stdin.lock().await.shutdown().await {
+            eprintln!("dsh: closing its input: {e}");
+        }
     }
 
     fn queue_changed(&self) {
@@ -477,7 +486,7 @@ impl Dsh {
     }
 
     fn emit(&self, event: Value) {
-        let _ = self.events.send(ChildOutput::Event(event));
+        self.events.offer(ChildOutput::Event(event));
     }
 
     // ---- the plugin's protocol ----
@@ -491,7 +500,7 @@ impl Dsh {
                 Some(error) => Err(error.as_str().unwrap_or("dsh request failed").to_string()),
                 None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
             };
-            let _ = waiter.send(result);
+            waiter.offer(result);
             return;
         }
         let (events, queue_changed) = {

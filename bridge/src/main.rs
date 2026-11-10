@@ -1,6 +1,10 @@
 //! agent-remote: control Pi, Prime Agent and DeepSeek Harness sessions on this Mac from the macOS and iOS apps.
 
+// Tests may drop the result of clearing a scratch folder. Everything else may not.
+#![cfg_attr(test, allow(clippy::let_underscore_must_use))]
+
 mod agent_wire;
+mod channel;
 mod cost;
 mod dsh;
 mod files;
@@ -108,9 +112,13 @@ async fn main() -> Result<()> {
             }
             eprintln!("shutting down, closing agent sessions");
             // A session that doesn't answer must not hold the restart: launchd waits, then kills.
-            let _ =
-                tokio::time::timeout(std::time::Duration::from_secs(3), shutdown_app.shutdown())
-                    .await;
+            let closing = shutdown_app.shutdown();
+            if tokio::time::timeout(std::time::Duration::from_secs(3), closing)
+                .await
+                .is_err()
+            {
+                eprintln!("agent sessions still closing after 3 seconds, exiting anyway");
+            }
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             // The apps' open connections would keep the server waiting.
             std::process::exit(0);

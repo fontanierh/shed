@@ -77,6 +77,10 @@ pub async fn main(args: Vec<String>) -> ! {
             1
         }
     };
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "a closed stdout leaves nobody to tell, and the exit code stands"
+    )]
     let _ = std::io::stdout().flush();
     std::process::exit(code)
 }
@@ -117,6 +121,10 @@ pub fn install() {
     let link = bin.join("shed-web");
     let target = exe.file_name().map(PathBuf::from).unwrap_or_default();
     if std::fs::read_link(&link).ok().as_deref() != Some(target.as_path()) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "often there is no link yet, and one that stays is reported by the symlink below"
+        )]
         let _ = std::fs::remove_file(&link);
         if let Err(e) = std::os::unix::fs::symlink(&target, &link) {
             eprintln!("shed-web: can't link {}: {e}", link.display());
@@ -559,14 +567,19 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
         "outcome": outcome,
     });
     let dir = home().join(".agent-remote/logs");
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("web.log"))
-    {
-        let _ = writeln!(file, "{line}");
-    }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "this runs inside an agent's tool call, where stderr is the agent's reading: a log line lost is not \
+                  the agent's business"
+    )]
+    let _ = std::fs::create_dir_all(&dir)
+        .and_then(|()| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(dir.join("web.log"))
+        })
+        .and_then(|mut file| writeln!(file, "{line}"));
 }
 
 /// Where a reply of Firecrawl's says the credits it used: a search at its top, a scrape in its page's metadata.

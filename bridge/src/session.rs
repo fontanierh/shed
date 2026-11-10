@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
 use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
+use crate::channel::Offer;
 use crate::history::{self, History};
 use crate::prime::PrimeDaemon;
 use crate::protocol::{
@@ -171,12 +172,13 @@ fn log_loop(
     });
     let path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".agent-remote/logs/loops.jsonl");
-    if let Ok(mut file) = std::fs::OpenOptions::new()
+    let written = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path)
-    {
-        let _ = writeln!(file, "{line}");
+        .open(&path)
+        .and_then(|mut file| writeln!(file, "{line}"));
+    if let Err(e) = written {
+        eprintln!("can't log the loop to {}: {e}", path.display());
     }
 }
 
@@ -464,7 +466,7 @@ impl App {
     }
 
     pub fn broadcast_global(&self, msg: &ServerMessage) {
-        let _ = self.hub.send(Arc::new(Envelope {
+        self.hub.offer(Arc::new(Envelope {
             session_id: None,
             seq: 0,
             json: to_json(msg),
@@ -478,7 +480,7 @@ impl App {
             seq: st.seq,
             json: to_json(msg),
         };
-        let _ = self.hub.send(Arc::new(envelope));
+        self.hub.offer(Arc::new(envelope));
     }
 
     fn publish_summary(&self, st: &SessionState) {
@@ -646,7 +648,12 @@ impl App {
         // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
         // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
         let guide = self.store.dir().join("guide.md");
-        let _ = std::fs::write(&guide, crate::guide::text(crate::rpc::AgentKind::Pi));
+        if let Err(e) = std::fs::write(&guide, crate::guide::text(crate::rpc::AgentKind::Pi)) {
+            eprintln!(
+                "can't write the guide for Pi's subagents to {}: {e}",
+                guide.display()
+            );
+        }
         let env = vec![
             (
                 "AGENT_REMOTE_JOBS_DIR".to_string(),
@@ -775,7 +782,9 @@ impl App {
     pub async fn shutdown(&self) {
         let sessions = self.sessions.read().await.clone();
         for s in sessions.iter().filter(|s| s.backend == Backend::Pi) {
-            let _ = self.close_session(s).await;
+            if let Err(e) = self.close_session(s).await {
+                eprintln!("closing {} failed: {e}", s.id);
+            }
         }
     }
 
@@ -895,7 +904,9 @@ impl App {
         if resnapshot {
             let (app, session) = (self.clone(), session.clone());
             tokio::spawn(async move {
-                let _ = app.resnapshot(&session).await;
+                if let Err(e) = app.resnapshot(&session).await {
+                    eprintln!("reloading the transcript of {} failed: {e}", session.id);
+                }
             });
         }
         if let Some((reason, sample)) = looping {
@@ -926,26 +937,28 @@ impl App {
             "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
              Carry on from where you were; if you were writing a tool call, write it again."
         );
-        match session.backend {
+        let stopped = match session.backend {
             Backend::Prime => {
                 // Queued as a steer first, so stopping the reply delivers it straight away.
-                let _ = self
-                    .command(
-                        session,
-                        "prompt",
-                        json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true }),
-                    )
-                    .await;
-                let _ = self
-                    .command(session, "abort_and_send_queued", json!({}))
-                    .await;
+                let steer =
+                    json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true });
+                [
+                    self.command(session, "prompt", steer).await,
+                    self.command(session, "abort_and_send_queued", json!({}))
+                        .await,
+                ]
             }
-            Backend::Pi | Backend::PiSubagent => {
-                let _ = self.command(session, "abort", json!({})).await;
-                let _ = self
-                    .command(session, "prompt", json!({ "message": note }))
-                    .await;
-            }
+            Backend::Pi | Backend::PiSubagent => [
+                self.command(session, "abort", json!({})).await,
+                self.command(session, "prompt", json!({ "message": note }))
+                    .await,
+            ],
+        };
+        for error in stopped.into_iter().filter_map(Result::err) {
+            eprintln!(
+                "stopping the looping reply of {} failed: {error}",
+                session.id
+            );
         }
         let mut st = session.state.lock().await;
         self.schedule_refresh(session, &mut st);

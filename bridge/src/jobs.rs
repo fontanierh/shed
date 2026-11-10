@@ -500,10 +500,13 @@ impl App {
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     if alive(pid) {
-                        let _ = tokio::process::Command::new("/bin/kill")
+                        let killed = tokio::process::Command::new("/bin/kill")
                             .args(["-KILL", "--", &group])
                             .status()
                             .await;
+                        if let Err(e) = killed {
+                            eprintln!("job {pid} ignored the stop and could not be killed: {e}");
+                        }
                     }
                 });
                 Ok(status.success())
@@ -598,7 +601,9 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
             if status == "running" && (lost.exists() || !pid.is_some_and(alive)) {
                 status = "lost".into();
                 if !lost.exists() {
-                    let _ = std::fs::write(&lost, b"");
+                    if let Err(e) = std::fs::write(&lost, b"") {
+                        eprintln!("can't note a lost job in {}: {e}", lost.display());
+                    }
                 }
             }
             let started_at = j["startedAt"].as_str().and_then(parse_iso_ms);
@@ -619,7 +624,13 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
 
 /// A deleted session's job records and logs go with it.
 pub fn forget(session_id: &str) {
-    let _ = std::fs::remove_dir_all(pi_dir(session_id));
+    let dir = pi_dir(session_id);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        // A session that never ran a job has no folder.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!("can't remove the job records in {}: {e}", dir.display()),
+    }
 }
 
 /// The running Pi jobs of a session, for the summary: how many, and the one stuck on a permission prompt or else

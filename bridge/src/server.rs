@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast::error::RecvError, mpsc};
 
+use crate::channel::Offer;
 use crate::protocol::{ClientMessage, ClientOp, ServerMessage};
 use crate::session::{attach_snapshot, App};
 
@@ -84,7 +85,7 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     let mut hub = app.hub.subscribe();
     // Session id -> sequence number of the snapshot this client received.
     let mut attached: HashMap<String, u64> = HashMap::new();
-    let _ = out.send(encode(&ServerMessage::Sessions {
+    out.offer(encode(&ServerMessage::Sessions {
         sessions: app.summaries().await,
     }));
 
@@ -97,10 +98,10 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
             },
             envelope = hub.recv() => match envelope {
                 Ok(env) => match &env.session_id {
-                    None => { let _ = out.send(env.json.clone()); }
+                    None => out.offer(env.json.clone()),
                     Some(id) => {
                         if attached.get(id).is_some_and(|&snap| env.seq > snap) {
-                            let _ = out.send(env.json.clone());
+                            out.offer(env.json.clone());
                         }
                     }
                 },
@@ -112,7 +113,7 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
                             send_snapshot(&out, &mut attached, &session).await;
                         }
                     }
-                    let _ = out.send(encode(&ServerMessage::Sessions { sessions: app.summaries().await }));
+                    out.offer(encode(&ServerMessage::Sessions { sessions: app.summaries().await }));
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -127,10 +128,10 @@ async fn send_snapshot(
     session: &crate::session::Session,
 ) {
     let (seq, summary, snapshot) = attach_snapshot(session).await;
-    let _ = out.send(encode(&ServerMessage::Session {
+    out.offer(encode(&ServerMessage::Session {
         session: Box::new(summary),
     }));
-    let _ = out.send(encode(&snapshot));
+    out.offer(encode(&snapshot));
     attached.insert(session.id.clone(), seq);
 }
 
@@ -146,7 +147,7 @@ async fn handle_text(
             let id = serde_json::from_str::<Value>(text)
                 .ok()
                 .and_then(|v| v["id"].as_str().map(str::to_string));
-            let _ = out.send(reply(id, Err(anyhow::anyhow!("invalid message: {e}"))));
+            out.offer(reply(id, Err(anyhow::anyhow!("invalid message: {e}"))));
             return;
         }
     };
@@ -164,11 +165,11 @@ async fn handle_text(
                 },
                 Err(e) => Err(e),
             };
-            let _ = out.send(reply(id, result));
+            out.offer(reply(id, result));
         }
         ClientOp::Detach { session_id } => {
             attached.remove(&session_id);
-            let _ = out.send(reply(id, Ok(Value::Null)));
+            out.offer(reply(id, Ok(Value::Null)));
         }
         op => {
             // Everything else may wait on the agent (compaction can take minutes), so run it apart
@@ -176,7 +177,7 @@ async fn handle_text(
             let (app, out) = (app.clone(), out.clone());
             tokio::spawn(async move {
                 let result = run_op(&app, op).await;
-                let _ = out.send(reply(id, result));
+                out.offer(reply(id, result));
             });
         }
     }
