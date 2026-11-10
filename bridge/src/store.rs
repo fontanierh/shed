@@ -9,6 +9,22 @@ use serde_json::json;
 
 use crate::rpc::AgentKind;
 
+/// A model's default window: under its own "provider/id", or, for a model reached through Open Codex, under the
+/// provider it comes from. Open Codex names the API-key accounts `openai-apikey/…` and `anthropic-apikey/…`, and
+/// lists the ChatGPT subscription's models bare: all of them are "openai/…" or "anthropic/…" here, so one entry
+/// covers a model however it is reached.
+pub fn default_window(windows: &HashMap<String, u64>, provider: &str, id: &str) -> Option<u64> {
+    if let Some(window) = windows.get(&format!("{provider}/{id}")) {
+        return Some(*window);
+    }
+    if provider != crate::opencodex::PROVIDER {
+        return None;
+    }
+    let (namespace, model) = id.split_once('/').unwrap_or(("openai", id));
+    let namespace = namespace.strip_suffix("-apikey").unwrap_or(namespace);
+    windows.get(&format!("{namespace}/{model}")).copied()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
@@ -92,7 +108,7 @@ impl Store {
     }
 
     /// The window each model keeps to by default, by "provider/id" (`defaultContextWindows` in config.json, which
-    /// setup/install.sh fills in).
+    /// setup/install.sh fills in). `default_window` looks one model up in it.
     pub fn default_windows(&self) -> HashMap<String, u64> {
         std::fs::read_to_string(self.dir.join("config.json"))
             .ok()
@@ -198,6 +214,28 @@ mod tests {
         // And it is the same one from then on.
         assert_eq!(store.token().unwrap(), token);
         std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_default_window_covers_its_model_through_open_codex() {
+        let windows: HashMap<String, u64> = [
+            ("openai/gpt-6.1-terra".to_string(), 272_000),
+            ("opencodex/mistral/large".to_string(), 64_000),
+        ]
+        .into();
+        let window = |provider, id| default_window(&windows, provider, id);
+        assert_eq!(window("openai", "gpt-6.1-terra"), Some(272_000));
+        // The ChatGPT subscription's bare id, and the API key's account.
+        assert_eq!(window("opencodex", "gpt-6.1-terra"), Some(272_000));
+        assert_eq!(
+            window("opencodex", "openai-apikey/gpt-6.1-terra"),
+            Some(272_000)
+        );
+        // Its own key comes first, and nothing else matches by accident.
+        assert_eq!(window("opencodex", "mistral/large"), Some(64_000));
+        assert_eq!(window("opencodex", "gpt-6.1-terra-fast"), None);
+        assert_eq!(window("opencodex", "anthropic-apikey/gpt-6.1-terra"), None);
+        assert_eq!(window("mistral", "gpt-6.1-terra"), None);
     }
 
     #[test]

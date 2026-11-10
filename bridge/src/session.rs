@@ -1904,12 +1904,9 @@ impl App {
             .unwrap()
             .get(limit_key(session, &st))
             .copied();
-        let model_key = st
-            .summary
-            .model
-            .as_ref()
-            .map(|m| format!("{}/{}", m.provider, m.id));
-        let standard = model_key.and_then(|key| self.store.default_windows().get(&key).copied());
+        let standard = st.summary.model.as_ref().and_then(|m| {
+            crate::store::default_window(&self.store.default_windows(), &m.provider, &m.id)
+        });
         st.summary.context_limit = chosen;
         st.summary.standard_window = standard;
         let limit = chosen.or(standard);
