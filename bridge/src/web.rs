@@ -389,6 +389,47 @@ impl Request {
     }
 }
 
+// The readers in this file take what they can of what comes from outside: a part that is missing, or of another
+// type than expected, reads as absent, never as an error.
+
+fn text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
+fn list(value: &Value) -> &[Value] {
+    value.as_array().map(Vec::as_slice).unwrap_or_default()
+}
+
+/// ~/.agent-remote/config.json, as far as the web goes.
+struct Config {
+    web: Settings,
+}
+
+impl Config {
+    fn read(config: &Value) -> Config {
+        Config {
+            web: Settings::read(&config["web"]),
+        }
+    }
+}
+
+/// The config's `web` entry.
+struct Settings {
+    provider: Option<String>,
+    firecrawl_api_key: Option<String>,
+    firecrawl_url: Option<String>,
+}
+
+impl Settings {
+    fn read(web: &Value) -> Settings {
+        Settings {
+            provider: text(&web["provider"]),
+            firecrawl_api_key: text(&web["firecrawlApiKey"]),
+            firecrawl_url: text(&web["firecrawlUrl"]),
+        }
+    }
+}
+
 enum Provider {
     Firecrawl { key: String, base: String },
 }
@@ -399,15 +440,18 @@ impl Provider {
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
-        Self::from(&config["web"], std::env::var("FIRECRAWL_API_KEY").ok())
+        Self::in_config(&config, std::env::var("FIRECRAWL_API_KEY").ok())
     }
 
-    fn from(web: &Value, env_key: Option<String>) -> Result<Provider> {
-        match web["provider"].as_str().unwrap_or("firecrawl") {
+    fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
+        Self::from(Config::read(config).web, env_key)
+    }
+
+    fn from(web: Settings, env_key: Option<String>) -> Result<Provider> {
+        match web.provider.as_deref().unwrap_or("firecrawl") {
             "firecrawl" => {
-                let key = web["firecrawlApiKey"]
-                    .as_str()
-                    .map(str::to_string)
+                let key = web
+                    .firecrawl_api_key
                     .or(env_key)
                     .filter(|k| !k.trim().is_empty())
                     .ok_or_else(|| {
@@ -416,8 +460,9 @@ impl Provider {
                              `web.firecrawlApiKey` in ~/.agent-remote/config.json"
                         )
                     })?;
-                let base = web["firecrawlUrl"]
-                    .as_str()
+                let base = web
+                    .firecrawl_url
+                    .as_deref()
                     .unwrap_or(FIRECRAWL)
                     .trim_end_matches('/')
                     .to_string();
@@ -461,11 +506,31 @@ async fn firecrawl(key: &str, url: &str, body: &Map<String, Value>) -> Result<Va
         .map_err(|e| anyhow!("can't reach Firecrawl: {e}"))?;
     let status = response.status();
     let text = response.text().await.unwrap_or_default();
-    let reply: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-    if !status.is_success() || reply["success"] == json!(false) {
-        let message = reply["error"]
-            .as_str()
-            .map(str::to_string)
+    answer(status, &text)
+}
+
+/// What any reply of Firecrawl's says of how it went.
+struct Outcome {
+    success: Option<bool>,
+    error: Option<String>,
+}
+
+impl Outcome {
+    fn read(reply: &Value) -> Outcome {
+        Outcome {
+            success: reply["success"].as_bool(),
+            error: text(&reply["error"]),
+        }
+    }
+}
+
+/// Firecrawl's reply, or what it said went wrong.
+fn answer(status: reqwest::StatusCode, text: &str) -> Result<Value> {
+    let reply: Value = serde_json::from_str(text).unwrap_or(Value::Null);
+    let outcome = Outcome::read(&reply);
+    if !status.is_success() || outcome.success == Some(false) {
+        let message = outcome
+            .error
             .unwrap_or_else(|| text.chars().take(500).collect());
         bail!("Firecrawl answered {status}: {message}");
     }
@@ -479,12 +544,7 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
         What::Fetch(u) => ("fetch", u.as_str()),
     };
     let outcome = match result {
-        Ok(reply) => {
-            let credits = reply["creditsUsed"]
-                .as_u64()
-                .or(reply["data"]["metadata"]["creditsUsed"].as_u64());
-            json!({ "ok": true, "credits": credits })
-        }
+        Ok(reply) => json!({ "ok": true, "credits": credits(reply) }),
         Err(e) => json!({ "ok": false, "error": format!("{e:#}") }),
     };
     let line = json!({
@@ -507,6 +567,27 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
     {
         let _ = writeln!(file, "{line}");
     }
+}
+
+/// Where a reply of Firecrawl's says the credits it used: a search at its top, a scrape in its page's metadata.
+struct Used {
+    credits_used: Option<u64>,
+    page_credits_used: Option<u64>,
+}
+
+impl Used {
+    fn read(reply: &Value) -> Used {
+        Used {
+            credits_used: reply["creditsUsed"].as_u64(),
+            page_credits_used: reply["data"]["metadata"]["creditsUsed"].as_u64(),
+        }
+    }
+}
+
+/// The credits a reply says it used: a search says so itself, a scrape in its page's metadata.
+fn credits(reply: &Value) -> Option<u64> {
+    let used = Used::read(reply);
+    used.credits_used.or(used.page_credits_used)
 }
 
 /// A file name for what was read from `url`: its host and path, readable, plus a short hash so two pages differ.
@@ -571,73 +652,147 @@ fn snippet(text: &str) -> String {
     }
 }
 
+/// Firecrawl's reply to a search. Its credits go out in `--json` as they came, whatever they are.
+struct Found {
+    credits_used: Value,
+    data: Results,
+}
+
+impl Found {
+    fn read(reply: &Value) -> Found {
+        Found {
+            credits_used: reply["creditsUsed"].clone(),
+            data: Results::read(&reply["data"]),
+        }
+    }
+}
+
+/// A search's results, by where they were found.
+struct Results {
+    web: Vec<Hit>,
+    news: Vec<Hit>,
+    images: Vec<Hit>,
+}
+
+impl Results {
+    fn read(data: &Value) -> Results {
+        let hits = |kind: &str| list(&data[kind]).iter().map(Hit::read).collect();
+        Results {
+            web: hits("web"),
+            news: hits("news"),
+            images: hits("images"),
+        }
+    }
+}
+
+/// One result of a search. Its title, date and image link go out in `--json` as they came, whatever they are.
+struct Hit {
+    url: Option<String>,
+    title: Value,
+    description: Option<String>,
+    snippet: Option<String>,
+    date: Value,
+    image_url: Value,
+    markdown: Option<String>,
+}
+
+impl Hit {
+    fn read(hit: &Value) -> Hit {
+        Hit {
+            url: text(&hit["url"]),
+            title: hit["title"].clone(),
+            description: text(&hit["description"]),
+            snippet: text(&hit["snippet"]),
+            date: hit["date"].clone(),
+            image_url: hit["imageUrl"].clone(),
+            markdown: text(&hit["markdown"]),
+        }
+    }
+}
+
 fn present_search(reply: &Value, request: &Request) -> Result<String> {
+    let reply = Found::read(reply);
     let dir = request.files();
     let mut sources = vec![];
-    for kind in ["web", "news", "images"] {
-        for item in reply["data"][kind].as_array().into_iter().flatten() {
-            let url = item["url"].as_str().unwrap_or_default();
+    let mut out = String::new();
+    let Results { web, news, images } = &reply.data;
+    for (kind, hits) in [("web", web), ("news", news), ("images", images)] {
+        for hit in hits {
+            let url = hit.url.as_deref().unwrap_or_default();
+            let excerpt = hit
+                .description
+                .as_deref()
+                .or(hit.snippet.as_deref())
+                .map(snippet);
             let mut source = json!({
                 "kind": kind,
                 "url": url,
-                "title": item["title"],
-                "snippet": item["description"].as_str().or(item["snippet"].as_str()).map(snippet),
-                "publishedAt": item["date"],
+                "title": hit.title,
+                "snippet": excerpt,
+                "publishedAt": hit.date,
             });
-            if kind == "images" {
-                source["imageUrl"] = item["imageUrl"].clone();
+            let title = hit.title.as_str().filter(|t| !t.is_empty()).unwrap_or(url);
+            out += &format!("{}. [{title}]({url})", sources.len() + 1);
+            if kind != "web" {
+                out += &format!(" ({kind})");
             }
-            if let Some(markdown) = item["markdown"].as_str().filter(|m| !m.is_empty()) {
+            if let Some(date) = hit.date.as_str() {
+                out += &format!(" · {date}");
+            }
+            out += "\n";
+            if kind == "images" {
+                source["imageUrl"] = hit.image_url.clone();
+                if let Some(image) = hit.image_url.as_str() {
+                    out += &format!("   image: {image}\n");
+                }
+            }
+            if let Some(text) = excerpt.as_deref().filter(|t| !t.is_empty()) {
+                out += &format!("   {text}\n");
+            }
+            if let Some(markdown) = hit.markdown.as_deref().filter(|m| !m.is_empty()) {
                 let path = save(&dir, &file_name(url, "md"), markdown.as_bytes())?;
-                source["file"] = json!(path);
-                source["characters"] = json!(chars(markdown));
-                source["markdown"] = json!(if request.full {
+                let characters = chars(markdown);
+                let shown = if request.full {
                     markdown
                 } else {
                     head(markdown, SCRAPED_PREVIEW)
-                });
+                };
+                source["file"] = json!(path);
+                source["characters"] = json!(characters);
+                source["markdown"] = json!(shown);
+                out += &format!(
+                    "   Page as Markdown ({} characters): {}\n",
+                    thousands(characters),
+                    path.display()
+                );
+                for line in shown.lines() {
+                    out += &format!("   > {line}\n");
+                }
             }
             sources.push(source);
         }
     }
     if request.json {
-        let out = json!({ "sources": sources, "creditsUsed": reply["creditsUsed"] });
+        let out = json!({ "sources": sources, "creditsUsed": reply.credits_used });
         return Ok(format!("{out}\n"));
     }
     if sources.is_empty() {
         return Ok("No results.\n".into());
     }
-    let mut out = String::new();
-    for (i, s) in sources.iter().enumerate() {
-        let url = s["url"].as_str().unwrap_or_default();
-        let title = s["title"].as_str().filter(|t| !t.is_empty()).unwrap_or(url);
-        out += &format!("{}. [{title}]({url})", i + 1);
-        if s["kind"] != "web" {
-            out += &format!(" ({})", s["kind"].as_str().unwrap_or_default());
-        }
-        if let Some(date) = s["publishedAt"].as_str() {
-            out += &format!(" · {date}");
-        }
-        out += "\n";
-        if let Some(image) = s["imageUrl"].as_str() {
-            out += &format!("   image: {image}\n");
-        }
-        if let Some(text) = s["snippet"].as_str().filter(|t| !t.is_empty()) {
-            out += &format!("   {text}\n");
-        }
-        if let (Some(file), Some(n)) = (s["file"].as_str(), s["characters"].as_u64()) {
-            out += &format!(
-                "   Page as Markdown ({} characters): {file}\n",
-                thousands(n as usize)
-            );
-            if let Some(md) = s["markdown"].as_str() {
-                for line in md.lines() {
-                    out += &format!("   > {line}\n");
-                }
-            }
+    Ok(out)
+}
+
+/// Firecrawl's reply to a scrape.
+struct Scraped {
+    data: Page,
+}
+
+impl Scraped {
+    fn read(reply: &Value) -> Scraped {
+        Scraped {
+            data: Page::read(&reply["data"]),
         }
     }
-    Ok(out)
 }
 
 /// The parts of a scrape `present_page` lays out itself; anything else in it is passed on as it is.
@@ -652,25 +807,76 @@ const HANDLED: &[&str] = &[
     "metadata",
 ];
 
+/// A scraped page: the parts `present_page` lays out itself, and in `other` anything else, passed on as it is.
+struct Page {
+    markdown: Option<String>,
+    summary: Option<String>,
+    html: Option<String>,
+    raw_html: Option<String>,
+    raw_base64: Option<String>,
+    screenshot: Option<String>,
+    warning: Option<String>,
+    /// Goes out whole in `--json`; `Metadata` is what is read of it.
+    metadata: Value,
+    other: Map<String, Value>,
+}
+
+impl Page {
+    fn read(data: &Value) -> Page {
+        Page {
+            markdown: text(&data["markdown"]),
+            summary: text(&data["summary"]),
+            html: text(&data["html"]),
+            raw_html: text(&data["rawHtml"]),
+            raw_base64: text(&data["rawBase64"]),
+            screenshot: text(&data["screenshot"]),
+            warning: text(&data["warning"]),
+            metadata: data["metadata"].clone(),
+            other: data
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(field, _)| !HANDLED.contains(&field.as_str()))
+                .map(|(field, value)| (field.clone(), value.clone()))
+                .collect(),
+        }
+    }
+}
+
+/// What is read of a page's `metadata`. Its status and title go out in `--json` as they came, whatever they are.
+struct Metadata {
+    url: Option<String>,
+    source_url: Option<String>,
+    status_code: Value,
+    title: Value,
+}
+
+impl Metadata {
+    fn read(metadata: &Value) -> Metadata {
+        Metadata {
+            url: text(&metadata["url"]),
+            source_url: text(&metadata["sourceURL"]),
+            status_code: metadata["statusCode"].clone(),
+            title: metadata["title"].clone(),
+        }
+    }
+}
+
 async fn present_page(reply: &Value, request: &Request) -> Result<String> {
-    let data = &reply["data"];
-    let meta = &data["metadata"];
-    let url = meta["url"]
-        .as_str()
-        .or(meta["sourceURL"].as_str())
-        .unwrap_or_default()
-        .to_string();
+    let data = Scraped::read(reply).data;
+    let meta = Metadata::read(&data.metadata);
+    let url = meta.url.or(meta.source_url).unwrap_or_default();
     let dir = request.files();
     let mut page = json!({
         "url": url,
-        "statusCode": meta["statusCode"],
-        "title": meta["title"],
+        "statusCode": meta.status_code,
+        "title": meta.title,
     });
     let mut notes: Vec<String> = vec![];
 
     // Text a reader wants in the reply: whole when short (or asked for), else its start and the whole in a file.
-    let mut text = |field: &str, ext: &str, page: &mut Value| -> Result<()> {
-        let Some(content) = data[field].as_str() else {
+    let mut text = |field: &str, found: Option<&str>, ext: &str, page: &mut Value| -> Result<()> {
+        let Some(content) = found else {
             return Ok(());
         };
         let n = chars(content);
@@ -690,12 +896,15 @@ async fn present_page(reply: &Value, request: &Request) -> Result<String> {
         ));
         Ok(())
     };
-    text("markdown", "md", &mut page)?;
-    text("summary", "summary.md", &mut page)?;
+    text("markdown", data.markdown.as_deref(), "md", &mut page)?;
+    text("summary", data.summary.as_deref(), "summary.md", &mut page)?;
 
     // HTML goes to a file (and inline too when the whole page was asked for).
-    for (field, ext) in [("html", "html"), ("rawHtml", "raw.html")] {
-        if let Some(content) = data[field].as_str() {
+    for (field, content, ext) in [
+        ("html", &data.html, "html"),
+        ("rawHtml", &data.raw_html, "raw.html"),
+    ] {
+        if let Some(content) = content {
             let path = save(&dir, &file_name(&url, ext), content.as_bytes())?;
             page[format!("{field}File")] = json!(path);
             page[format!("{field}Characters")] = json!(chars(content));
@@ -705,26 +914,26 @@ async fn present_page(reply: &Value, request: &Request) -> Result<String> {
         }
     }
     // The response body as the server sent it, decoded, in a file.
-    if let Some(raw) = data["rawBase64"].as_str() {
+    if let Some(raw) = &data.raw_base64 {
         let path = save(&dir, &file_name(&url, "raw"), &base64_decode(raw)?)?;
         page["rawFile"] = json!(path);
     }
     // Every other format as Firecrawl returns it (links, images, json, an answer, a product, audio and video links…),
     // so a format added there needs nothing here.
-    for (field, value) in data.as_object().into_iter().flatten() {
-        if !HANDLED.contains(&field.as_str()) && !value.is_null() {
+    for (field, value) in &data.other {
+        if !value.is_null() {
             page[field] = value.clone();
         }
     }
-    if let Some(shot) = data["screenshot"].as_str() {
+    if let Some(shot) = &data.screenshot {
         page["screenshotFile"] = json!(screenshot(shot, &dir, &url).await?);
     }
-    if let Some(warning) = data["warning"].as_str() {
+    if let Some(warning) = &data.warning {
         page["warning"] = json!(warning);
     }
 
     if request.json {
-        page["metadata"] = meta.clone();
+        page["metadata"] = data.metadata.clone();
         return Ok(format!("{page}\n"));
     }
     let mut out = String::new();
@@ -745,8 +954,8 @@ async fn present_page(reply: &Value, request: &Request) -> Result<String> {
     if let Some(markdown) = page["markdown"].as_str() {
         out += &format!("\n{markdown}\n");
     }
-    for field in data.as_object().into_iter().flatten().map(|(f, _)| f) {
-        if HANDLED.contains(&field.as_str()) || page[field].is_null() {
+    for field in data.other.keys() {
+        if page[field].is_null() {
             continue;
         }
         let value = &page[field];
@@ -924,13 +1133,17 @@ mod tests {
     fn the_key_comes_from_the_config_or_the_environment() {
         let config = json!({ "provider": "firecrawl", "firecrawlApiKey": "fc-config" });
         let Provider::Firecrawl { key, base } =
-            Provider::from(&config, Some("fc-env".into())).unwrap();
+            Provider::from(Settings::read(&config), Some("fc-env".into())).unwrap();
         assert_eq!((key.as_str(), base.as_str()), ("fc-config", FIRECRAWL));
         let Provider::Firecrawl { key, .. } =
-            Provider::from(&Value::Null, Some("fc-env".into())).unwrap();
+            Provider::from(Settings::read(&Value::Null), Some("fc-env".into())).unwrap();
         assert_eq!(key, "fc-env");
-        assert!(Provider::from(&Value::Null, None).is_err());
-        assert!(Provider::from(&json!({ "provider": "other" }), Some("k".into())).is_err());
+        assert!(Provider::from(Settings::read(&Value::Null), None).is_err());
+        assert!(Provider::from(
+            Settings::read(&json!({ "provider": "other" })),
+            Some("k".into())
+        )
+        .is_err());
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1072,5 +1285,553 @@ mod tests {
             prepend_path(dir, "/h/.agent-remote/bin:/usr/bin"),
             "/h/.agent-remote/bin:/usr/bin"
         );
+    }
+
+    fn firecrawl_of(provider: Result<Provider>) -> (String, String) {
+        let Provider::Firecrawl { key, base } = provider.unwrap();
+        (key, base)
+    }
+
+    #[test]
+    fn the_web_config_s_mistyped_parts_fall_back() {
+        let both = |key: &str, base: &str| (key.to_string(), base.to_string());
+        // A provider that isn't text is Firecrawl, and an address loses its last slashes.
+        let web = json!({
+            "provider": 7,
+            "firecrawlApiKey": "fc-config",
+            "firecrawlUrl": "http://firecrawl.test//",
+            "extra": true,
+        });
+        assert_eq!(
+            firecrawl_of(Provider::from(Settings::read(&web), None)),
+            both("fc-config", "http://firecrawl.test")
+        );
+        // A key or an address that isn't text is as good as missing.
+        let web = json!({ "firecrawlApiKey": 7, "firecrawlUrl": 7 });
+        assert_eq!(
+            firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
+            both("fc-env", FIRECRAWL)
+        );
+        // So is a `web` that isn't an object.
+        for web in [
+            json!("other"),
+            json!(["other", "fc-config", "http://firecrawl.test"]),
+            json!(true),
+        ] {
+            assert_eq!(
+                firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
+                both("fc-env", FIRECRAWL),
+                "{web}"
+            );
+        }
+        // A blank key is no key, and one in the config hides the environment's.
+        assert!(Provider::from(Settings::read(&Value::Null), Some(" ".into())).is_err());
+        assert!(Provider::from(
+            Settings::read(&json!({ "firecrawlApiKey": "" })),
+            Some("fc-env".into())
+        )
+        .is_err());
+        let Err(unknown) = Provider::from(
+            Settings::read(&json!({ "provider": "other" })),
+            Some("fc-env".into()),
+        ) else {
+            panic!("an unknown provider was taken")
+        };
+        assert_eq!(
+            unknown.to_string(),
+            "Shed has no web provider called \"other\" (it knows: firecrawl)"
+        );
+
+        // `web` within the whole config.
+        let config = json!({ "web": { "firecrawlApiKey": "fc-config" }, "opencodex": false });
+        assert_eq!(
+            firecrawl_of(Provider::in_config(&config, None)),
+            both("fc-config", FIRECRAWL)
+        );
+        for config in [
+            json!([{ "firecrawlApiKey": "fc-config" }]),
+            json!({ "web": null }),
+            json!({ "firecrawl": { "firecrawlApiKey": "fc-config" } }),
+            Value::Null,
+        ] {
+            assert!(Provider::in_config(&config, None).is_err(), "{config}");
+            assert_eq!(
+                firecrawl_of(Provider::in_config(&config, Some("fc-env".into()))),
+                both("fc-env", FIRECRAWL),
+                "{config}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reply_is_taken_unless_its_status_or_firecrawl_says_it_failed() {
+        use reqwest::StatusCode;
+        let taken = |text: &str| answer(StatusCode::OK, text).unwrap();
+        assert_eq!(
+            taken(r#"{"success":true,"data":{"web":[]},"extra":1}"#),
+            json!({ "success": true, "data": { "web": [] }, "extra": 1 })
+        );
+        // Only `false` itself is a failure.
+        for text in [
+            r#"{"data":{}}"#,
+            r#"{"success":"false","error":"quota"}"#,
+            r#"{"success":0,"error":"quota"}"#,
+            r#"{"success":null,"error":"quota"}"#,
+            r#"[false,"quota"]"#,
+        ] {
+            let reply: Value = serde_json::from_str(text).unwrap();
+            assert_eq!(taken(text), reply);
+        }
+        // A body that isn't JSON is an empty reply.
+        assert_eq!(taken("<html>"), Value::Null);
+        assert_eq!(taken(""), Value::Null);
+
+        let failed = |status: StatusCode, text: &str| answer(status, text).unwrap_err().to_string();
+        assert_eq!(
+            failed(
+                StatusCode::OK,
+                r#"{"success":false,"error":"no credits left","code":7}"#
+            ),
+            "Firecrawl answered 200 OK: no credits left"
+        );
+        assert_eq!(
+            failed(
+                StatusCode::PAYMENT_REQUIRED,
+                r#"{"error":"no credits left"}"#
+            ),
+            "Firecrawl answered 402 Payment Required: no credits left"
+        );
+        // Without an error in text, the body as it came, or its first 500 characters.
+        for text in [
+            r#"{"success":false,"error":{"code":7}}"#,
+            r#"{"success":false}"#,
+            r#"[false,"quota"]"#,
+            "<html>down</html>",
+            "",
+        ] {
+            assert_eq!(
+                failed(StatusCode::BAD_GATEWAY, text),
+                format!("Firecrawl answered 502 Bad Gateway: {text}")
+            );
+        }
+        assert_eq!(
+            failed(StatusCode::OK, r#"{"success":false,"error":7}"#),
+            r#"Firecrawl answered 200 OK: {"success":false,"error":7}"#
+        );
+        assert_eq!(
+            failed(StatusCode::BAD_GATEWAY, &"é".repeat(600)),
+            format!("Firecrawl answered 502 Bad Gateway: {}", "é".repeat(500))
+        );
+    }
+
+    #[test]
+    fn the_credits_logged_are_the_reply_s_or_else_its_page_s() {
+        let page = |used: Value| json!({ "success": true, "data": { "metadata": { "creditsUsed": used, "title": "T" } } });
+        assert_eq!(
+            credits(&json!({ "creditsUsed": 2, "data": { "metadata": { "creditsUsed": 5 } } })),
+            Some(2)
+        );
+        assert_eq!(credits(&json!({ "creditsUsed": 0, "data": {} })), Some(0));
+        assert_eq!(credits(&page(json!(5))), Some(5));
+        // A count that isn't a whole number is no count.
+        for used in [json!("2"), json!(2.0), json!(-2), json!([2]), Value::Null] {
+            let mut reply = page(json!(5));
+            reply["creditsUsed"] = used.clone();
+            assert_eq!(credits(&reply), Some(5), "{used}");
+            assert_eq!(credits(&json!({ "creditsUsed": used })), None, "{used}");
+            assert_eq!(credits(&page(used.clone())), None, "{used}");
+        }
+        for reply in [
+            json!({}),
+            json!({ "data": { "creditsUsed": 5 } }),
+            json!({ "data": [{ "creditsUsed": 5 }] }),
+            json!({ "data": { "metadata": [5] } }),
+            json!({ "data": { "metadata": 5 } }),
+            json!([2, { "metadata": { "creditsUsed": 5 } }]),
+            Value::Null,
+        ] {
+            assert_eq!(credits(&reply), None, "{reply}");
+        }
+    }
+
+    /// A JSON string holding the path of the file `url` was saved to in `dir`.
+    fn saved(dir: &Path, url: &str, ext: &str) -> String {
+        json!(dir.join(file_name(url, ext))).to_string()
+    }
+
+    #[test]
+    fn a_search_reads_each_result_s_parts_as_they_come() {
+        let dir = scratch("search-shapes");
+        let mut r = Request::parse("search", args(&["q"])).unwrap();
+        r.out = Some(dir.clone());
+        let reply = json!({ "success": true, "creditsUsed": "two", "warning": null, "data": {
+            "web": [
+                {
+                    "url": "https://a.test/one",
+                    "title": "One",
+                    "description": "first  result\n here",
+                    "snippet": "unused",
+                    "date": "2026-01-02",
+                    "imageUrl": "https://a.test/one.png",
+                    "markdown": "# One\n\nbody",
+                    "position": 1,
+                },
+                { "url": 7, "title": 7, "description": 7, "snippet": "from snippet", "date": 2026, "markdown": 7 },
+                { "url": "https://a.test/empty", "title": "", "snippet": 7, "markdown": "" },
+                "bare",
+                ["https://a.test/listed", "Listed"],
+            ],
+            "news": { "url": "https://a.test/not-a-list" },
+            "images": [
+                { "url": "https://a.test/pic", "title": "Pic", "imageUrl": "https://a.test/pic.png" },
+                { "url": "https://a.test/other-pic", "imageUrl": 9 },
+            ],
+            "videos": [{ "url": "https://a.test/video" }],
+        }});
+        let file = saved(&dir, "https://a.test/one", "md");
+        let shown = &file[1..file.len() - 1];
+        assert_eq!(
+            present_search(&reply, &r).unwrap(),
+            format!(
+                "1. [One](https://a.test/one) · 2026-01-02\n\
+                 \x20  first result here\n\
+                 \x20  Page as Markdown (11 characters): {shown}\n\
+                 \x20  > # One\n\
+                 \x20  > \n\
+                 \x20  > body\n\
+                 2. []()\n\
+                 \x20  from snippet\n\
+                 3. [https://a.test/empty](https://a.test/empty)\n\
+                 4. []()\n\
+                 5. []()\n\
+                 6. [Pic](https://a.test/pic) (images)\n\
+                 \x20  image: https://a.test/pic.png\n\
+                 7. [https://a.test/other-pic](https://a.test/other-pic) (images)\n"
+            )
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(file_name("https://a.test/one", "md"))).unwrap(),
+            "# One\n\nbody"
+        );
+        // As JSON, a title, a date, an image link and the credits go out as they came, whatever they are.
+        r.json = true;
+        assert_eq!(
+            present_search(&reply, &r).unwrap(),
+            [
+                r#"{"creditsUsed":"two","sources":["#,
+                r#"{"characters":11,"file":"#,
+                &file,
+                r##","kind":"web","markdown":"# One\n\nbody","publishedAt":"2026-01-02","##,
+                r#""snippet":"first result here","title":"One","url":"https://a.test/one"},"#,
+                r#"{"kind":"web","publishedAt":2026,"snippet":"from snippet","title":7,"url":""},"#,
+                r#"{"kind":"web","publishedAt":null,"snippet":null,"title":"","url":"https://a.test/empty"},"#,
+                r#"{"kind":"web","publishedAt":null,"snippet":null,"title":null,"url":""},"#,
+                r#"{"kind":"web","publishedAt":null,"snippet":null,"title":null,"url":""},"#,
+                r#"{"imageUrl":"https://a.test/pic.png","kind":"images","publishedAt":null,"snippet":null,"#,
+                r#""title":"Pic","url":"https://a.test/pic"},"#,
+                r#"{"imageUrl":9,"kind":"images","publishedAt":null,"snippet":null,"title":null,"#,
+                r#""url":"https://a.test/other-pic"}"#,
+                "]}\n",
+            ]
+            .concat()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_search_with_nothing_to_read_has_no_results() {
+        let mut r = Request::parse("search", args(&["q"])).unwrap();
+        r.out = Some(scratch("search-empty"));
+        for reply in [
+            json!({ "success": true, "data": { "web": [] } }),
+            json!({ "data": [[{ "url": "https://a.test" }]] }),
+            json!({ "data": "none" }),
+            json!({ "web": [{ "url": "https://a.test" }] }),
+            json!([2, { "web": [{ "url": "https://a.test" }] }]),
+            Value::Null,
+        ] {
+            r.json = false;
+            assert_eq!(present_search(&reply, &r).unwrap(), "No results.\n");
+            r.json = true;
+            assert_eq!(
+                present_search(&reply, &r).unwrap(),
+                "{\"creditsUsed\":null,\"sources\":[]}\n",
+                "{reply}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_search_that_reads_its_results_prints_the_start_of_each() {
+        let dir = scratch("search-scrape");
+        let mut r = Request::parse("search", args(&["q", "--scrape", "--json"])).unwrap();
+        r.out = Some(dir.clone());
+        let long = "word ".repeat(400);
+        let reply = json!({ "creditsUsed": 3, "data": { "news": [
+            { "url": "https://a.test/long", "markdown": long },
+        ]}});
+        let out: Value = serde_json::from_str(&present_search(&reply, &r).unwrap()).unwrap();
+        assert_eq!(out["creditsUsed"], 3);
+        assert_eq!(out["sources"][0]["kind"], "news");
+        assert_eq!(out["sources"][0]["characters"], 2_000);
+        assert_eq!(out["sources"][0]["markdown"], long[..SCRAPED_PREVIEW]);
+        r.full = true;
+        let out: Value = serde_json::from_str(&present_search(&reply, &r).unwrap()).unwrap();
+        assert_eq!(out["sources"][0]["markdown"], long);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn page_of(reply: &Value, r: &Request) -> String {
+        futures_util::FutureExt::now_or_never(present_page(reply, r))
+            .unwrap()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_page_s_formats_are_laid_out_or_passed_on() {
+        let dir = scratch("page-shapes");
+        let mut r = Request::parse("fetch", args(&["https://x.test/doc"])).unwrap();
+        r.out = Some(dir.clone());
+        let reply = json!({ "success": true, "data": {
+            "markdown": "Hello",
+            "summary": 5,
+            "html": "<p>Hello</p>",
+            "rawHtml": null,
+            "rawBase64": "aGVsbG8=",
+            "screenshot": "data:image/png;base64,aGVsbG8=",
+            "warning": "slow page",
+            "links": ["https://a.test/one", "https://a.test/two"],
+            "json": { "price": 12 },
+            "actions": null,
+            "answer": "42",
+            "metadata": {
+                "url": "https://x.test/doc",
+                "sourceURL": "https://x.test/source",
+                "statusCode": "200",
+                "title": 7,
+                "creditsUsed": 1,
+                "language": "en",
+            },
+        }});
+        let url = "https://x.test/doc";
+        let (html, raw, shot) = (
+            saved(&dir, url, "html"),
+            saved(&dir, url, "raw"),
+            saved(&dir, url, "png"),
+        );
+        let shown = |file: &str| file[1..file.len() - 1].to_string();
+        assert_eq!(
+            page_of(&reply, &r),
+            format!(
+                "https://x.test/doc\n\
+                 Warning: slow page\n\
+                 \n\
+                 Hello\n\
+                 \n\
+                 ## Answer\n\
+                 \n\
+                 42\n\
+                 \n\
+                 ## Extracted\n\
+                 \n\
+                 {{\n\
+                 \x20 \"price\": 12\n\
+                 }}\n\
+                 \n\
+                 ## Links (2)\n\
+                 \n\
+                 - https://a.test/one\n\
+                 - https://a.test/two\n\
+                 \n\
+                 [HTML: {}]\n\
+                 [Response body: {}]\n\
+                 [Screenshot: {}]\n",
+                shown(&html),
+                shown(&raw),
+                shown(&shot)
+            )
+        );
+        let read = |ext: &str| std::fs::read(dir.join(file_name(url, ext))).unwrap();
+        assert_eq!(read("html"), b"<p>Hello</p>");
+        assert_eq!(read("raw"), b"hello");
+        assert_eq!(read("png"), b"hello");
+
+        // As JSON, the metadata goes out whole, and a status and a title as they came, whatever they are.
+        r.json = true;
+        let metadata = r#"{"creditsUsed":1,"language":"en","sourceURL":"https://x.test/source","statusCode":"200","title":7,"url":"https://x.test/doc"}"#;
+        let expected = |html_inline: &str| {
+            [
+                r#"{"answer":"42","#,
+                html_inline,
+                r#""htmlCharacters":12,"htmlFile":"#,
+                &html,
+                r#","json":{"price":12},"links":["https://a.test/one","https://a.test/two"],"#,
+                r#""markdown":"Hello","metadata":"#,
+                metadata,
+                r#","rawFile":"#,
+                &raw,
+                r#","screenshotFile":"#,
+                &shot,
+                r#","statusCode":"200","title":7,"url":"https://x.test/doc","warning":"slow page"}"#,
+                "\n",
+            ]
+            .concat()
+        };
+        assert_eq!(page_of(&reply, &r), expected(""));
+        r.full = true;
+        assert_eq!(page_of(&reply, &r), expected(r#""html":"<p>Hello</p>","#));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_page_with_parts_missing_or_mistyped_is_printed_without_them() {
+        let mut r = Request::parse("fetch", args(&["https://x.test"])).unwrap();
+        r.out = Some(scratch("page-missing"));
+        let both = |reply: Value, r: &mut Request| {
+            r.json = false;
+            let text = page_of(&reply, r);
+            r.json = true;
+            (text, page_of(&reply, r))
+        };
+        let empty = "{\"metadata\":null,\"statusCode\":null,\"title\":null,\"url\":\"\"}\n";
+        for reply in [
+            json!({ "success": true }),
+            json!({ "data": null }),
+            json!({ "data": ["Hello"] }),
+            json!({ "data": "Hello" }),
+            json!({ "markdown": "Hello" }),
+            json!([{ "markdown": "Hello" }]),
+            Value::Null,
+        ] {
+            assert_eq!(
+                both(reply.clone(), &mut r),
+                ("\n".into(), empty.into()),
+                "{reply}"
+            );
+        }
+        // No metadata: no address, title or status.
+        assert_eq!(
+            both(json!({ "data": { "markdown": "Hi", "summary": "Short" } }), &mut r),
+            (
+                "\n\n## Summary\n\nShort\n\nHi\n".into(),
+                "{\"markdown\":\"Hi\",\"metadata\":null,\"statusCode\":null,\"summary\":\"Short\",\"title\":null,\"url\":\"\"}\n"
+                    .into()
+            )
+        );
+        // Metadata that isn't an object goes out as it came and is read as empty.
+        for metadata in [
+            json!("none"),
+            json!(["https://x.test", "https://x.test", 404, "T"]),
+        ] {
+            assert_eq!(
+                both(json!({ "data": { "metadata": metadata } }), &mut r),
+                (
+                    "\n".into(),
+                    format!("{{\"metadata\":{metadata},\"statusCode\":null,\"title\":null,\"url\":\"\"}}\n")
+                )
+            );
+        }
+        // An address that isn't text gives way to the source's; text that isn't text is left out.
+        assert_eq!(
+            both(
+                json!({ "data": {
+                    "markdown": ["Hi"],
+                    "html": 7,
+                    "rawHtml": 7,
+                    "rawBase64": 7,
+                    "screenshot": 7,
+                    "warning": 7,
+                    "metadata": { "url": 7, "sourceURL": "https://x.test/source", "statusCode": 404.0, "title": "" },
+                }}),
+                &mut r
+            ),
+            (
+                "https://x.test/source\n".into(),
+                "{\"metadata\":{\"sourceURL\":\"https://x.test/source\",\"statusCode\":404.0,\"title\":\"\",\"url\":7},\
+                 \"statusCode\":404.0,\"title\":\"\",\"url\":\"https://x.test/source\"}\n"
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn a_format_named_like_one_of_the_page_s_own_fields_takes_its_place() {
+        let mut r = Request::parse("fetch", args(&["https://x.test/doc"])).unwrap();
+        r.out = Some(scratch("page-names"));
+        let reply = json!({ "data": {
+            "title": "Top",
+            "url": "https://x.test/other",
+            "statusCode": 404,
+            "htmlFile": "/elsewhere",
+            "metadata": { "url": "https://x.test/doc", "title": "Doc", "statusCode": 200 },
+        }});
+        assert_eq!(
+            page_of(&reply, &r),
+            "# Top\n\
+             https://x.test/doc (HTTP 404)\n\
+             \n\
+             ## HtmlFile\n\
+             \n\
+             /elsewhere\n\
+             \n\
+             ## StatusCode\n\
+             \n\
+             404\n\
+             \n\
+             ## Title\n\
+             \n\
+             Top\n\
+             \n\
+             ## Url\n\
+             \n\
+             https://x.test/other\n\
+             \n\
+             [HTML: /elsewhere]\n"
+        );
+        r.json = true;
+        assert_eq!(
+            page_of(&reply, &r),
+            "{\"htmlFile\":\"/elsewhere\",\
+             \"metadata\":{\"statusCode\":200,\"title\":\"Doc\",\"url\":\"https://x.test/doc\"},\
+             \"statusCode\":404,\"title\":\"Top\",\"url\":\"https://x.test/other\"}\n"
+        );
+    }
+
+    #[test]
+    fn long_text_is_cut_as_json_too_and_a_long_format_goes_to_a_file() {
+        let dir = scratch("page-long");
+        let mut r = Request::parse("fetch", args(&["https://x.test/doc", "--json"])).unwrap();
+        r.out = Some(dir.clone());
+        let long = "line of text\n".repeat(3_000);
+        let reply = json!({ "data": {
+            "summary": long,
+            "answer": "a".repeat(LONG + 1),
+            "metadata": { "url": "https://x.test/doc" },
+        }});
+        let page: Value = serde_json::from_str(&page_of(&reply, &r)).unwrap();
+        assert_eq!(page["truncated"], true);
+        assert_eq!(page["summary"], head(&long, PREVIEW));
+        let file = dir.join(file_name("https://x.test/doc", "summary.md"));
+        assert_eq!(page["summaryFile"], json!(file));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), long);
+        assert_eq!(page["answer"], "a".repeat(LONG + 1));
+
+        r.json = false;
+        let out = page_of(&reply, &r);
+        let answer = dir.join(file_name("https://x.test/doc", "answer.txt"));
+        assert!(!out.contains("## Answer"), "{out}");
+        assert!(
+            out.ends_with(&format!(
+                "[The summary is 39,000 characters; the first 8,000 are above. All of it: {}]\n[Answer: {}]\n",
+                file.display(),
+                answer.display()
+            )),
+            "{out}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&answer).unwrap(),
+            "a".repeat(LONG + 1)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
