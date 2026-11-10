@@ -188,7 +188,7 @@ public struct PhoneRootView: View {
 }
 
 /// The phone's navigation stack around a view, for a picture of it.
-final class NavigationViewHandle {
+@MainActor final class NavigationViewHandle {
     weak var view: UIView?
 
     struct Picture {

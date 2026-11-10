@@ -48,13 +48,6 @@ enum Palette {
     static let success = hex(0x3DD68C)
     static let danger = hex(0xFF6B5E)
 
-    /// The beam, from its cool edge through its core to its warm edge.
-    static let beamDeep = hex(0x1A3C9C)
-    static let beamCyan = hex(0x3EB4FF)
-    static let beamCore = hex(0xFFE2B8)
-    static let beamOrange = hex(0xFF8A2A)
-    static let beamRed = hex(0xD8361F)
-
     static let prime = ice
     static let pi = lilac
     static let deepseek = periwinkle

@@ -660,10 +660,3 @@ struct BranchChip: View {
         .overlay(Capsule().strokeBorder(Palette.ice.opacity(0.22)))
     }
 }
-
-/// An icon and its title close together.
-struct TightLabel: LabelStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 2) { configuration.icon.imageScale(.small); configuration.title }
-    }
-}

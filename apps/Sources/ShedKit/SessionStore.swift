@@ -328,13 +328,6 @@ public final class SessionStore {
         session.parentId.flatMap { sessions[$0] }
     }
 
-    /// The computer with the most top-level sessions: where the work happens.
-    public var busiestEnvironment: BridgeEnvironment? {
-        let counts = Dictionary(sessions.values.filter { !$0.isSubagent }.compactMap { Self.split($0.id)?.env }.map { ($0, 1) },
-                                uniquingKeysWith: +)
-        return environments.max { counts[$0.id, default: 0] < counts[$1.id, default: 0] }
-    }
-
     /// Every subagent still at work (running, or idle with background jobs), across all sessions.
     public var activeSubagents: [SessionSummary] {
         sessions.values.filter { $0.isSubagent && $0.isActive && !ended.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
