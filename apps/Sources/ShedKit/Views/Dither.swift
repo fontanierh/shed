@@ -130,7 +130,7 @@ enum Dither {
         // Chunky square dots, a 2 pt grid with a one-pixel gap: a print you can see the dots of.
         let cell = max(3, Int((2 * spec.scale).rounded()))
         let dot = cell - 1
-        // The beam: a line through the anchor, falling about 27° from left to right, measured in points so its angle
+        // The beam: a line through the anchor at its shape's angle, measured in points so its angle
         // doesn't change with the window's shape.
         let ptW = Double(w) / spec.scale, ptH = Double(h) / spec.scale
         let diag = (ptW * ptW + ptH * ptH).squareRoot()
@@ -233,7 +233,7 @@ private final class LayerRef: @unchecked Sendable {
     init(layer: CALayer, scale: CGFloat) { self.layer = layer; self.scale = scale }
 }
 
-/// The dithered ground, with the beam breathing slowly and a glint of light drifting along it.
+/// The dithered ground and its beam, still.
 struct DitherField: AmbientLayers {
     var beam: Double
     var anchor: UnitPoint
@@ -290,9 +290,6 @@ extension DitherField: NSViewRepresentable {
     func updateNSView(_ view: AmbientView, context: Context) { configure(view) }
 }
 #else
-extension NSValue {
-    convenience init(point: CGPoint) { self.init(cgPoint: point) }
-}
 
 extension DitherField: UIViewRepresentable {
     func makeUIView(context: Context) -> AmbientView { AmbientView() }

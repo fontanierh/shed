@@ -814,8 +814,9 @@ struct ToolRow: View {
             if expanded {
                 VStack(alignment: .leading, spacing: 10) {
                     if let args = item.args, !args.isEmpty {
+                        let input = inputText(args)
                         CodePanel(title: description.language == "python" ? "Python" : description.language == "bash" ? "Shell" : "Input",
-                                  text: inputText(args), language: inputText(args) == args ? description.language : "json",
+                                  text: input, language: input == args ? description.language : "json",
                                   lineNumbers: true)
                     }
                     if let output = item.output, !output.isEmpty {
@@ -1034,6 +1035,15 @@ enum Syntax {
                "go", "defer", "chan", "map", "switch", "case", "nil", "true", "false"],
     ]
 
+    /// Compiled once per pattern: a code panel is highlighted again at every change of its width.
+    private static let regexes = Memo<String, NSRegularExpression>()
+    private static func regex(_ pattern: String) -> NSRegularExpression? {
+        if let regex = regexes.get(pattern) { return regex }
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        regexes.set(pattern, regex)
+        return regex
+    }
+
     static func highlight(_ code: String, language: String?, limit: Int = 20_000) -> AttributedString {
         var result = AttributedString(code)
         guard let language, let words = keywords[language], code.utf16.count < limit else { return result }
@@ -1052,7 +1062,7 @@ enum Syntax {
         ]
         // Later patterns win, so strings and comments override keywords inside them.
         for (pattern, color) in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            guard let regex = Self.regex(pattern) else { continue }
             for match in regex.matches(in: code, range: NSRange(code.startIndex..., in: code)) {
                 guard let range = Range(match.range, in: code), let attributed = Range(range, in: result) else { continue }
                 let isComment = comment != nil && match.range(withName: "comment").location != NSNotFound

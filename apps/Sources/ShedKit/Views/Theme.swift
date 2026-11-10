@@ -105,7 +105,7 @@ enum Clipboard {
 
 extension Theme {
     /// Assistant prose: 16 pt body, compact headings, cards for code, quiet tables.
-    @MainActor static let agent = Theme()
+    @MainActor static let agent: Theme = { @MainActor in Theme()
         .text {
             FontSize(16)
             ForegroundColor(Palette.moon.opacity(0.92))
@@ -206,6 +206,7 @@ extension Theme {
         .thematicBreak {
             Divider().markdownMargin(top: 16, bottom: 16)
         }
+    }()
 }
 
 /// Its content at its natural width up to `cap`, wrapping past it, and measured that way too: a frame with a maximum
@@ -277,23 +278,21 @@ struct CopyButton: View {
     }
 }
 
-/// A velvet capsule used in the header and below the composer; tinted when it stands for something.
+/// A velvet capsule used in the header and below the composer.
 struct PillStyle: ViewModifier {
-    var tint: Color? = nil
 
     func body(content: Content) -> some View {
         content
             .font(.callout)
             .padding(.horizontal, 11)
             .frame(height: 30)
-            .background((tint ?? Color.clear).opacity(tint == nil ? 0 : 0.14), in: Capsule())
-            .card(radius: 15, fill: Palette.raised.opacity(0.7), border: tint?.opacity(0.4) ?? Palette.border)
-            .foregroundStyle(tint ?? Palette.moon)
+            .card(radius: 15, fill: Palette.raised.opacity(0.7), border: Palette.border)
+            .foregroundStyle(Palette.moon)
     }
 }
 
 extension View {
-    func pill(tint: Color? = nil) -> some View { modifier(PillStyle(tint: tint)) }
+    func pill() -> some View { modifier(PillStyle()) }
 }
 
 enum Format {

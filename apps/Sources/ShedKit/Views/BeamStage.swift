@@ -1,8 +1,8 @@
 // One beam behind every page of the phone app. Moving between pages, it doesn't cut from one place to the other:
 // it travels, swinging and bending into its new pose over a moment while the page slides in above it.
 // The beam is still drawn by `Dither.render`, so the move is a short run of in-between renderings played by Core
-// Animation, cross-dissolving from one to the next. They are rendered together off the main thread when a move starts,
-// smaller than the screen (the same 2 pt dots, fewer pixels each), and dropped once the move is done.
+// Animation, cross-dissolving from one to the next. They are rendered together off the main thread, ahead of the moves
+// a page can make, smaller than the screen (the same 2 pt dots, fewer pixels each), and kept for the next time.
 #if os(iOS)
 import QuartzCore
 import SwiftUI

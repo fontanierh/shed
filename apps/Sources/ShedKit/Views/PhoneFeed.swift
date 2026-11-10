@@ -132,8 +132,6 @@ final class FeedController: NSObject, UICollectionViewDelegate {
 
     /// Keeping to the end as the conversation grows. Only the reader's own scroll changes it.
     private var following = true
-    /// The row the reader is looking at and where it was on screen, put back whenever rows change size or come in
-    /// above it, as long as they aren't following the end.
     /// The row the reader is looking at, by its id and an item in it (a row whose start loads with an earlier page
     /// changes id), and where it is on screen.
     private var anchor: (id: String, item: String?, y: CGFloat)?
@@ -378,6 +376,8 @@ final class FeedController: NSObject, UICollectionViewDelegate {
 
     /// From the rail: an offset measured from the top of the content.
     func scroll(to y: CGFloat) {
+        // The rail takes over from a jump under way: its animation ends without a word from the scroll view.
+        jumping = false
         following = y >= endOffset + insets.top - 40
         correcting = true
         collection.contentOffset.y = min(max(y - insets.top, -insets.top), endOffset)
@@ -389,8 +389,9 @@ final class FeedController: NSObject, UICollectionViewDelegate {
     func jumpToLatest() {
         following = true
         anchor = nil
-        jumping = true
-        collection.setContentOffset(CGPoint(x: 0, y: endOffset), animated: true)
+        let animated = !environment.accessibilityReduceMotion
+        jumping = animated
+        collection.setContentOffset(CGPoint(x: 0, y: endOffset), animated: animated)
         publish()
     }
 

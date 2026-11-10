@@ -34,6 +34,8 @@ struct Materialize: View {
                 // The loading rain on Core Animation: it keeps falling while the conversation is laid out, which
                 // holds the app for a moment as it arrives. It thins out as the conversation starts printing.
                 WaitingRain(start: rainStart, stop: revealStart.map { $0.addingTimeInterval(0.35) })
+                    // A new wait, a new rain: one that has stopped doesn't start again.
+                    .id(rainStart)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                     .transition(.identity)

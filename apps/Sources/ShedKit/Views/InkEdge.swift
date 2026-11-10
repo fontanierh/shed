@@ -48,7 +48,17 @@ enum InkEdge {
                 strips.append(CGRect(x: was.maxX, y: now.minY, width: now.maxX - was.maxX, height: now.height))
             }
         }
-        guard kept == before.count else { return nil }
+        // Only a block's last texts and their last lines are read, so lines leave at the top as it grows: those have
+        // not gone away. Any other line that is no longer there has.
+        var firstLine: [Int: Int] = [:]
+        for line in new { firstLine[line.text] = min(firstLine[line.text] ?? line.line, line.line) }
+        let firstText = firstLine.keys.min()
+        let stayed = before.keys.filter { key in
+            let (text, line) = (key >> 20, key & ((1 << 20) - 1))
+            guard let firstText, text >= firstText else { return firstText == nil }
+            return firstLine[text].map { line >= $0 } ?? true
+        }.count
+        guard kept == stayed else { return nil }
         if strips.count > most { return [strips.reduce(strips[0]) { $0.union($1) }] }
         return strips
     }

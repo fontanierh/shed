@@ -12,7 +12,8 @@ struct StreamingMarkdown: View {
     @Environment(\.liveText) private var liveText
     @Environment(\.inlineSelection) private var inlineSelection
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Whether this view showed the reply being written: its last words, which come as it ends, then print in too.
+    /// Whether this view showed the reply being written: on the phone its last words, which come as it ends, then
+    /// print in too. On the Mac the reply turns selectable as it ends, which builds it anew.
     @State private var written = Written()
 
     private final class Written { var seen = false }
@@ -86,7 +87,7 @@ struct StreamingMarkdown: View {
     }
 
     /// Top-level blocks: runs of lines between blank lines, with fenced code kept whole.
-    /// Memoized: the view and its arrivals ask for the same text's blocks several times per update. A streaming reply
+    /// Memoized: the view asks for the same text's blocks at every update. A streaming reply
     /// only grows, which changes nothing before its last block: it is split again from there, not from its start.
     @MainActor static func blocks(_ text: String) -> [Block] {
         if let hit = recent.first(where: { $0.text == text }) { return hit.blocks }
