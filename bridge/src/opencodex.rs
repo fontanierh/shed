@@ -9,8 +9,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -38,41 +36,64 @@ pub fn gateway() -> Option<Gateway> {
     gateway_in(&home())
 }
 
+// The readers in this file take what they can of what comes from outside: a part that is missing, or of another
+// type than expected, reads as absent, never as an error.
+
+fn text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
+fn list(value: &Value) -> &[Value] {
+    value.as_array().map(Vec::as_slice).unwrap_or_default()
+}
+
 /// ~/.agent-remote/config.json, as far as Open Codex goes.
-#[derive(Deserialize, Default)]
 struct Config {
-    #[serde(default, deserialize_with = "routing")]
     opencodex: Routing,
 }
 
+impl Config {
+    fn read(config: &Value) -> Config {
+        Config {
+            opencodex: Routing::read(&config["opencodex"]),
+        }
+    }
+}
+
 /// The config's `opencodex` entry: `false`, nothing, or where Open Codex listens.
-#[derive(Default)]
 enum Routing {
     Off,
-    #[default]
     Unset,
     On(Addresses),
 }
 
+impl Routing {
+    /// Anything but `false` and null turns routing on, an object or not.
+    fn read(entry: &Value) -> Routing {
+        match entry {
+            Value::Bool(false) => Routing::Off,
+            Value::Null => Routing::Unset,
+            on => Routing::On(Addresses::read(on)),
+        }
+    }
+}
+
 /// The `opencodex` entry when it is an object.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
+#[derive(Default)]
 struct Addresses {
-    #[serde(default, deserialize_with = "text")]
     url: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     management_url: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     admin_token_file: Option<String>,
 }
 
-/// Anything but `false` and null turns routing on, an object or not.
-fn routing<'de, D: Deserializer<'de>>(from: D) -> Result<Routing, D::Error> {
-    Ok(match Value::deserialize(from)? {
-        Value::Bool(false) => Routing::Off,
-        Value::Null => Routing::Unset,
-        other => Routing::On(read(&other)),
-    })
+impl Addresses {
+    fn read(entry: &Value) -> Addresses {
+        Addresses {
+            url: text(&entry["url"]),
+            management_url: text(&entry["managementUrl"]),
+            admin_token_file: text(&entry["adminTokenFile"]),
+        }
+    }
 }
 
 fn gateway_in(home: &Path) -> Option<Gateway> {
@@ -80,7 +101,7 @@ fn gateway_in(home: &Path) -> Option<Gateway> {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_default();
-    let ours = match read::<Config>(&config).opencodex {
+    let ours = match Config::read(&config).opencodex {
         Routing::Off => return None,
         Routing::Unset if !home.join(".opencodex").is_dir() => return None,
         Routing::Unset => Addresses::default(),
@@ -101,52 +122,6 @@ fn gateway_in(home: &Path) -> Option<Gateway> {
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".opencodex/admin-api-token")),
     })
-}
-
-/// A JSON object from outside as a `T`, whose fields are each read as `value["key"].as_str()` and the like read
-/// them: a missing key or a value of another type is none, and an unknown key is passed over. Anything but an
-/// object reads as an empty one; a derived struct would otherwise take an array as its fields in order.
-fn read<T: DeserializeOwned + Default>(value: &Value) -> T {
-    if !value.is_object() {
-        return T::default();
-    }
-    T::deserialize(value).unwrap_or_default()
-}
-
-fn text<'de, D: Deserializer<'de>>(from: D) -> Result<Option<String>, D::Error> {
-    Ok(Value::deserialize(from)?.as_str().map(str::to_string))
-}
-
-fn whole<'de, D: Deserializer<'de>>(from: D) -> Result<Option<u64>, D::Error> {
-    Ok(Value::deserialize(from)?.as_u64())
-}
-
-fn truth<'de, D: Deserializer<'de>>(from: D) -> Result<bool, D::Error> {
-    Ok(Value::deserialize(from)? == true)
-}
-
-fn list<'de, D: Deserializer<'de>>(from: D) -> Result<Option<Vec<Value>>, D::Error> {
-    Ok(match Value::deserialize(from)? {
-        Value::Array(elements) => Some(elements),
-        _ => None,
-    })
-}
-
-/// A list of objects: none when it isn't a list, and an element that isn't an object reads as an empty one.
-fn each<'de, D, T>(from: D) -> Result<Vec<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned + Default,
-{
-    Ok(list(from)?.unwrap_or_default().iter().map(read).collect())
-}
-
-fn nested<'de, D, T>(from: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: DeserializeOwned + Default,
-{
-    Ok(read(&Value::deserialize(from)?))
 }
 
 /// GET a JSON document. The admin token goes in on stdin, never in the arguments, where `ps` would show it.
@@ -188,63 +163,94 @@ async fn get(url: &str, token: Option<&str>) -> Result<Value> {
 const CLAUDE_SUBSCRIPTION: &str = "anthropic/";
 
 /// The models Open Codex serves, as it lists them, less the Claude subscription's. Cached for a minute.
-pub async fn catalog(gateway: &Gateway) -> Result<Vec<Value>> {
-    static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
+async fn catalog(gateway: &Gateway) -> Result<Vec<Model>> {
+    static CACHE: Mutex<Option<(Instant, Vec<Model>)>> = Mutex::new(None);
     if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
         if at.elapsed() < Duration::from_secs(60) {
             return Ok(models.clone());
         }
     }
-    let models = listed(&get(&format!("{}/v1/models", gateway.url), None).await?)?;
+    let reply = get(&format!("{}/v1/models", gateway.url), None).await?;
+    let models: Vec<Model> = listed(&reply)?.iter().map(Model::read).collect();
     *CACHE.lock().unwrap() = Some((Instant::now(), models.clone()));
     Ok(models)
 }
 
-/// Open Codex's reply to `/v1/models`. Its models stay as it listed them, which is what `sync` returns.
-#[derive(Deserialize, Default)]
+/// Open Codex's reply to `/v1/models`, with its models as it listed them.
 struct Listing {
-    #[serde(default, deserialize_with = "list")]
     data: Option<Vec<Value>>,
 }
 
+impl Listing {
+    fn read(reply: &Value) -> Listing {
+        Listing {
+            data: reply["data"].as_array().cloned(),
+        }
+    }
+}
+
 /// A model as Open Codex's `/v1/models` lists one.
-#[derive(Deserialize, Default)]
+#[derive(Clone)]
 struct Model {
-    #[serde(default, deserialize_with = "text")]
     id: Option<String>,
-    #[serde(default, deserialize_with = "each")]
     reasoning_efforts: Vec<Effort>,
-    #[serde(default, deserialize_with = "nested")]
     capabilities: Capabilities,
-    #[serde(default, deserialize_with = "whole")]
     context_window: Option<u64>,
-    #[serde(default, deserialize_with = "whole")]
     max_output_tokens: Option<u64>,
+}
+
+impl Model {
+    fn read(model: &Value) -> Model {
+        Model {
+            id: text(&model["id"]),
+            reasoning_efforts: list(&model["reasoning_efforts"])
+                .iter()
+                .map(Effort::read)
+                .collect(),
+            capabilities: Capabilities::read(&model["capabilities"]),
+            context_window: model["context_window"].as_u64(),
+            max_output_tokens: model["max_output_tokens"].as_u64(),
+        }
+    }
 }
 
 /// One of a listed model's `reasoning_efforts`.
-#[derive(Deserialize, Default)]
+#[derive(Clone)]
 struct Effort {
-    #[serde(default, deserialize_with = "text")]
     value: Option<String>,
 }
 
+impl Effort {
+    fn read(effort: &Value) -> Effort {
+        Effort {
+            value: text(&effort["value"]),
+        }
+    }
+}
+
 /// A listed model's `capabilities`.
-#[derive(Deserialize, Default)]
+#[derive(Clone)]
 struct Capabilities {
-    #[serde(default, deserialize_with = "list")]
-    input_modalities: Option<Vec<Value>>,
-    #[serde(default, deserialize_with = "whole")]
+    input_modalities: Vec<Value>,
     max_output_tokens: Option<u64>,
+}
+
+impl Capabilities {
+    fn read(capabilities: &Value) -> Capabilities {
+        Capabilities {
+            input_modalities: list(&capabilities["input_modalities"]).to_vec(),
+            max_output_tokens: capabilities["max_output_tokens"].as_u64(),
+        }
+    }
 }
 
 /// The models in a `/v1/models` reply, each as Open Codex listed it, less the Claude subscription's.
 fn listed(reply: &Value) -> Result<Vec<Value>> {
-    Ok(read::<Listing>(reply)
+    Ok(Listing::read(reply)
         .data
         .ok_or_else(|| anyhow!("Open Codex listed no models"))?
         .into_iter()
-        .filter(|model| offered(&read(model)))
+        .filter(|model| offered(&Model::read(model)))
         .collect())
 }
 
@@ -284,9 +290,7 @@ fn level_map(model: &Model) -> Option<Value> {
 
 fn input(model: &Model) -> Value {
     let listed = &model.capabilities.input_modalities;
-    let images = listed
-        .as_ref()
-        .is_some_and(|m| m.iter().any(|m| m == "image"));
+    let images = listed.iter().any(|m| m == "image");
     json!(if images {
         vec!["text", "image"]
     } else {
@@ -368,12 +372,9 @@ fn dsh_catalog_file(home: &Path) -> PathBuf {
 
 /// Write the catalog into each agent's configuration, as its `opencodex` provider, and move a default model that
 /// Open Codex also serves onto it. Other providers are left as they are, for the agents' own use and their older
-/// sessions. Returns the catalog.
-pub async fn sync(gateway: &Gateway) -> Result<Vec<Value>> {
-    let listed = catalog(gateway).await?;
-    let models: Vec<Model> = listed.iter().map(read).collect();
-    write(&home(), &gateway.url, &models)?;
-    Ok(listed)
+/// sessions.
+pub async fn sync(gateway: &Gateway) -> Result<()> {
+    write(&home(), &gateway.url, &catalog(gateway).await?)
 }
 
 /// What `sync` writes, in the agents' folders under `home`.
@@ -405,13 +406,18 @@ fn write(home: &Path, url: &str, models: &[Model]) -> Result<()> {
 }
 
 /// The default model in an agent's `settings.json`.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Chosen {
-    #[serde(default, deserialize_with = "text")]
     default_provider: Option<String>,
-    #[serde(default, deserialize_with = "text")]
     default_model: Option<String>,
+}
+
+impl Chosen {
+    fn read(settings: &Value) -> Chosen {
+        Chosen {
+            default_provider: text(&settings["defaultProvider"]),
+            default_model: text(&settings["defaultModel"]),
+        }
+    }
 }
 
 /// A default model of another provider that Open Codex serves too ("mistral" "deepseek-v4-1-flash-1017" as
@@ -422,7 +428,7 @@ fn move_default(settings: &mut Value, models: &[Model]) {
     let Chosen {
         default_provider: Some(provider),
         default_model: Some(id),
-    } = read(settings)
+    } = Chosen::read(settings)
     else {
         return;
     };
@@ -542,7 +548,7 @@ impl Tally {
                 url.push_str("&cursor=");
                 url.push_str(cursor);
             }
-            match counted.add(read(&get(&url, Some(token)).await?)) {
+            match counted.add(Page::read(&get(&url, Some(token)).await?)) {
                 Some(next) => cursor = Some(next),
                 None => break,
             }
@@ -566,33 +572,38 @@ impl Tally {
 }
 
 /// A page of Open Codex's request history (`/api/request-history`).
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Page {
-    #[serde(default, deserialize_with = "each")]
     entries: Vec<Entry>,
-    #[serde(default, deserialize_with = "text")]
     next_cursor: Option<String>,
-    #[serde(default, deserialize_with = "truth")]
     has_more: bool,
 }
 
+impl Page {
+    fn read(page: &Value) -> Page {
+        Page {
+            entries: list(&page["entries"]).iter().map(Entry::read).collect(),
+            next_cursor: text(&page["nextCursor"]),
+            has_more: page["hasMore"] == true,
+        }
+    }
+}
+
 /// One request in the history.
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 struct Entry {
-    #[serde(default, deserialize_with = "whole")]
     timestamp: Option<u64>,
-    #[serde(default, deserialize_with = "whole")]
     total_tokens: Option<u64>,
     /// The dollars Open Codex estimates the request cost, where it has a price for the model.
-    #[serde(default, rename = "displayMetrics", deserialize_with = "estimate")]
     cost: Option<f64>,
 }
 
-/// An entry's `displayMetrics`, of which the bridge reads one number four objects down.
-fn estimate<'de, D: Deserializer<'de>>(from: D) -> Result<Option<f64>, D::Error> {
-    Ok(Value::deserialize(from)?["cost"]["estimate"]["cost"]["total"].as_f64())
+impl Entry {
+    fn read(entry: &Value) -> Entry {
+        Entry {
+            timestamp: entry["timestamp"].as_u64(),
+            total_tokens: entry["totalTokens"].as_u64(),
+            cost: entry["displayMetrics"]["cost"]["estimate"]["cost"]["total"].as_f64(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -611,14 +622,14 @@ mod tests {
     #[test]
     fn levels_follow_the_efforts_open_codex_lists() {
         let model = json!({ "id": "mistral/m", "reasoning_efforts": [{ "value": "low" }, { "value": "high" }] });
-        let map = level_map(&read(&model)).unwrap();
+        let map = level_map(&Model::read(&model)).unwrap();
         assert_eq!(map["low"], "low");
         assert_eq!(map["high"], "high");
         assert_eq!(map["medium"], Value::Null);
         assert_eq!(map["off"], Value::Null);
-        assert!(level_map(&read(&json!({ "id": "plain" }))).is_none());
+        assert!(level_map(&Model::read(&json!({ "id": "plain" }))).is_none());
         assert_eq!(
-            dsh_model(&read(&json!({ "id": "plain" }))).unwrap()["reasoningEfforts"],
+            dsh_model(&Model::read(&json!({ "id": "plain" }))).unwrap()["reasoningEfforts"],
             false
         );
     }
@@ -631,7 +642,7 @@ mod tests {
             json!({ "id": "openai-apikey/gpt-5.6" }),
         ]
         .iter()
-        .map(read)
+        .map(Model::read)
         .collect();
         let mut settings =
             json!({ "defaultProvider": "mistral", "defaultModel": "deepseek-v4-1-flash-1017" });
@@ -655,7 +666,7 @@ mod tests {
     fn a_default_with_mistyped_or_missing_parts_stays() {
         let models: Vec<Model> = [json!({ "id": "mistral/small" }), json!({ "id": 7 })]
             .iter()
-            .map(read)
+            .map(Model::read)
             .collect();
         for settings in [
             json!({ "defaultProvider": 3, "defaultModel": "small" }),
@@ -809,8 +820,8 @@ mod tests {
             json!(["mistral/small"]),
             Value::Null,
         ] {
-            assert!(agent_model(&read(&model), true).is_none(), "{model}");
-            assert!(dsh_model(&read(&model)).is_none(), "{model}");
+            assert!(agent_model(&Model::read(&model), true).is_none(), "{model}");
+            assert!(dsh_model(&Model::read(&model)).is_none(), "{model}");
         }
     }
 
@@ -818,8 +829,8 @@ mod tests {
     fn a_model_s_limits_default_unless_they_are_whole_numbers() {
         let window = |listed: Value| {
             let model = json!({ "id": "m", "context_window": listed });
-            let agent = agent_model(&read(&model), false).unwrap();
-            let dsh = dsh_model(&read(&model)).unwrap();
+            let agent = agent_model(&Model::read(&model), false).unwrap();
+            let dsh = dsh_model(&Model::read(&model)).unwrap();
             assert_eq!(agent["contextWindow"], dsh["contextWindow"]);
             agent["contextWindow"].clone()
         };
@@ -835,15 +846,15 @@ mod tests {
             assert_eq!(window(other), 128_000);
         }
         assert_eq!(
-            agent_model(&read(&json!({ "id": "m" })), false).unwrap()["contextWindow"],
+            agent_model(&Model::read(&json!({ "id": "m" })), false).unwrap()["contextWindow"],
             128_000
         );
 
         // The model's own limit first, then its capabilities', then the default.
         let max_tokens = |mut model: Value| {
             model["id"] = json!("m");
-            let agent = agent_model(&read(&model), false).unwrap();
-            let dsh = dsh_model(&read(&model)).unwrap();
+            let agent = agent_model(&Model::read(&model), false).unwrap();
+            let dsh = dsh_model(&Model::read(&model)).unwrap();
             assert_eq!(agent["maxTokens"], dsh["maxTokens"]);
             agent["maxTokens"].clone()
         };
@@ -881,8 +892,11 @@ mod tests {
     fn a_model_takes_images_when_its_list_of_modalities_says_so() {
         let input = |capabilities: Value| {
             let model = json!({ "id": "m", "capabilities": capabilities });
-            let agent = agent_model(&read(&model), false).unwrap();
-            assert_eq!(agent["input"], dsh_model(&read(&model)).unwrap()["input"]);
+            let agent = agent_model(&Model::read(&model), false).unwrap();
+            assert_eq!(
+                agent["input"],
+                dsh_model(&Model::read(&model)).unwrap()["input"]
+            );
             agent["input"].clone()
         };
         for capabilities in [
@@ -921,25 +935,25 @@ mod tests {
             { "value": "none" },
         ]});
         assert_eq!(
-            level_map(&read(&model)).unwrap(),
+            level_map(&Model::read(&model)).unwrap(),
             json!({
                 "off": "none", "minimal": null, "low": "low", "medium": null,
                 "high": null, "xhigh": null, "max": null,
             })
         );
         assert_eq!(
-            dsh_model(&read(&model)).unwrap()["reasoningEfforts"],
+            dsh_model(&Model::read(&model)).unwrap()["reasoningEfforts"],
             json!({ "off": "none", "low": "low" })
         );
 
         // Efforts the bridge has no level for still make a reasoning model.
         let unknown = json!({ "id": "m", "reasoning_efforts": [{ "value": "ultra" }] });
         assert_eq!(
-            agent_model(&read(&unknown), false).unwrap()["reasoning"],
+            agent_model(&Model::read(&unknown), false).unwrap()["reasoning"],
             true
         );
         assert_eq!(
-            dsh_model(&read(&unknown)).unwrap()["reasoningEfforts"],
+            dsh_model(&Model::read(&unknown)).unwrap()["reasoningEfforts"],
             json!({ "off": null })
         );
 
@@ -951,10 +965,13 @@ mod tests {
             Value::Null,
         ] {
             let model = json!({ "id": "m", "reasoning_efforts": efforts });
-            let agent = agent_model(&read(&model), false).unwrap();
+            let agent = agent_model(&Model::read(&model), false).unwrap();
             assert_eq!(agent["reasoning"], false, "{model}");
             assert!(agent.get("thinkingLevelMap").is_none(), "{model}");
-            assert_eq!(dsh_model(&read(&model)).unwrap()["reasoningEfforts"], false);
+            assert_eq!(
+                dsh_model(&Model::read(&model)).unwrap()["reasoningEfforts"],
+                false
+            );
         }
     }
 
@@ -975,7 +992,7 @@ mod tests {
         ]}))
         .unwrap()
         .iter()
-        .map(read)
+        .map(Model::read)
         .collect()
     }
 
@@ -1204,7 +1221,7 @@ mod tests {
             through: 50,
             ..Default::default()
         };
-        let next = tally.add(read(&json!({
+        let next = tally.add(Page::read(&json!({
             "entries": [
                 { "timestamp": 100, "totalTokens": 10, "displayMetrics": metered(json!(0.25)), "model": "mistral/small" },
                 { "timestamp": 90, "totalTokens": 5, "displayMetrics": metered(json!(1)) },
@@ -1221,7 +1238,7 @@ mod tests {
         );
         // An entry without a price leaves a tally unpriced.
         let mut unpriced = Tally::default();
-        unpriced.add(read(
+        unpriced.add(Page::read(
             &json!({ "entries": [{ "timestamp": 40, "totalTokens": 2 }] }),
         ));
         assert_eq!(
@@ -1258,7 +1275,7 @@ mod tests {
             json!({}),
             Value::Null,
         ] {
-            assert_eq!(tally.add(read(&page)), None, "{page}");
+            assert_eq!(tally.add(Page::read(&page)), None, "{page}");
             assert_eq!(
                 (tally.tokens, tally.cost, tally.priced, tally.through),
                 (0, 0.0, false, 7),
@@ -1269,7 +1286,7 @@ mod tests {
 
     #[test]
     fn the_history_goes_on_only_with_a_cursor_and_more_to_come() {
-        let next = |page: Value| Tally::default().add(read(&page));
+        let next = |page: Value| Tally::default().add(Page::read(&page));
         assert_eq!(
             next(json!({ "nextCursor": "page-2", "hasMore": true })).as_deref(),
             Some("page-2")
