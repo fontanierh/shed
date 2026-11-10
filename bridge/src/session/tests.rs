@@ -398,6 +398,18 @@ async fn pi_events() {
     rig.check("pi").await;
 }
 
+fn rows(rows: Vec<Value>) -> Vec<PrimeRow> {
+    rows.iter().filter_map(PrimeRow::read).collect()
+}
+
+fn roster(all: Vec<Value>) -> DaemonEvent {
+    DaemonEvent::Roster(rows(all))
+}
+
+fn roster_update(changed: Vec<Value>) -> DaemonEvent {
+    DaemonEvent::RosterUpdate(rows(changed))
+}
+
 fn prime_row(id: &str, more: Value) -> Value {
     let mut row = json!({
         "activeSessionId": id,
@@ -453,7 +465,7 @@ async fn prime_events() {
     );
     send(
         &rig,
-        DaemonEvent::Roster(vec![
+        roster(vec![
             prime_row("p1", json!({ "hasRunningSubagents": true })),
             subagent.clone(),
             json!({ "cwd": "/a/row/without/an/id" }),
@@ -471,7 +483,7 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "isStreaming": true, "activity": "streaming", "messageCount": 3, "isRunningTools": true,
                 "toolUseCount": 4, "sessionName": "Tests", "usage": { "cost": 0.6 },
@@ -524,7 +536,7 @@ async fn prime_events() {
     rig.script("get_session_stats", stats(60_000));
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "messageCount": 5, "sessionName": "Tests" }),
         )]),
@@ -533,7 +545,7 @@ async fn prime_events() {
         .await;
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "messageCount": 6, "sessionName": "Tests" }),
         )]),
@@ -544,7 +556,7 @@ async fn prime_events() {
     rig.script("get_session_stats", stats(9_000));
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "sessionId": "conversation-after-new", "messageCount": 0, "firstMessage": null }),
         )]),
@@ -554,10 +566,9 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::Inactive {
-            session_file: None,
-            session_id: Some("conversation-p1-sub".into()),
-        },
+        DaemonEvent::Inactive(
+            InactiveRow::read(&json!({ "sessionId": "conversation-p1-sub" })).unwrap(),
+        ),
     );
     rig.settle("the subagent ends").await;
 
@@ -566,7 +577,7 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::Roster(vec![prime_row("p2", json!({ "isCompacting": true }))]),
+        roster(vec![prime_row("p2", json!({ "isCompacting": true }))]),
     );
     rig.settle("it comes back with another session only").await;
 
@@ -790,11 +801,11 @@ async fn malformed_prime_rows() {
     leniency("prime-rows-malformed", base, |row| async move {
         let mut seen = serde_json::Map::new();
         for (case, before) in [("new", None), ("known", Some(earlier))] {
-            if let Some(before) = before {
+            if let Some(before) = before.and_then(PrimeRow::read) {
                 rig.app.apply_prime_row(before).await;
             }
-            let kept = match rig.app.apply_prime_row(&row).await {
-                Some(session) => kept(rig, &session).await,
+            let kept = match PrimeRow::read(&row) {
+                Some(row) => kept(rig, &*rig.app.apply_prime_row(row).await).await,
                 None => json!("not listed"),
             };
             seen.insert(case.into(), kept);
@@ -928,10 +939,11 @@ async fn malformed_subagents() {
     leniency("dsh-subagents-malformed", child, |child| async move {
         let mut seen = serde_json::Map::new();
         for (case, before) in [("new", None), ("known", Some(earlier))] {
-            if let Some(before) = before {
-                rig.app.update_dsh_subagent(dsh, before).await;
+            for child in [before, Some(&child)].into_iter().flatten() {
+                if let Some(child) = DshSubagent::read(child) {
+                    rig.app.update_dsh_subagent(dsh, child).await;
+                }
             }
-            rig.app.update_dsh_subagent(dsh, &child).await;
             let running = dsh.state.lock().await.summary.running_subagents;
             let mut kept = subagents(rig).await;
             kept.insert("parentRunningSubagents".into(), json!(running));

@@ -159,19 +159,6 @@ pub struct ModelInfo {
     pub reasoning: bool,
 }
 
-impl ModelInfo {
-    pub fn from_value(v: &Value) -> Option<ModelInfo> {
-        let id = v["id"].as_str()?.to_string();
-        Some(ModelInfo {
-            provider: v["provider"].as_str().unwrap_or("").to_string(),
-            name: v["name"].as_str().unwrap_or(&id).to_string(),
-            context_window: v["contextWindow"].as_u64(),
-            reasoning: v["reasoning"].as_bool().unwrap_or(false),
-            id,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextUsage {
     pub tokens: Option<u64>,
@@ -200,24 +187,6 @@ pub struct Goal {
     pub time_used_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_reason: Option<String>,
-}
-
-impl Goal {
-    /// From Prime's goal state; `None` once there is no goal left to pursue (cleared or complete).
-    pub fn from_value(v: &Value) -> Option<Goal> {
-        let status = v["status"].as_str()?;
-        if matches!(status, "idle" | "complete") {
-            return None;
-        }
-        Some(Goal {
-            objective: v["objective"].as_str()?.to_string(),
-            status: status.to_string(),
-            tokens_used: v["tokensUsed"].as_u64().unwrap_or(0),
-            token_budget: v["tokenBudget"].as_u64(),
-            time_used_seconds: v["timeUsedSeconds"].as_u64().unwrap_or(0),
-            last_reason: v["lastReason"].as_str().map(str::to_string),
-        })
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]

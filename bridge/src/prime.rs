@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
+
+use crate::agent_wire::{InactiveRow, PrimeRow};
+use crate::protocol::SessionKind;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
@@ -19,18 +22,14 @@ const PROTOCOL_VERSION: u64 = 7;
 
 pub enum DaemonEvent {
     /// (Re)connected; carries the full roster from `roster_subscribe`.
-    Roster(Vec<Value>),
-    RosterUpdate(Vec<Value>),
+    Roster(Vec<PrimeRow>),
+    RosterUpdate(Vec<PrimeRow>),
     SessionEvent {
         active_session_id: String,
         event: Value,
     },
     SessionClosed(String),
-    /// A session stopped. Its last roster row has no activeSessionId, only its transcript file and its session id.
-    Inactive {
-        session_file: Option<String>,
-        session_id: Option<String>,
-    },
+    Inactive(InactiveRow),
     Disconnected(String),
 }
 
@@ -77,12 +76,11 @@ fn save_shown(shown: &HashSet<String>) {
     }
 }
 
-/// A roster row's stable key: `sessionId` (a running session's `activeSessionId` differs from a stopped one's).
-fn shown_key(summary: &Value) -> Option<String> {
-    summary["sessionId"]
-        .as_str()
-        .or_else(|| summary["id"].as_str())
-        .map(String::from)
+/// The name of a top-level session in Prime's own list; a subagent has none worth keeping.
+fn top_level(row: &PrimeRow) -> Option<String> {
+    (row.kind != SessionKind::Subagent)
+        .then(|| row.listed_as.clone())
+        .flatten()
 }
 
 /// Where the daemon may listen: newer Prime builds use `prime-agent-rust-<uid>`, older ones `prime-agent-<uid>`.
@@ -242,15 +240,13 @@ impl PrimeDaemon {
         };
 
         let roster = self.supervisor("roster_subscribe", json!({})).await?;
-        let rows: Vec<Value> = roster["roster"]
+        let rows: Vec<PrimeRow> = roster["roster"]
             .as_array()
-            .map(|rows| rows.iter().map(|r| r["summary"].clone()).collect())
-            .unwrap_or_default();
-        let running: HashSet<String> = rows
-            .iter()
-            .filter(|r| r["runtimeKind"] != "subagent" && r["activeSessionId"].is_string())
-            .filter_map(shown_key)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| PrimeRow::read(&row["summary"]))
             .collect();
+        let running: HashSet<String> = rows.iter().filter_map(top_level).collect();
         let _ = tx.send(DaemonEvent::Roster(rows));
         tokio::spawn(self.clone().wake_open_sessions(running));
         let _ = reader.await;
@@ -288,20 +284,11 @@ impl PrimeDaemon {
                 let mut rows = Vec::new();
                 for row in message["changed"].as_array().into_iter().flatten() {
                     if row["status"] == "inactive" {
-                        let summary = &row["summary"];
-                        let session_file = summary["sessionFile"].as_str().map(str::to_string);
-                        let session_id = summary["sessionId"]
-                            .as_str()
-                            .or_else(|| summary["id"].as_str())
-                            .map(str::to_string);
-                        if session_file.is_some() || session_id.is_some() {
-                            let _ = tx.send(DaemonEvent::Inactive {
-                                session_file,
-                                session_id,
-                            });
+                        if let Some(row) = InactiveRow::read(&row["summary"]) {
+                            let _ = tx.send(DaemonEvent::Inactive(row));
                         }
                     } else {
-                        rows.push(row["summary"].clone());
+                        rows.extend(PrimeRow::read(&row["summary"]));
                     }
                 }
                 self.note_shown(&rows);
@@ -378,7 +365,7 @@ impl PrimeDaemon {
         cwd: &str,
         model: Option<&str>,
         thinking: Option<&str>,
-    ) -> Result<Value> {
+    ) -> Result<PrimeRow> {
         let home = std::env::var("HOME").unwrap_or_default();
         let mut config = json!({
             "cwd": cwd,
@@ -392,22 +379,20 @@ impl PrimeDaemon {
         if let Some(thinking) = thinking {
             config["thinking"] = json!(thinking);
         }
-        self.supervisor(
-            "create",
-            json!({ "config": config, "launchEnv": launch_env() }),
-        )
-        .await
+        let created = self
+            .supervisor(
+                "create",
+                json!({ "config": config, "launchEnv": launch_env() }),
+            )
+            .await?;
+        PrimeRow::read(&created).ok_or_else(|| anyhow!("Prime returned no session id"))
     }
 
     /// Remembers top-level sessions that start while connected, so a reboot doesn't lose them either.
-    fn note_shown(&self, rows: &[Value]) {
+    fn note_shown(&self, rows: &[PrimeRow]) {
         let mut shown = self.shown.lock().unwrap();
         let before = shown.len();
-        for row in rows {
-            if row["runtimeKind"] != "subagent" && row["activeSessionId"].is_string() {
-                shown.extend(shown_key(row));
-            }
-        }
+        shown.extend(rows.iter().filter_map(top_level));
         if shown.len() != before {
             save_shown(&shown);
         }
@@ -426,8 +411,9 @@ impl PrimeDaemon {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|s| s["lifecycle"] == "live" && s["runtimeKind"] != "subagent")
-            .filter_map(|s| Some((shown_key(s)?, s["activeSessionId"].as_str()?.to_string())))
+            .filter(|s| s["lifecycle"] == "live")
+            .filter_map(PrimeRow::read)
+            .filter_map(|row| Some((top_level(&row)?, row.id)))
             .collect();
         // The first run has no list yet: start it from what is running.
         let before = load_shown().unwrap_or_default();

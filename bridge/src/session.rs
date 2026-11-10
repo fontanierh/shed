@@ -10,6 +10,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
+use crate::agent_wire::{
+    self, queue_texts, AgentState, AgentStats, Attached, DshSubagent, InactiveRow, PiSubagents,
+    PrimeRow,
+};
 use crate::history::{self, History};
 use crate::prime::{DaemonEvent, PrimeDaemon};
 use crate::protocol::{
@@ -219,27 +223,6 @@ fn first_line(text: &str, max: usize) -> String {
         .trim()
         .chars()
         .take(max)
-        .collect()
-}
-
-fn queue_texts(v: &Value) -> Vec<String> {
-    let Some(entries) = v.as_array() else {
-        return Vec::new();
-    };
-    entries
-        .iter()
-        .filter_map(|e| match e {
-            Value::String(s) => Some(s.clone()),
-            _ => ["text", "message", "content"]
-                .iter()
-                .find_map(|k| match &e[*k] {
-                    Value::String(s) => Some(s.clone()),
-                    Value::Array(blocks) => blocks
-                        .iter()
-                        .find_map(|b| b["text"].as_str().map(str::to_string)),
-                    _ => None,
-                }),
-        })
         .collect()
 }
 
@@ -582,10 +565,7 @@ impl App {
                 .prime
                 .create(&cwd, model.as_deref(), thinking.as_deref())
                 .await?;
-            let session = self
-                .apply_prime_row(&row)
-                .await
-                .ok_or_else(|| anyhow!("Prime returned no session id"))?;
+            let session = self.apply_prime_row(row).await;
             self.refresh(&session).await?;
             let summary = session.state.lock().await.summary.clone();
             return Ok(summary);
@@ -1131,7 +1111,7 @@ impl App {
                 .await
                 .ok()
                 .map(|data| {
-                    let messages = data["messages"].as_array().cloned().unwrap_or_default();
+                    let messages = agent_wire::messages(&data);
                     Transcript::rebuild(&messages, 8000)
                 })
                 .unwrap_or_default()
@@ -1195,10 +1175,8 @@ impl App {
                 DaemonEvent::Roster(rows) => {
                     last_error = None;
                     let mut live = Vec::new();
-                    for row in &rows {
-                        if let Some(s) = self.apply_prime_row(row).await {
-                            live.push(s.id.clone());
-                        }
+                    for row in rows {
+                        live.push(self.apply_prime_row(row).await.id.clone());
                     }
                     // Drop sessions that ended while disconnected, and re-attach the rest.
                     let prime: Vec<Arc<Session>> = self
@@ -1225,7 +1203,7 @@ impl App {
                     }
                 }
                 DaemonEvent::RosterUpdate(rows) => {
-                    for row in &rows {
+                    for row in rows {
                         self.apply_prime_row(row).await;
                     }
                 }
@@ -1238,10 +1216,11 @@ impl App {
                     }
                 }
                 DaemonEvent::SessionClosed(id) => self.remove(&id).await,
-                DaemonEvent::Inactive {
+                // The row has no id left to find the session by, only what it was stored as.
+                DaemonEvent::Inactive(InactiveRow {
                     session_file,
                     session_id,
-                } => {
+                }) => {
                     let prime: Vec<Arc<Session>> = self
                         .sessions
                         .read()
@@ -1290,26 +1269,22 @@ impl App {
     }
 
     /// Mirror one Prime roster row into a session, creating it on first sight.
-    async fn apply_prime_row(self: &Arc<Self>, row: &Value) -> Option<Arc<Session>> {
-        let id = row["activeSessionId"].as_str()?.to_string();
-        let cwd = row["cwd"].as_str().unwrap_or("").to_string();
-        let session = match self.find(&id).await {
+    async fn apply_prime_row(self: &Arc<Self>, row: PrimeRow) -> Arc<Session> {
+        let session = match self.find(&row.id).await {
             Ok(s) => s,
             Err(_) => {
-                let mut summary = new_summary(&id, AgentKind::Prime, SessionKind::Root, &cwd);
-                summary.created_at = row["created"]
-                    .as_str()
-                    .and_then(parse_iso_ms)
-                    .unwrap_or_else(now_ms);
+                let mut summary =
+                    new_summary(&row.id, AgentKind::Prime, SessionKind::Root, &row.cwd);
+                summary.created_at = row.created_at.unwrap_or_else(now_ms);
                 let session = Arc::new(Session {
-                    id: id.clone(),
+                    id: row.id.clone(),
                     agent: AgentKind::Prime,
                     backend: Backend::Prime,
-                    cwd,
+                    cwd: row.cwd,
                     state: Mutex::new(SessionState::new(summary, None)),
                 });
                 let mut sessions = self.sessions.write().await;
-                match sessions.iter().find(|s| s.id == id) {
+                match sessions.iter().find(|s| s.id == row.id) {
                     Some(existing) => existing.clone(),
                     None => {
                         sessions.push(session.clone());
@@ -1320,34 +1295,19 @@ impl App {
         };
         let mut st = session.state.lock().await;
         let s = &mut st.summary;
-        s.kind = if row["runtimeKind"] == "subagent" {
-            SessionKind::Subagent
-        } else {
-            SessionKind::Root
-        };
-        s.parent_id = row["parentActiveSessionId"].as_str().map(str::to_string);
-        s.name = row["sessionName"].as_str().map(str::to_string);
-        s.running_subagents = row["hasRunningSubagents"] == true;
-        s.last_active_at = row["lastActivityAt"]
-            .as_str()
-            .and_then(parse_iso_ms)
-            .or(s.last_active_at);
-        s.title = match (&s.name, row["firstMessage"].as_str()) {
+        s.kind = row.kind;
+        s.parent_id = row.parent_id;
+        s.name = row.name;
+        s.running_subagents = row.running_subagents;
+        s.last_active_at = row.last_active_at.or(s.last_active_at);
+        s.title = match (&s.name, row.first_message.as_deref()) {
             (Some(name), _) => name.clone(),
             (None, Some(first)) if !first_line(first, 60).is_empty() => first_line(first, 60),
             _ => default_title(&s.cwd),
         };
-        s.status = if row["isCompacting"] == true {
-            SessionStatus::Compacting
-        } else if row["isStreaming"] == true
-            || row["activity"].as_str().is_some_and(|a| a != "idle")
-        {
-            SessionStatus::Running
-        } else {
-            SessionStatus::Idle
-        };
+        s.status = row.status;
         s.error = None;
-        if let Some(model) = ModelInfo::from_value(&row["model"]) {
+        if let Some(model) = row.model {
             let window = s
                 .model
                 .as_ref()
@@ -1358,44 +1318,36 @@ impl App {
                 ..model
             });
         }
-        if let Some(level) = row["thinkingLevel"].as_str() {
-            s.thinking_level = Some(level.to_string());
+        if let Some(level) = row.thinking_level {
+            s.thinking_level = Some(level);
         }
-        let reported = row["usage"]["cost"].as_f64();
-        if let Some(actions) = row.get("sessionActions") {
-            s.queue = Queue {
-                steering: queue_texts(&actions["steering"]),
-                follow_up: queue_texts(&actions["followUps"]),
-            };
+        if let Some(queue) = row.queue {
+            s.queue = queue;
         }
-        st.session_file = row["sessionFile"].as_str().map(str::to_string);
-        // The conversation's id: `new_session` replaces it, and the window chosen for the session goes with it, or a
+        st.session_file = row.session_file;
+        // `new_session` replaces the conversation, and the window chosen for the session goes with it, or a
         // restarted bridge would look for the window under an id the session no longer has.
-        if let Some(current) = row["sessionId"].as_str() {
-            if st.prime_session.as_deref() != Some(current) {
+        if let Some(current) = row.conversation {
+            if st.prime_session.as_deref() != Some(current.as_str()) {
                 let before = limit_key(&session, &st).to_string();
-                st.prime_session = Some(current.to_string());
-                self.rekey_limit(&before, current);
+                self.rekey_limit(&before, &current);
+                st.prime_session = Some(current);
             }
         }
-        if let Some(own) = reported {
+        if let Some(own) = row.cost {
             st.summary.cost = self
                 .prime_cost(st.session_file.as_deref(), own, st.summary.cost)
                 .max(st.gateway_cost);
         }
-        if let Some(pid) = row["workerPid"].as_u64() {
-            st.worker_pid = Some(pid as u32);
+        if let Some(pid) = row.worker_pid {
+            st.worker_pid = Some(pid);
         }
-        let calls = row["toolUseCount"].as_u64().unwrap_or(0);
-        st.tools = match st.tools {
-            _ if row["isRunningTools"] != true => None,
-            Some((n, since)) if n == calls => Some((n, since)),
-            _ => Some((calls, Instant::now())),
+        st.tools = match (row.running_tools, st.tools) {
+            (None, _) => None,
+            (Some(calls), Some((n, since))) if n == calls => Some((n, since)),
+            (Some(calls), _) => Some((calls, Instant::now())),
         };
-        let mark = (
-            row["activity"].as_str().unwrap_or("").to_string(),
-            row["messageCount"].as_u64().unwrap_or(0),
-        );
+        let mark = (row.activity, row.message_count);
         let refresh = st.roster_mark != mark || st.summary.thinking_levels.is_empty();
         st.roster_mark = mark;
         self.publish_summary(&st);
@@ -1403,7 +1355,7 @@ impl App {
             self.schedule_refresh(&session, &mut st);
         }
         drop(st);
-        Some(session)
+        session
     }
 
     /// Prime: attach to the daemon session so its events stream, and load the transcript.
@@ -1443,14 +1395,11 @@ impl App {
                 return Err(error);
             }
         };
-        let messages = data["snapshot"]["messages"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let Attached { messages, goal } = Attached::read(&data);
         self.load_history(session, &messages).await;
         let mut st = session.state.lock().await;
         st.attached = true;
-        st.summary.goal = Goal::from_value(&data["snapshot"]["state"]["goal"]);
+        st.summary.goal = goal;
         self.publish_summary(&st);
         st.transcript.reset(&messages);
         self.send_snapshot(&session.id, &mut st);
@@ -1464,7 +1413,7 @@ impl App {
         let mut refresh = false;
         let mut resnapshot = false;
         let mut pi_subagents: Option<(String, Value, bool)> = None;
-        let mut dsh_subagent: Option<Value> = None;
+        let mut dsh_subagent: Option<DshSubagent> = None;
         let kind = event["type"].as_str().unwrap_or("");
         match kind {
             "agent_start" => st.summary.status = SessionStatus::Running,
@@ -1506,7 +1455,7 @@ impl App {
                 st.summary.background_jobs = event["running"].as_u64().unwrap_or(0) as u32;
                 summary_changed = true;
             }
-            "dsh_subagent" => dsh_subagent = Some(event.clone()),
+            "dsh_subagent" => dsh_subagent = DshSubagent::read(event),
             "dsh_question" => {
                 st.summary.question = Some(event["question"].clone()).filter(|q| q.is_object());
                 summary_changed = true;
@@ -1558,7 +1507,7 @@ impl App {
                 .await;
         }
         if let Some(child) = dsh_subagent {
-            self.update_dsh_subagent(session, &child).await;
+            self.update_dsh_subagent(session, child).await;
         }
         if resnapshot {
             let (app, session) = (self.clone(), session.clone());
@@ -1624,7 +1573,7 @@ impl App {
         details: &Value,
         finished: bool,
     ) {
-        let Some(results) = details["results"].as_array() else {
+        let Some(PiSubagents { chain, runs }) = PiSubagents::read(details) else {
             return;
         };
         let parent_window = parent
@@ -1635,7 +1584,6 @@ impl App {
             .context
             .as_ref()
             .map(|c| c.window);
-        let mode = details["mode"].as_str().unwrap_or("single");
         let short_call: String = call_id
             .chars()
             .filter(|c| c.is_ascii_alphanumeric())
@@ -1645,7 +1593,8 @@ impl App {
             .chars()
             .rev()
             .collect();
-        for (index, result) in results.iter().enumerate() {
+        let count = runs.len();
+        for (index, run) in runs.into_iter().enumerate() {
             let id = format!("{}.{}.{}", parent.id, short_call, index);
             let session = match self.find(&id).await {
                 Ok(s) => s,
@@ -1665,26 +1614,10 @@ impl App {
                     session
                 }
             };
-            let exit = result["exitCode"].as_i64().unwrap_or(0);
-            // A running child reports exitCode 0 (or -1 as a parallel placeholder) until its process exits; it is
-            // finished once its last assistant message stopped for a reason other than calling tools.
-            let settled = exit != -1
-                && matches!(result["stopReason"].as_str(), Some(reason) if reason != "toolUse");
-            let done = finished || settled || (mode == "chain" && index + 1 < results.len());
-            let failed =
-                exit > 0 || matches!(result["stopReason"].as_str(), Some("error" | "aborted"));
-            let messages: Vec<Value> = result["messages"]
-                .as_array()
-                .map(|ms| {
-                    ms.iter()
-                        .filter(|m| m["role"] != "system")
-                        .cloned()
-                        .collect()
-                })
-                .unwrap_or_default();
+            let done = finished || run.settled() || (chain && index + 1 < count);
+            let failed = run.failed();
 
             let mut st = session.state.lock().await;
-            let agent = result["agent"].as_str().unwrap_or("subagent");
             if !done
                 || !matches!(
                     st.summary.status,
@@ -1693,45 +1626,30 @@ impl App {
             {
                 st.summary.last_active_at = Some(now_ms());
             }
-            st.summary.name = Some(agent.to_string());
-            st.summary.title = format!(
-                "{agent}: {}",
-                first_line(result["task"].as_str().unwrap_or(""), 60)
-            );
+            st.summary.title = format!("{}: {}", run.agent, first_line(&run.task, 60));
+            st.summary.name = Some(run.agent);
             st.summary.status = match (done, failed) {
                 (false, _) => SessionStatus::Running,
                 (true, true) => SessionStatus::Error,
                 (true, false) => SessionStatus::Done,
             };
             st.summary.error = if done && failed {
-                result["stderr"].as_str().map(|e| first_line(e, 200))
+                run.stderr.as_deref().map(|e| first_line(e, 200))
             } else {
                 None
             };
-            if let Some((provider, model)) =
-                result["model"].as_str().and_then(|m| m.split_once('/'))
-            {
-                st.summary.model = Some(ModelInfo {
-                    provider: provider.into(),
-                    id: model.into(),
-                    name: model.into(),
-                    context_window: parent_window,
-                    reasoning: true,
-                });
+            if let Some(model) = run.model {
+                st.summary.model = Some(model.info(parent_window));
             }
-            let usage = &result["usage"];
-            st.summary.cost = usage["cost"].as_f64().unwrap_or(0.0).max(st.gateway_cost);
-            st.summary.context = parent_window.map(|window| {
-                let tokens = usage["contextTokens"].as_u64();
-                ContextUsage {
-                    tokens,
-                    window,
-                    percent: tokens.map(|t| t as f64 * 100.0 / window as f64),
-                }
+            st.summary.cost = run.cost.max(st.gateway_cost);
+            st.summary.context = parent_window.map(|window| ContextUsage {
+                tokens: run.context_tokens,
+                window,
+                percent: run.context_tokens.map(|t| t as f64 * 100.0 / window as f64),
             });
-            if messages.len() != st.sent_messages || done {
-                st.transcript.reset(&messages);
-                st.sent_messages = messages.len();
+            if run.messages.len() != st.sent_messages || done {
+                st.transcript.reset(&run.messages);
+                st.sent_messages = run.messages.len();
                 self.send_snapshot(&session.id, &mut st);
             }
             self.publish_summary(&st);
@@ -1740,7 +1658,7 @@ impl App {
 
     /// Mirror one of a DeepSeek session's subagents as a read-only session. dsh runs them in the session's own
     /// process, each with its own conversation, and can nest them; the feed gives one child's whole state at a time.
-    async fn update_dsh_subagent(self: &Arc<Self>, root: &Arc<Session>, child: &Value) {
+    async fn update_dsh_subagent(self: &Arc<Self>, root: &Arc<Session>, child: DshSubagent) {
         let short = |dsh_id: &str| {
             dsh_id
                 .chars()
@@ -1748,11 +1666,8 @@ impl App {
                 .take(8)
                 .collect::<String>()
         };
-        let Some(dsh_id) = child["id"].as_str() else {
-            return;
-        };
-        let id = format!("{}.{}", root.id, short(dsh_id));
-        let parent_id = match child["parent"].as_str() {
+        let id = format!("{}.{}", root.id, short(&child.id));
+        let parent_id = match &child.parent {
             Some(parent) => format!("{}.{}", root.id, short(parent)),
             None => root.id.clone(),
         };
@@ -1775,35 +1690,23 @@ impl App {
             }
         };
         let root_model = root.state.lock().await.summary.model.clone();
-        let messages: Vec<Value> = child["messages"].as_array().cloned().unwrap_or_default();
-        let status = match child["status"].as_str() {
-            Some("running") => SessionStatus::Running,
-            Some("error") => SessionStatus::Error,
-            _ => SessionStatus::Done,
-        };
         {
             let mut st = session.state.lock().await;
-            st.summary.last_active_at = Some(child["lastActiveAt"].as_u64().unwrap_or_else(now_ms));
-            if let Some(created) = child["createdAt"].as_u64() {
+            st.summary.last_active_at = Some(child.last_active_at.unwrap_or_else(now_ms));
+            if let Some(created) = child.created_at {
                 st.summary.created_at = created;
             }
             st.summary.name = Some("subagent".into());
-            st.summary.title = first_line(child["title"].as_str().unwrap_or("subagent"), 60);
-            st.summary.status = status;
-            st.summary.error = child["error"].as_str().map(|e| first_line(e, 200));
-            st.summary.model = match child["model"].as_str().and_then(|m| m.split_once('/')) {
-                Some((provider, model)) => Some(ModelInfo {
-                    provider: provider.into(),
-                    id: model.into(),
-                    name: model.into(),
-                    context_window: root_model.as_ref().and_then(|m| m.context_window),
-                    reasoning: true,
-                }),
+            st.summary.title = first_line(child.title.as_deref().unwrap_or("subagent"), 60);
+            st.summary.status = child.status;
+            st.summary.error = child.error.as_deref().map(|e| first_line(e, 200));
+            st.summary.model = match child.model {
+                Some(model) => Some(model.info(root_model.as_ref().and_then(|m| m.context_window))),
                 None => root_model,
             };
-            if messages.len() != st.sent_messages || status != SessionStatus::Running {
-                st.transcript.reset(&messages);
-                st.sent_messages = messages.len();
+            if child.messages.len() != st.sent_messages || child.status != SessionStatus::Running {
+                st.transcript.reset(&child.messages);
+                st.sent_messages = child.messages.len();
                 self.send_snapshot(&session.id, &mut st);
             }
             self.publish_summary(&st);
@@ -1852,11 +1755,14 @@ impl App {
             self.command(session, "get_state", json!({})),
             self.command(session, "get_session_stats", json!({}))
         );
-        let state = state?;
-        let model = ModelInfo::from_value(&state["model"]);
-        let model_key = model.as_ref().map(|m| format!("{}/{}", m.provider, m.id));
+        let state = AgentState::read(&state?);
+        let stats = stats.ok().map(|stats| AgentStats::read(&stats));
+        let model_key = state
+            .model
+            .as_ref()
+            .map(|m| format!("{}/{}", m.provider, m.id));
         let levels = if model_key != levels_for {
-            Some(self.thinking_levels(session, model.as_ref()).await)
+            Some(self.thinking_levels(session, state.model.as_ref()).await)
         } else {
             None
         };
@@ -1866,63 +1772,46 @@ impl App {
             st.summary.thinking_levels = levels;
             st.levels_for = model_key;
         }
-        if let Some(mut model) = model {
+        if let Some(mut model) = state.model {
             // Prime's daemon state omits the context window; stats carry it.
             if model.context_window.is_none() {
                 model.context_window = stats
                     .as_ref()
-                    .ok()
-                    .and_then(|s| s["contextUsage"]["contextWindow"].as_u64());
+                    .and_then(|stats| stats.context.as_ref())
+                    .map(|context| context.window);
             }
             st.summary.model = Some(model);
         }
-        if let Some(level) = state["thinkingLevel"].as_str() {
-            st.summary.thinking_level = Some(level.to_string());
+        if let Some(level) = state.thinking_level {
+            st.summary.thinking_level = Some(level);
         }
-        if let Some(auto) = state["autoCompactionEnabled"].as_bool() {
+        if let Some(auto) = state.auto_compaction {
             st.summary.auto_compaction = auto;
         }
         if !matches!(
             st.summary.status,
             SessionStatus::Stopped | SessionStatus::Error | SessionStatus::Done
         ) {
-            st.summary.status = if state["isCompacting"] == true {
-                SessionStatus::Compacting
-            } else if state["isStreaming"] == true {
-                SessionStatus::Running
-            } else {
-                SessionStatus::Idle
-            };
+            st.summary.status = state.status;
         }
-        if let Some(name) = state["sessionName"].as_str() {
+        if let Some(name) = state.name {
             st.named = true;
-            st.summary.title = name.to_string();
+            st.summary.title = name;
         }
-        if let Some(actions) = state.get("sessionActions") {
-            st.summary.queue = Queue {
-                steering: queue_texts(&actions["steering"]),
-                follow_up: queue_texts(&actions["followUps"]),
-            };
+        if let Some(queue) = state.queue {
+            st.summary.queue = queue;
         }
-        if let Ok(stats) = stats {
-            if let Some(own) = stats["cost"].as_f64() {
+        if let Some(stats) = stats {
+            if let Some(own) = stats.cost {
                 st.summary.cost = if session.backend == Backend::Prime {
-                    let file = stats["sessionFile"]
-                        .as_str()
-                        .map(str::to_string)
-                        .or_else(|| st.session_file.clone());
+                    let file = stats.session_file.or_else(|| st.session_file.clone());
                     self.prime_cost(file.as_deref(), own, st.summary.cost)
                 } else {
                     own
                 }
                 .max(st.gateway_cost);
             }
-            let usage = &stats["contextUsage"];
-            st.summary.context = usage["contextWindow"].as_u64().map(|window| ContextUsage {
-                tokens: usage["tokens"].as_u64(),
-                window,
-                percent: usage["percent"].as_f64(),
-            });
+            st.summary.context = stats.context;
         }
         // A chosen window, else the model's standard one: report against it, and compact once the session settles
         // near it.
@@ -1950,10 +1839,9 @@ impl App {
                     .tokens
                     .is_some_and(|t| t > context.window - compaction_reserve(context.window));
         }
-        let file = state["sessionFile"].as_str().map(str::to_string);
-        let file_changed = file.is_some() && file != st.session_file;
+        let file_changed = state.session_file.is_some() && state.session_file != st.session_file;
         if file_changed {
-            st.session_file = file;
+            st.session_file = state.session_file;
         }
         self.publish_summary(&st);
         drop(st);
@@ -2104,7 +1992,7 @@ impl App {
                 .command(session, "get_available_thinking_levels", json!({}))
                 .await
             {
-                if let Ok(levels) = serde_json::from_value::<Vec<String>>(data["levels"].clone()) {
+                if let Some(levels) = agent_wire::thinking_levels(&data) {
                     return levels;
                 }
             }
@@ -2114,20 +2002,7 @@ impl App {
             .command(session, "get_available_models", json!({}))
             .await
             .unwrap_or(Value::Null);
-        let map = models["models"]
-            .as_array()
-            .and_then(|ms| {
-                ms.iter().find(|x| {
-                    x["id"] == model.id.as_str() && x["provider"] == model.provider.as_str()
-                })
-            })
-            .map(|x| x["thinkingLevelMap"].clone())
-            .unwrap_or(Value::Null);
-        ALL_LEVELS
-            .iter()
-            .filter(|l| !map.get(**l).is_some_and(Value::is_null))
-            .map(|s| s.to_string())
-            .collect()
+        agent_wire::model_levels(&models, model, &ALL_LEVELS)
     }
 
     /// Reload the whole transcript from the agent and send it to attached clients.
@@ -2136,7 +2011,7 @@ impl App {
             return Ok(());
         }
         let data = self.command(session, "get_messages", json!({})).await?;
-        let messages = data["messages"].as_array().cloned().unwrap_or_default();
+        let messages = agent_wire::messages(&data);
         self.load_history(session, &messages).await;
         {
             let mut st = session.state.lock().await;
