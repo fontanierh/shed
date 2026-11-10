@@ -1,0 +1,96 @@
+{
+  "malformed": {
+    "lastReason": [
+      {
+        "differs": {
+          "lastReason": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "lastReason": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "objective": [
+      {
+        "differs": {
+          "": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "objective": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "status": [
+      {
+        "differs": {
+          "": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "status": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "timeUsedSeconds": [
+      {
+        "differs": {
+          "timeUsedSeconds": 0
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "timeUsedSeconds": 7
+        },
+        "when": "7"
+      }
+    ],
+    "tokenBudget": [
+      {
+        "differs": {
+          "tokenBudget": null
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "tokenBudget": 7
+        },
+        "when": "7"
+      }
+    ],
+    "tokensUsed": [
+      {
+        "differs": {
+          "tokensUsed": 0
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "tokensUsed": 7
+        },
+        "when": "7"
+      }
+    ]
+  },
+  "wellFormed": {
+    "lastReason": "still failing",
+    "objective": "Make the tests pass",
+    "status": "active",
+    "timeUsedSeconds": 90,
+    "tokenBudget": 50000,
+    "tokensUsed": 1200
+  }
+}

@@ -1,0 +1,649 @@
+{
+  "malformed": {
+    "activeSessionId": [
+      {
+        "differs": {
+          "known": "not listed",
+          "new": "not listed"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.id": "text",
+          "new.summary.id": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "activity": [
+      {
+        "differs": {
+          "known.rosterMark": [
+            "",
+            2
+          ],
+          "new.rosterMark": [
+            "",
+            2
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.rosterMark": [
+            "text",
+            2
+          ],
+          "new.rosterMark": [
+            "text",
+            2
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "created": [
+      {
+        "differs": {
+          "new.summary.createdAt": "now"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "cwd": [
+      {
+        "differs": {
+          "new.summary.cwd": ""
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "new.summary.cwd": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "firstMessage": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "hasRunningSubagents": [
+      {
+        "differs": {
+          "known.summary.runningSubagents": false,
+          "new.summary.runningSubagents": false
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "isCompacting": [
+      {
+        "differs": {},
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.status": "compacting",
+          "new.summary.status": "compacting"
+        },
+        "when": "true"
+      }
+    ],
+    "isRunningTools": [
+      {
+        "differs": {
+          "known.toolCalls": null,
+          "new.toolCalls": null
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "isStreaming": [
+      {
+        "differs": {
+          "known.summary.status": "idle",
+          "new.summary.status": "idle"
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "lastActivityAt": [
+      {
+        "differs": {
+          "new.summary.lastActiveAt": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "messageCount": [
+      {
+        "differs": {
+          "known.rosterMark": [
+            "idle",
+            0
+          ],
+          "new.rosterMark": [
+            "idle",
+            0
+          ]
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.rosterMark": [
+            "idle",
+            7
+          ],
+          "new.rosterMark": [
+            "idle",
+            7
+          ]
+        },
+        "when": "7"
+      }
+    ],
+    "model": [
+      {
+        "differs": {
+          "known.summary.model.contextWindow": 200000,
+          "known.summary.model.reasoning": false,
+          "new.summary.model": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "model.contextWindow": [
+      {
+        "differs": {
+          "known.summary.model.contextWindow": 200000,
+          "new.summary.model.contextWindow": null
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.model.contextWindow": 7,
+          "new.summary.model.contextWindow": 7
+        },
+        "when": "7"
+      }
+    ],
+    "model.id": [
+      {
+        "differs": {
+          "known.summary.model.contextWindow": 200000,
+          "known.summary.model.reasoning": false,
+          "new.summary.model": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.model.id": "text",
+          "new.summary.model.id": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "model.name": [
+      {
+        "differs": {
+          "known.summary.model.name": "model-1",
+          "new.summary.model.name": "model-1"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.model.name": "text",
+          "new.summary.model.name": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "model.provider": [
+      {
+        "differs": {
+          "known.summary.model.provider": "",
+          "new.summary.model.provider": ""
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.model.provider": "text",
+          "new.summary.model.provider": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "model.reasoning": [
+      {
+        "differs": {
+          "known.summary.model.reasoning": false,
+          "new.summary.model.reasoning": false
+        },
+        "when": "missing | null | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {},
+        "when": "true"
+      }
+    ],
+    "parentActiveSessionId": [
+      {
+        "differs": {
+          "known.summary.parentId": null,
+          "new.summary.parentId": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.parentId": "text",
+          "new.summary.parentId": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "runtimeKind": [
+      {
+        "differs": {
+          "known.summary.kind": "root",
+          "new.summary.kind": "root"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "known.summary.queue.steering": [
+            "earlier"
+          ],
+          "new.summary.queue.followUp": [],
+          "new.summary.queue.steering": []
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "known.summary.queue.steering": [],
+          "new.summary.queue.followUp": [],
+          "new.summary.queue.steering": []
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions.followUps": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "new.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions.followUps.0": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "new.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.queue.followUp": [
+            "text"
+          ],
+          "new.summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionActions.followUps.0.content": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "new.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.queue.followUp": [
+            "text"
+          ],
+          "new.summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionActions.followUps.0.content.0": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "new.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions.followUps.0.content.0.text": [
+      {
+        "differs": {
+          "known.summary.queue.followUp": [],
+          "new.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.queue.followUp": [
+            "text"
+          ],
+          "new.summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionActions.followUps.0.content.0.type": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions.steering": [
+      {
+        "differs": {
+          "known.summary.queue.steering": [],
+          "new.summary.queue.steering": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "sessionActions.steering.0": [
+      {
+        "differs": {
+          "known.summary.queue.steering": [
+            "then at tests"
+          ],
+          "new.summary.queue.steering": [
+            "then at tests"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.queue.steering": [
+            "text",
+            "then at tests"
+          ],
+          "new.summary.queue.steering": [
+            "text",
+            "then at tests"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionFile": [
+      {
+        "differs": {
+          "known.sessionFile": null,
+          "new.sessionFile": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.sessionFile": "text",
+          "new.sessionFile": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionId": [
+      {
+        "differs": {
+          "new.primeSession": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.primeSession": "text",
+          "new.primeSession": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "sessionName": [
+      {
+        "differs": {
+          "known.summary.name": null,
+          "known.summary.title": "Make the tests pass",
+          "new.summary.name": null,
+          "new.summary.title": "Make the tests pass"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.name": "text",
+          "known.summary.title": "text",
+          "new.summary.name": "text",
+          "new.summary.title": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "thinkingLevel": [
+      {
+        "differs": {
+          "known.summary.thinkingLevel": "low",
+          "new.summary.thinkingLevel": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.thinkingLevel": "text",
+          "new.summary.thinkingLevel": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "toolUseCount": [
+      {
+        "differs": {
+          "known.toolCalls": 0,
+          "new.toolCalls": 0
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.toolCalls": 7,
+          "new.toolCalls": 7
+        },
+        "when": "7"
+      }
+    ],
+    "usage": [
+      {
+        "differs": {
+          "known.summary.cost": 0.25,
+          "new.summary.cost": 0.0
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "usage.cost": [
+      {
+        "differs": {
+          "known.summary.cost": 0.25,
+          "new.summary.cost": 0.0
+        },
+        "when": "missing | null | true | -3 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.summary.cost": 7.0,
+          "new.summary.cost": 7.0
+        },
+        "when": "7"
+      },
+      {
+        "differs": {
+          "known.summary.cost": 1.5,
+          "new.summary.cost": 1.5
+        },
+        "when": "1.5"
+      }
+    ],
+    "workerPid": [
+      {
+        "differs": {
+          "known.workerPid": 1,
+          "new.workerPid": null
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "known.workerPid": 7,
+          "new.workerPid": 7
+        },
+        "when": "7"
+      }
+    ]
+  },
+  "wellFormed": {
+    "known": {
+      "items": [],
+      "levelsFor": null,
+      "named": false,
+      "primeSession": "conversation-p1",
+      "rosterMark": [
+        "idle",
+        2
+      ],
+      "sessionFile": "/work/sessions/p1.jsonl",
+      "summary": {
+        "agent": "prime",
+        "autoCompaction": true,
+        "backgroundJobs": 0,
+        "cost": 0.5,
+        "createdAt": 1700000000000,
+        "cwd": "/work/project",
+        "id": "p1",
+        "kind": "subagent",
+        "lastActiveAt": 1700000040000,
+        "model": {
+          "contextWindow": 400000,
+          "id": "model-1",
+          "name": "Model One",
+          "provider": "example",
+          "reasoning": true
+        },
+        "name": "reviewer",
+        "parentId": "p0",
+        "queue": {
+          "followUp": [
+            "open a pull request"
+          ],
+          "steering": [
+            "look at src",
+            "then at tests"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": true,
+        "sites": [],
+        "status": "running",
+        "thinkingLevel": "medium",
+        "thinkingLevels": [],
+        "title": "reviewer"
+      },
+      "toolCalls": 3,
+      "workerPid": 4242
+    },
+    "new": {
+      "items": [],
+      "levelsFor": null,
+      "named": false,
+      "primeSession": "conversation-p1",
+      "rosterMark": [
+        "idle",
+        2
+      ],
+      "sessionFile": "/work/sessions/p1.jsonl",
+      "summary": {
+        "agent": "prime",
+        "autoCompaction": true,
+        "backgroundJobs": 0,
+        "cost": 0.5,
+        "createdAt": 1700000000000,
+        "cwd": "/work/project",
+        "id": "p1",
+        "kind": "subagent",
+        "lastActiveAt": 1700000040000,
+        "model": {
+          "contextWindow": 400000,
+          "id": "model-1",
+          "name": "Model One",
+          "provider": "example",
+          "reasoning": true
+        },
+        "name": "reviewer",
+        "parentId": "p0",
+        "queue": {
+          "followUp": [
+            "open a pull request"
+          ],
+          "steering": [
+            "look at src",
+            "then at tests"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": true,
+        "sites": [],
+        "status": "running",
+        "thinkingLevel": "medium",
+        "thinkingLevels": [],
+        "title": "reviewer"
+      },
+      "toolCalls": 3,
+      "workerPid": 4242
+    }
+  }
+}

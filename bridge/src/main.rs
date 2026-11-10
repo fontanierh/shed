@@ -1,5 +1,6 @@
 //! agent-remote: control Pi, Prime Agent and DeepSeek Harness sessions on this Mac from the macOS and iOS apps.
 
+mod agent_wire;
 mod cost;
 mod dsh;
 mod files;

@@ -4,6 +4,7 @@
 //! committing it, since it is the change in behaviour.
 
 use super::*;
+use crate::protocol::Goal;
 
 /// Stands in for the agents: answers the bridge's commands from a script and keeps what it was asked.
 #[derive(Default)]
@@ -398,6 +399,18 @@ async fn pi_events() {
     rig.check("pi").await;
 }
 
+fn rows(rows: Vec<Value>) -> Vec<PrimeRow> {
+    rows.iter().filter_map(PrimeRow::read).collect()
+}
+
+fn roster(all: Vec<Value>) -> DaemonEvent {
+    DaemonEvent::Roster(rows(all))
+}
+
+fn roster_update(changed: Vec<Value>) -> DaemonEvent {
+    DaemonEvent::RosterUpdate(rows(changed))
+}
+
 fn prime_row(id: &str, more: Value) -> Value {
     let mut row = json!({
         "activeSessionId": id,
@@ -453,7 +466,7 @@ async fn prime_events() {
     );
     send(
         &rig,
-        DaemonEvent::Roster(vec![
+        roster(vec![
             prime_row("p1", json!({ "hasRunningSubagents": true })),
             subagent.clone(),
             json!({ "cwd": "/a/row/without/an/id" }),
@@ -471,7 +484,7 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "isStreaming": true, "activity": "streaming", "messageCount": 3, "isRunningTools": true,
                 "toolUseCount": 4, "sessionName": "Tests", "usage": { "cost": 0.6 },
@@ -524,7 +537,7 @@ async fn prime_events() {
     rig.script("get_session_stats", stats(60_000));
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "messageCount": 5, "sessionName": "Tests" }),
         )]),
@@ -533,7 +546,7 @@ async fn prime_events() {
         .await;
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "messageCount": 6, "sessionName": "Tests" }),
         )]),
@@ -544,7 +557,7 @@ async fn prime_events() {
     rig.script("get_session_stats", stats(9_000));
     send(
         &rig,
-        DaemonEvent::RosterUpdate(vec![prime_row(
+        roster_update(vec![prime_row(
             "p1",
             json!({ "sessionId": "conversation-after-new", "messageCount": 0, "firstMessage": null }),
         )]),
@@ -554,10 +567,9 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::Inactive {
-            session_file: None,
-            session_id: Some("conversation-p1-sub".into()),
-        },
+        DaemonEvent::Inactive(
+            InactiveRow::read(&json!({ "sessionId": "conversation-p1-sub" })).unwrap(),
+        ),
     );
     rig.settle("the subagent ends").await;
 
@@ -566,7 +578,7 @@ async fn prime_events() {
 
     send(
         &rig,
-        DaemonEvent::Roster(vec![prime_row("p2", json!({ "isCompacting": true }))]),
+        roster(vec![prime_row("p2", json!({ "isCompacting": true }))]),
     );
     rig.settle("it comes back with another session only").await;
 
@@ -609,4 +621,401 @@ async fn deepseek_events() {
         .await;
 
     rig.check("deepseek").await;
+}
+
+/// Every way one part of `base` can be wrong: missing, or of another type. Agents are other programs, and the bridge
+/// must read what it can of what they send.
+fn malformed(base: &Value) -> Vec<(String, String, Value)> {
+    fn paths(value: &Value, at: Vec<String>, out: &mut Vec<Vec<String>>) {
+        match value {
+            Value::Object(fields) => {
+                for (key, field) in fields {
+                    let mut path = at.clone();
+                    path.push(key.clone());
+                    out.push(path.clone());
+                    paths(field, path, out);
+                }
+            }
+            Value::Array(values) if !values.is_empty() => {
+                let mut path = at;
+                path.push("0".into());
+                out.push(path.clone());
+                paths(&values[0], path, out);
+            }
+            _ => {}
+        }
+    }
+    fn replace(value: &mut Value, path: &[String], with: Option<&Value>) {
+        let (last, parents) = path.split_last().unwrap();
+        let mut at = value;
+        for key in parents {
+            at = match at {
+                Value::Array(values) => &mut values[0],
+                other => &mut other[key.as_str()],
+            };
+        }
+        match (at, with) {
+            (Value::Array(values), Some(with)) => values[0] = with.clone(),
+            (Value::Array(values), None) => {
+                values.remove(0);
+            }
+            (Value::Object(fields), Some(with)) => {
+                fields.insert(last.clone(), with.clone());
+            }
+            (Value::Object(fields), None) => {
+                fields.remove(last);
+            }
+            _ => unreachable!(),
+        }
+    }
+    let wrong = [
+        json!(null),
+        json!(true),
+        json!(7),
+        json!(-3),
+        json!(1.5),
+        json!("text"),
+        json!([]),
+        json!({}),
+    ];
+    let mut all = Vec::new();
+    paths(base, Vec::new(), &mut all);
+    let mut out = Vec::new();
+    for path in all {
+        let name = path.join(".");
+        let mut without = base.clone();
+        replace(&mut without, &path, None);
+        out.push((name.clone(), "missing".to_string(), without));
+        for value in &wrong {
+            let mut changed = base.clone();
+            replace(&mut changed, &path, Some(value));
+            out.push((name.clone(), value.to_string(), changed));
+        }
+    }
+    out
+}
+
+/// Where two values differ, by path; a part only one of them has reads null on the other side.
+fn differences(before: &Value, after: &Value, at: &str, out: &mut serde_json::Map<String, Value>) {
+    match (before, after) {
+        (Value::Object(a), Value::Object(b)) => {
+            let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+            for key in keys {
+                let path = if at.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{at}.{key}")
+                };
+                differences(
+                    a.get(key).unwrap_or(&Value::Null),
+                    b.get(key).unwrap_or(&Value::Null),
+                    &path,
+                    out,
+                );
+            }
+        }
+        (a, b) if a != b => {
+            out.insert(at.to_string(), b.clone());
+        }
+        _ => {}
+    }
+}
+
+/// What the bridge makes of each malformed message, as its difference from what it makes of the well-formed one.
+/// Messages wrong in different ways that come out the same are listed together.
+async fn leniency<F, Fut>(pin: &str, base: Value, outcome: F)
+where
+    F: Fn(Value) -> Fut,
+    Fut: std::future::Future<Output = Value>,
+{
+    let expected = outcome(base.clone()).await;
+    let mut by_part: std::collections::BTreeMap<String, Vec<(Value, Vec<String>)>> =
+        Default::default();
+    for (part, wrong, message) in malformed(&base) {
+        let mut diff = serde_json::Map::new();
+        differences(&expected, &outcome(message).await, "", &mut diff);
+        let diff = Value::Object(diff);
+        let outcomes = by_part.entry(part).or_default();
+        match outcomes.iter_mut().find(|(known, _)| *known == diff) {
+            Some((_, ways)) => ways.push(wrong),
+            None => outcomes.push((diff, vec![wrong])),
+        }
+    }
+    let parts: serde_json::Map<String, Value> = by_part
+        .into_iter()
+        .map(|(part, outcomes)| {
+            let outcomes: Vec<Value> = outcomes
+                .into_iter()
+                .map(|(diff, ways)| json!({ "when": ways.join(" | "), "differs": diff }))
+                .collect();
+            (part, json!(outcomes))
+        })
+        .collect();
+    let seen = json!({ "wellFormed": expected, "malformed": parts });
+    let text = serde_json::to_string_pretty(&seen).unwrap() + "\n";
+    let path = format!("{}/src/session/pins/{pin}.json", env!("CARGO_MANIFEST_DIR"));
+    if std::env::var_os("UPDATE_FIXTURES").is_some() {
+        std::fs::write(&path, &text).unwrap();
+    }
+    assert!(
+        std::fs::read_to_string(&path).unwrap_or_default() == text,
+        "{pin} no longer reads malformed messages as pinned. UPDATE_FIXTURES=1 cargo test rewrites {path}."
+    );
+}
+
+/// A session's summary and the rest of what the bridge keeps from the agent's messages.
+async fn kept(rig: &Rig, session: &Session) -> Value {
+    let st = session.state.lock().await;
+    let mut kept = json!({
+        "summary": st.summary,
+        "sessionFile": st.session_file,
+        "named": st.named,
+        "levelsFor": st.levels_for,
+        "primeSession": st.prime_session,
+        "workerPid": st.worker_pid,
+        "toolCalls": st.tools.map(|(calls, _)| calls),
+        "rosterMark": [st.roster_mark.0, st.roster_mark.1],
+        "items": st.transcript.items,
+    });
+    rig.steady(&mut kept);
+    kept
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_prime_rows() {
+    let rig = &Rig::new("prime-rows", &[]);
+    let earlier = &prime_row(
+        "p1",
+        json!({ "sessionName": "earlier", "thinkingLevel": "low", "usage": { "cost": 0.25 }, "workerPid": 1,
+            "isRunningTools": true, "sessionFile": "/work/sessions/earlier.jsonl",
+            "model": { "provider": "example", "id": "model-1", "name": "Model One", "contextWindow": 200000 },
+            "sessionActions": { "steering": ["earlier"] } }),
+    );
+    let base = prime_row(
+        "p1",
+        json!({ "runtimeKind": "subagent", "parentActiveSessionId": "p0", "sessionName": "reviewer",
+            "hasRunningSubagents": true, "isStreaming": true, "isCompacting": false, "isRunningTools": true,
+            "model": { "provider": "example", "id": "model-1", "name": "Model One", "reasoning": true, "contextWindow": 400000 },
+            "sessionActions": { "steering": ["look at src", { "content": "then at tests" }],
+                "followUps": [{ "content": [{ "type": "text", "text": "open a pull request" }] }] } }),
+    );
+    leniency("prime-rows-malformed", base, |row| async move {
+        let mut seen = serde_json::Map::new();
+        for (case, before) in [("new", None), ("known", Some(earlier))] {
+            if let Some(before) = before.and_then(PrimeRow::read) {
+                rig.app.apply_prime_row(before).await;
+            }
+            let kept = match PrimeRow::read(&row) {
+                Some(row) => kept(rig, &*rig.app.apply_prime_row(row).await).await,
+                None => json!("not listed"),
+            };
+            seen.insert(case.into(), kept);
+            rig.app.sessions.write().await.clear();
+        }
+        Value::Object(seen)
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_state_and_stats() {
+    let config = r#"{ "token": "t", "defaultContextWindows": { "example/model-1": 272000 } }"#;
+    let rig = &Rig::new("answers", &[("config.json", config)]);
+    let base = json!({
+        "get_state": { "model": { "provider": "example", "id": "model-1", "name": "Model One", "reasoning": true },
+            "thinkingLevel": "medium", "autoCompactionEnabled": false, "isStreaming": true, "isCompacting": false,
+            "sessionName": "Tests", "sessionFile": "/work/sessions/p1.jsonl",
+            "sessionActions": { "steering": ["look at src"], "followUps": [{ "content": "then open a pull request" }] } },
+        "get_session_stats": { "cost": 0.75, "sessionFile": "/work/sessions/p1.jsonl",
+            "contextUsage": { "tokens": 50000, "contextWindow": 400000, "percent": 12.5 } },
+        "get_available_models": { "models": [
+            { "provider": "example", "id": "model-1", "thinkingLevelMap": { "off": null, "max": null } } ] },
+        "get_available_thinking_levels": { "levels": ["low", "high"] },
+    });
+    for (pin, agent, backend) in [
+        ("answers-malformed-prime", AgentKind::Prime, Backend::Prime),
+        ("answers-malformed-pi", AgentKind::Pi, Backend::Pi),
+    ] {
+        leniency(pin, base.clone(), |answers| async move {
+            *rig.app.agents.answers.lock().unwrap() =
+                serde_json::from_value(answers).unwrap_or_default();
+            // What an earlier refresh left, so a part the agent leaves out shows as kept.
+            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
+            summary.title = "Earlier".into();
+            summary.thinking_level = Some("low".into());
+            summary.thinking_levels = vec!["low".into()];
+            summary.cost = 0.25;
+            summary.queue.steering = vec!["earlier".into()];
+            summary.model = Some(ModelInfo {
+                provider: "example".into(),
+                id: "model-0".into(),
+                name: "Model Zero".into(),
+                context_window: Some(200_000),
+                reasoning: true,
+            });
+            let mut state = SessionState::new(summary, Some("/work/sessions/earlier.jsonl".into()));
+            state.levels_for = Some("example/model-0".into());
+            if backend == Backend::Pi {
+                state.child = Some(crate::rpc::RpcChild::inert());
+            }
+            let session = Arc::new(Session {
+                id: "s1".into(),
+                agent,
+                backend,
+                cwd: "/work/project".into(),
+                state: Mutex::new(state),
+            });
+            let mut refreshed = match rig.app.refresh(&session).await {
+                Ok(()) => kept(rig, &session).await,
+                Err(error) => json!({ "fails": error.to_string() }),
+            };
+            let asked: Vec<Value> = std::mem::take(&mut *rig.app.agents.asked.lock().unwrap())
+                .into_iter()
+                .map(|asked| asked["command"].clone())
+                .collect();
+            refreshed["asked"] = json!(asked);
+            refreshed
+        })
+        .await;
+    }
+}
+
+/// The subagent sessions of the rig, by id, then gone.
+async fn subagents(rig: &Rig) -> serde_json::Map<String, Value> {
+    let mut seen = serde_json::Map::new();
+    let all = rig.app.sessions.read().await.clone();
+    for session in all.iter().filter(|s| s.backend == Backend::PiSubagent) {
+        seen.insert(session.id.clone(), kept(rig, session).await);
+    }
+    rig.app
+        .sessions
+        .write()
+        .await
+        .retain(|s| s.backend != Backend::PiSubagent);
+    seen
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_subagents() {
+    let rig = &Rig::new("subagents", &[("sessions.json", SAVED_SESSIONS)]);
+    let pi = &rig.app.find("pi1").await.unwrap();
+    let dsh = &rig.app.find("dsh1").await.unwrap();
+
+    let earlier = &json!({ "mode": "single", "results": [
+        { "agent": "scout", "task": "Earlier", "exitCode": 0, "model": "example/model-0",
+          "usage": { "cost": 0.5, "contextTokens": 100 },
+          "messages": [{ "role": "user", "content": "Earlier" }, { "role": "assistant", "content": "On it" }] },
+    ] });
+    let details = json!({ "mode": "chain", "results": [
+        { "agent": "scout", "task": "Find the entry point", "exitCode": 0, "stopReason": "stop",
+          "model": "example/model-1", "stderr": "a warning", "usage": { "cost": 0.25, "contextTokens": 1200 },
+          "messages": [{ "role": "system", "content": "You are a scout" }, { "role": "user", "content": "Find the entry point" }] },
+        { "agent": "reviewer", "task": "Review it", "exitCode": 1, "stopReason": "error", "stderr": "refused",
+          "messages": [] },
+    ] });
+    leniency("pi-subagents-malformed", details, |details| async move {
+        let mut seen = serde_json::Map::new();
+        for (case, before) in [("new", None), ("known", Some(earlier))] {
+            for details in [before, Some(&details)].into_iter().flatten() {
+                let event = json!({ "type": "tool_execution_update", "toolName": "subagent",
+                    "toolCallId": "call_1", "partialResult": { "details": details } });
+                if let SessionEvent::PiSubagentCall(call) = SessionEvent::read(&event) {
+                    rig.app.update_pi_subagents(pi, call).await;
+                }
+            }
+            seen.insert(case.into(), Value::Object(subagents(rig).await));
+        }
+        Value::Object(seen)
+    })
+    .await;
+
+    let earlier = &json!({ "type": "dsh_subagent", "id": "f117882d-2d43", "status": "running", "title": "Earlier",
+        "model": "example/model-0", "createdAt": 1_600_000_000_000u64, "lastActiveAt": 1_600_000_005_000u64,
+        "messages": [{ "role": "user", "content": "Earlier" }, { "role": "assistant", "content": "On it" }] });
+    let child = json!({ "type": "dsh_subagent", "id": "f117882d-2d43", "parent": "0a1b2c3d-4e5f", "status": "error",
+        "title": "Read notes.txt", "error": "the model refused\nmore", "model": "example/model-1",
+        "createdAt": 1_700_000_000_000u64, "lastActiveAt": 1_700_000_005_000u64,
+        "messages": [{ "role": "user", "content": "Read notes.txt" }] });
+    leniency("dsh-subagents-malformed", child, |child| async move {
+        let mut seen = serde_json::Map::new();
+        for (case, before) in [("new", None), ("known", Some(earlier))] {
+            for child in [before, Some(&child)].into_iter().flatten() {
+                if let Some(child) = DshSubagent::read(child) {
+                    rig.app.update_dsh_subagent(dsh, child).await;
+                }
+            }
+            let running = dsh.state.lock().await.summary.running_subagents;
+            let mut kept = subagents(rig).await;
+            kept.insert("parentRunningSubagents".into(), json!(running));
+            seen.insert(case.into(), Value::Object(kept));
+        }
+        Value::Object(seen)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn malformed_goals() {
+    let goal = json!({ "objective": "Make the tests pass", "status": "active", "tokensUsed": 1200,
+        "tokenBudget": 50000, "timeUsedSeconds": 90, "lastReason": "still failing" });
+    leniency("goal-malformed", goal, |goal| async move {
+        json!(Goal::from_value(&goal))
+    })
+    .await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn malformed_events() {
+    let rig = &Rig::new("events", &[]);
+    let events = json!({
+        "compaction": { "type": "compaction_end", "aborted": false, "errorMessage": null },
+        "queue": { "type": "queue_update", "steering": ["look at src"], "followUp": [{ "content": "then open a pull request" }] },
+        "level": { "type": "thinking_level_changed", "level": "high" },
+        "name": { "type": "session_info_changed", "name": "Tests" },
+        "goal": { "type": "goal_update", "goal": { "objective": "Make the tests pass", "status": "active" } },
+        "jobs": { "type": "dsh_jobs", "running": 2 },
+        "question": { "type": "dsh_question", "question": { "text": "Which branch?" } },
+        "subagent": { "type": "dsh_subagent", "id": "f117882d-2d43", "status": "running", "title": "Read notes.txt" },
+        "call": { "type": "tool_execution_update", "toolName": "subagent", "toolCallId": "call_1",
+            "partialResult": { "details": { "mode": "single", "results": [{ "agent": "scout", "task": "Find it" }] } } },
+        "result": { "type": "tool_execution_end", "toolName": "subagent", "toolCallId": "call_1",
+            "result": { "details": { "mode": "single", "results": [{ "agent": "scout", "task": "Find it", "stopReason": "stop" }] } } },
+    });
+    leniency("events-malformed", events, |events| async move {
+        let mut seen = serde_json::Map::new();
+        for (name, event) in events.as_object().into_iter().flatten() {
+            // What earlier events left, so a part the agent leaves out shows as kept or dropped.
+            let mut summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+            summary.title = "Earlier".into();
+            summary.thinking_level = Some("low".into());
+            summary.queue.steering = vec!["earlier".into()];
+            summary.background_jobs = 1;
+            summary.question = Some(json!({ "text": "Earlier?" }));
+            let mut state = SessionState::new(summary, None);
+            state.named = true;
+            let session = Arc::new(Session {
+                id: "s1".into(),
+                agent: AgentKind::Pi,
+                backend: Backend::Pi,
+                cwd: "/work/project".into(),
+                state: Mutex::new(state),
+            });
+            rig.app.sessions.write().await.push(session.clone());
+            rig.app.handle_event(&session, event).await;
+            let mut kept = kept(rig, &session).await;
+            // The conversation is the transcript's to read, and has its own tests.
+            kept.as_object_mut().unwrap().remove("items");
+            // How a subagent's own parts are read is pinned on its own: here, only that it shows.
+            let shown: serde_json::Map<String, Value> = subagents(rig)
+                .await
+                .into_iter()
+                .map(|(id, subagent)| (id, subagent["summary"]["status"].clone()))
+                .collect();
+            kept["subagents"] = Value::Object(shown);
+            rig.app.sessions.write().await.clear();
+            seen.insert(name.clone(), kept);
+        }
+        Value::Object(seen)
+    })
+    .await;
 }

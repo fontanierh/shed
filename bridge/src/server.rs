@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast::error::RecvError, mpsc};
 
-use crate::protocol::{ClientMessage, ClientOp, ModelInfo, ServerMessage};
+use crate::protocol::{ClientMessage, ClientOp, ServerMessage};
 use crate::session::{attach_snapshot, App};
 
 pub async fn ws_handler(
@@ -228,10 +228,7 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let data = app
                 .command(&session, "get_available_models", json!({}))
                 .await?;
-            let mut models: Vec<ModelInfo> = data["models"]
-                .as_array()
-                .map(|ms| ms.iter().filter_map(ModelInfo::from_value).collect())
-                .unwrap_or_default();
+            let mut models = crate::agent_wire::models(&data);
             // With Open Codex, a session switches among its models only, like the new-session list.
             if crate::opencodex::gateway().is_some() {
                 models.retain(|m| m.provider == crate::opencodex::PROVIDER);

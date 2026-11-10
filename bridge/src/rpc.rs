@@ -154,6 +154,19 @@ fn command_line(opts: &SpawnOptions) -> Result<(String, Vec<String>)> {
 }
 
 impl RpcChild {
+    /// A child with no process behind it, for a session whose commands a test answers.
+    #[cfg(test)]
+    pub(crate) fn inert() -> Arc<RpcChild> {
+        Arc::new(RpcChild {
+            stdin: tokio::sync::Mutex::new(None),
+            dsh: None,
+            pending: Arc::default(),
+            stderr_tail: Arc::default(),
+            next_id: AtomicU64::new(0),
+            child: Mutex::new(None),
+        })
+    }
+
     pub fn spawn(
         opts: &SpawnOptions,
     ) -> Result<(Arc<RpcChild>, mpsc::UnboundedReceiver<ChildOutput>)> {

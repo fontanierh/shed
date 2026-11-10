@@ -1,0 +1,1049 @@
+{
+  "malformed": {
+    "call": [
+      {
+        "differs": {
+          "call": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null,
+          "call.summary.runningSubagents": false
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details.mode": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details.results": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details.results.0": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {},
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details.results.0.agent": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.partialResult.details.results.0.task": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.toolCallId": [
+      {
+        "differs": {
+          "call.subagents.s1.call.0": "running",
+          "call.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null,
+          "call.subagents.s1.text.0": "running"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "call.toolName": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null,
+          "call.summary.runningSubagents": false
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "call.type": [
+      {
+        "differs": {
+          "call.subagents.s1.call1.0": null,
+          "call.summary.runningSubagents": false
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "compaction": [
+      {
+        "differs": {
+          "compaction": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {},
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "compaction.aborted": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "compaction.errorMessage": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "compaction.type": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "goal": [
+      {
+        "differs": {
+          "goal": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "goal.summary.goal": null
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "goal.goal": [
+      {
+        "differs": {
+          "goal.summary.goal": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "goal.goal.objective": [
+      {
+        "differs": {
+          "goal.summary.goal": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "goal.summary.goal.objective": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "goal.goal.status": [
+      {
+        "differs": {
+          "goal.summary.goal": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "goal.summary.goal.status": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "goal.type": [
+      {
+        "differs": {
+          "goal.summary.goal": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "jobs": [
+      {
+        "differs": {
+          "jobs": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "jobs.summary.backgroundJobs": 1
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "jobs.running": [
+      {
+        "differs": {
+          "jobs.summary.backgroundJobs": 0
+        },
+        "when": "missing | null | true | -3 | 1.5 | \"text\" | [] | {}"
+      },
+      {
+        "differs": {
+          "jobs.summary.backgroundJobs": 7
+        },
+        "when": "7"
+      }
+    ],
+    "jobs.type": [
+      {
+        "differs": {
+          "jobs.summary.backgroundJobs": 1
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "level": [
+      {
+        "differs": {
+          "level": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "level.summary.thinkingLevel": "low"
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "level.level": [
+      {
+        "differs": {
+          "level.summary.thinkingLevel": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "level.summary.thinkingLevel": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "level.type": [
+      {
+        "differs": {
+          "level.summary.thinkingLevel": "low"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "name": [
+      {
+        "differs": {
+          "name": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "name.summary.title": "Earlier"
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "name.name": [
+      {
+        "differs": {
+          "name.named": false,
+          "name.summary.title": "project"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "name.summary.title": "text"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "name.type": [
+      {
+        "differs": {
+          "name.summary.title": "Earlier"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "question": [
+      {
+        "differs": {
+          "question": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": "Earlier?"
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "question.question": [
+      {
+        "differs": {
+          "question.summary.question": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | []"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": null
+        },
+        "when": "{}"
+      }
+    ],
+    "question.question.text": [
+      {
+        "differs": {
+          "question.summary.question.text": null
+        },
+        "when": "missing | null"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": true
+        },
+        "when": "true"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": 7
+        },
+        "when": "7"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": -3
+        },
+        "when": "-3"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": 1.5
+        },
+        "when": "1.5"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": "text"
+        },
+        "when": "\"text\""
+      },
+      {
+        "differs": {
+          "question.summary.question.text": []
+        },
+        "when": "[]"
+      },
+      {
+        "differs": {
+          "question.summary.question.text": {}
+        },
+        "when": "{}"
+      }
+    ],
+    "question.type": [
+      {
+        "differs": {
+          "question.summary.question.text": "Earlier?"
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "queue": [
+      {
+        "differs": {
+          "queue": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "queue.summary.queue.followUp": [],
+          "queue.summary.queue.steering": [
+            "earlier"
+          ]
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "queue.followUp": [
+      {
+        "differs": {
+          "queue.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "queue.followUp.0": [
+      {
+        "differs": {
+          "queue.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "queue.summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "queue.followUp.0.content": [
+      {
+        "differs": {
+          "queue.summary.queue.followUp": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "queue.summary.queue.followUp": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "queue.steering": [
+      {
+        "differs": {
+          "queue.summary.queue.steering": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "queue.steering.0": [
+      {
+        "differs": {
+          "queue.summary.queue.steering": []
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "queue.summary.queue.steering": [
+            "text"
+          ]
+        },
+        "when": "\"text\""
+      }
+    ],
+    "queue.type": [
+      {
+        "differs": {
+          "queue.summary.queue.followUp": [],
+          "queue.summary.queue.steering": [
+            "earlier"
+          ]
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result": [
+      {
+        "differs": {
+          "result": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.mode": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.results": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.results.0": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {},
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.results.0.agent": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.results.0.stopReason": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.result.details.results.0.task": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.toolCallId": [
+      {
+        "differs": {
+          "result.subagents.s1.call.0": "done",
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null,
+          "result.subagents.s1.text.0": "done"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "result.toolName": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "result.type": [
+      {
+        "differs": {
+          "result.subagents.s1.call1.0": null
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "subagent": [
+      {
+        "differs": {
+          "subagent": null
+        },
+        "when": "missing"
+      },
+      {
+        "differs": {
+          "subagent.subagents.s1.f117882d": null,
+          "subagent.summary.runningSubagents": false
+        },
+        "when": "null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "subagent.id": [
+      {
+        "differs": {
+          "subagent.subagents.s1.f117882d": null,
+          "subagent.summary.runningSubagents": false
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"
+      },
+      {
+        "differs": {
+          "subagent.subagents.s1.f117882d": null,
+          "subagent.subagents.s1.text": "running"
+        },
+        "when": "\"text\""
+      }
+    ],
+    "subagent.status": [
+      {
+        "differs": {
+          "subagent.subagents.s1.f117882d": "done",
+          "subagent.summary.runningSubagents": false
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "subagent.title": [
+      {
+        "differs": {},
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ],
+    "subagent.type": [
+      {
+        "differs": {
+          "subagent.subagents.s1.f117882d": null,
+          "subagent.summary.runningSubagents": false
+        },
+        "when": "missing | null | true | 7 | -3 | 1.5 | \"text\" | [] | {}"
+      }
+    ]
+  },
+  "wellFormed": {
+    "call": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {
+        "s1.call1.0": "running"
+      },
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": true,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "compaction": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "goal": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "goal": {
+          "objective": "Make the tests pass",
+          "status": "active",
+          "timeUsedSeconds": 0,
+          "tokensUsed": 0
+        },
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "jobs": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 2,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "level": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "high",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "name": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Tests"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "question": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Which branch?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "queue": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {},
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [
+            "then open a pull request"
+          ],
+          "steering": [
+            "look at src"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "result": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {
+        "s1.call1.0": "done"
+      },
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": false,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    },
+    "subagent": {
+      "levelsFor": null,
+      "named": true,
+      "primeSession": null,
+      "rosterMark": [
+        "",
+        0
+      ],
+      "sessionFile": null,
+      "subagents": {
+        "s1.f117882d": "running"
+      },
+      "summary": {
+        "agent": "pi",
+        "autoCompaction": true,
+        "backgroundJobs": 1,
+        "cost": 0.0,
+        "createdAt": "now",
+        "cwd": "/work/project",
+        "id": "s1",
+        "kind": "root",
+        "question": {
+          "text": "Earlier?"
+        },
+        "queue": {
+          "followUp": [],
+          "steering": [
+            "earlier"
+          ]
+        },
+        "readOnly": false,
+        "runningSubagents": true,
+        "sites": [],
+        "status": "starting",
+        "thinkingLevel": "low",
+        "thinkingLevels": [],
+        "title": "Earlier"
+      },
+      "toolCalls": null,
+      "workerPid": null
+    }
+  }
+}
