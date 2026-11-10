@@ -28,8 +28,6 @@ How each agent is driven:
 
 **Open Codex** (`bridge/src/opencodex.rs`) is where every agent's models come from. The bridge writes its catalog into Pi's and Prime's configuration whenever a client asks for an agent's models (at most once a minute), makes it dsh's one provider in the `shed` profile, and reads its request history for what each session has spent and how fast it is spending.
 
-**Catalog upkeep** (`bridge/src/upkeep.rs`) covers the days between a model's launch and Open Codex learning what it takes. Open Codex finds a provider's new models within the hour and lists them with no reasoning efforts and no image input until one of its releases describes them, and Shed then offers them without either. Every half hour the bridge looks for such models and asks the provider, through Open Codex: a plain request, one with a picture, and one per effort the provider's other models take, each effort listed alone so a refusal shows. What the provider accepted, and reasoned with, goes into Open Codex's own model settings (`PUT /api/model-settings`), so every client of that Open Codex gets it. It only touches a model that has no setting there, costs a handful of small requests per new model, and keeps its notes in `~/.agent-remote/catalog-checks.json`. A model it has described is not checked again: clear the model's settings in Open Codex to have it looked at afresh. `"opencodex": { "upkeep": false }` in `~/.agent-remote/config.json` turns it off.
-
 The bridge also stops runaway generations: a reply that streams thousands of blank characters, or the same few characters over and over, is aborted and the agent is told why (`bridge/src/runaway.rs`).
 
 ## Clients

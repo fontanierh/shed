@@ -19,7 +19,6 @@ mod sites;
 mod stall;
 mod store;
 mod transcript;
-mod upkeep;
 
 use anyhow::{bail, Result};
 use axum::extract::DefaultBodyLimit;
@@ -54,7 +53,6 @@ async fn main() -> Result<()> {
     }
 
     let app = session::App::new(store::Store::open()?)?;
-    tokio::spawn(upkeep::keep());
     let router = Router::new()
         .route("/ws", get(server::ws_handler))
         .route("/media", get(media::media_handler))
