@@ -1,5 +1,72 @@
-// Where messages are written: the text field with its send, steer and stop buttons, and the model and context row below.
+// Where messages are written: the text field with its send, steer and stop buttons, the model and context row below,
+// and the dock under the conversation that holds them.
 import SwiftUI
+
+/// What sits under the conversation: a warning or an error when there is one, the composer, and the dark behind them
+/// that the conversation slides under.
+struct ComposerDock: View {
+    let store: SessionStore
+    let session: SessionSummary
+    /// A phone in portrait.
+    let narrow: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let stuck = session.stuck {
+                StuckBanner(store: store, session: session, stuck: stuck)
+                    .transition(.opacity.combined(with: .offset(y: 8)))
+            }
+            if let error = session.error, session.status == .error {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout).foregroundStyle(Palette.danger)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .card(radius: 10, fill: Palette.danger.opacity(0.08), border: Palette.danger.opacity(0.4))
+            }
+            ComposerArea(store: store, session: session)
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: session.stuck)
+        .frame(maxWidth: Layout.column)
+        .padding(.horizontal, Layout.gutter)
+        .padding(.bottom, 14)
+        .padding(.top, 4)
+        .background {
+            if narrow {
+                // On a phone: a soft, rounded pool of dark under the bar and its chips, its edges blurred
+                // away into the beam on every side, so no line or corner shows. Rasterised once, so scrolling
+                // under it costs nothing.
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .fill(Palette.canvas.opacity(0.9))
+                    .padding(.horizontal, 6)
+                    .padding(.top, -16)
+                    .padding(.bottom, 6)
+                    // Room around it for the blur, so its edges aren't cut off.
+                    .padding(40)
+                    .blur(radius: 16)
+                    .drawingGroup()
+                    .padding(-40)
+                    .allowsHitTesting(false)
+            } else {
+            // The transcript slides under the composer: a fade into the field's own dark, so no row shows
+            // through between the bar and its chips, and no hard band either. A plain gradient, not a mask
+            // or a blur, so scrolling under it costs nothing.
+            LinearGradient(stops: [.init(color: Palette.canvas.opacity(0), location: 0),
+                                   .init(color: Palette.canvas.opacity(0.94), location: 0.3),
+                                   .init(color: Palette.canvas.opacity(0.97), location: 1)],
+                           startPoint: .top, endPoint: .bottom)
+                .padding(.top, -28)
+                // Only under the column, its sides fading out, so the beam beside it stays lit.
+                .padding(.horizontal, -90)
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.16),
+                                             .init(color: .black, location: 0.84), .init(color: .clear, location: 1)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .ignoresSafeArea(edges: .bottom)
+                .allowsHitTesting(false)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
 
 /// The composer, or why there isn't one.
 struct ComposerArea: View {
