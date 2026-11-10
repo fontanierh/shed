@@ -62,8 +62,16 @@ struct SessionView: View {
 
     private var hasJobs: Bool { session.hasBackgroundCommands }
 
-    /// Connected and waiting for the conversation: the phone's dither rain plays.
-    private var raining: Bool { beamStage && !reduceMotion && store.connection == .connected && !store.transcriptLoaded && !ended }
+    /// Connected and waiting for the conversation: the dither rain plays.
+    private var raining: Bool { rains && !reduceMotion && store.connection == .connected && !store.transcriptLoaded && !ended }
+    /// The conversation opens out of the rain: on the phone's stage, and on the Mac.
+    private var rains: Bool {
+        #if os(iOS)
+        beamStage
+        #else
+        true
+        #endif
+    }
     /// A subagent that turned out to have ended as it was opened: its screen says so, then gives way to its parent.
     private var ended: Bool { store.ended.contains(session.id) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -83,18 +91,95 @@ struct SessionView: View {
     @Environment(\.beamStage) private var beamStage
     #else
     private let beamStage = false
+    /// The details open beside the conversation.
+    @State private var detail = DetailSelection()
     #endif
 
     var body: some View {
+        content
+        .background {
+            // One plain dark field behind the whole session, and the beam running
+            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
+            // there the beam lies along the bottom, under the composer, where no text runs.
+            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
+            if beamStage {
+                Color.clear
+            } else if narrow {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+            } else {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
+            }
+        }
+        .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
+        #if os(macOS)
+        // The header already shows the title.
+        .toolbar(removing: .title)
+        #else
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
+                                                  showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
+        .modifier(SoftTopEdge(off: beamStage))
+        .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
+        .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
+        .sheet(isPresented: $showingSites) {
+            NavigationStack {
+                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+                           title: "Sites", empty: "Servers this session starts appear here.")
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
+        .renameSession($renaming, store: store)
+    }
+
+    #if os(macOS)
+    /// The conversation, and beside it the details of the row the reader opened.
+    private var content: some View {
+        HStack(spacing: 0) {
+            column
+            if let sheet = detail.sheet {
+                reading(DetailPanel(sheet: sheet, selection: detail) { show(nil) })
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        // How far the panel's edge can be dragged.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { detail.area = $0 }
+        // Another session's details have no place beside this one.
+        .onChange(of: session.id) { detail.sheet = nil }
+    }
+
+    /// Opens the panel, closes it, or changes what it shows. It slides as it comes and goes.
+    private func show(_ sheet: FeedSheet?) {
+        let change = { if let sheet { detail.toggle(sheet) } else { detail.sheet = nil } }
+        if reduceMotion { return change() }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.92)) { change() }
+    }
+    #else
+    private var content: some View { column }
+    #endif
+
+    /// What the conversation reads of its session, and the details beside it too.
+    private func reading(_ view: some View) -> some View {
+        view
+            .fileLinks()
+            .environment(\.media, store.media(for: session.id))
+            .environment(\.liveText, store.live)
+            .environment(\.stopTool, stopTool)
+            .environment(\.restartKernel, restartKernel)
+            .environment(\.subagents, SubagentLinks(store: store, parent: session.id))
+    }
+
+    private var column: some View {
         VStack(spacing: 0) {
             #if os(macOS)
             SessionHeader(store: store, session: session) { renaming = session }
             #endif
-            // The transcript and, on the phone, the dither it materialises out of: a sibling, so the transcript
+            // The transcript and the dither it materialises out of: a sibling, so the transcript
             // changing identity as it arrives doesn't start the effect over.
-            ZStack {
+            reading(ZStack {
             #if os(iOS)
-            PhoneTranscript(
+            TranscriptView(
                 items: store.transcript,
                 session: session,
                 pending: raining ? "" : pendingTranscript,
@@ -105,7 +190,6 @@ struct SessionView: View {
                 loadEarlier: { await store.loadEarlier() }
             )
             .opacity(veiled ? 0 : 1)
-            .environment(\.subagents, SubagentLinks(store: store, parent: session.id))
             .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
             .transition(beamStage ? .identity : .opacity)
             .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
@@ -121,21 +205,22 @@ struct SessionView: View {
                 loadingEarlier: store.loadingEarlier,
                 loadEarlier: { await store.loadEarlier() }
             )
-            .equatable()
             .opacity(veiled ? 0 : 1)
-            .environment(\.subagents, SubagentLinks(store: store, parent: session.id))
-            // Each session opens at its end, following new output. The conversation arriving replaces the waiting
-            // line with a cross-fade, not a cut.
+            .environment(\.openSheet, SheetOpener { show($0) })
+            .environment(\.detailSelection, detail)
+            // Each session opens at its end, following new output. The rain brings the conversation in; a fade as well
+            // would leave it faint when the rain reads it. With Reduce Motion there is no rain, and it cross-fades.
             .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
-            // On the phone the rain brings it in; a fade as well would leave it faint when the rain reads it.
-            .transition(beamStage ? .identity : .opacity)
-            // On the phone nothing animates as it arrives: the rain prints it, and an animation there laid the whole
-            // conversation out again under it.
-            .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
+            .transition(reduceMotion ? .opacity : .identity)
+            // Nothing animates as it arrives: the rain prints it, and an animation there lays the whole conversation
+            // out again under it.
+            .animation(reduceMotion ? .easeOut(duration: 0.35) : nil, value: store.transcriptLoaded)
             #endif
-            // On the phone the conversation materialises out of the beam's dither instead of a loading line.
-            if beamStage {
+            // The conversation materialises out of the beam's dither instead of a loading line.
+            if rains {
                 Materialize(loading: raining, veiled: $veiled)
+            }
+            if beamStage {
                 // The phone's own fade under the navigation bar, in place of the system's soft edge: dark under the
                 // bar, easing out over a line's height below it.
                 GeometryReader { geometry in
@@ -149,7 +234,7 @@ struct SessionView: View {
                 }
                 .allowsHitTesting(false)
             }
-            }
+            })
             .fillsProposal()
             // On the phone the conversation stops at the composer rather than running on under it and the beam below:
             // off the edge by a hair, so the scroll view doesn't stretch into the composer's inset. The composer's
@@ -161,11 +246,6 @@ struct SessionView: View {
             // that stopped answering.
             .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store, sessionId: session.id) }
             #endif
-            .fileLinks()
-            .environment(\.media, store.media(for: session.id))
-            .environment(\.liveText, store.live)
-            .environment(\.stopTool, stopTool)
-            .environment(\.restartKernel, restartKernel)
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
@@ -225,40 +305,6 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .background {
-            // One plain dark field behind the whole session, and the beam running
-            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
-            // there the beam lies along the bottom, under the composer, where no text runs.
-            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
-            if beamStage {
-                Color.clear
-            } else if narrow {
-                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
-            } else {
-                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
-            }
-        }
-        .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
-        #if os(macOS)
-        // The header already shows the title.
-        .toolbar(removing: .title)
-        #else
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
-                                                  showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
-        .modifier(SoftTopEdge(off: beamStage))
-        .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
-        .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
-        .sheet(isPresented: $showingSites) {
-            NavigationStack {
-                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
-                           title: "Sites", empty: "Servers this session starts appear here.")
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        #endif
-        .renameSession($renaming, store: store)
     }
 
     /// The phone opens the lists from the idle lines; the Mac has both in its header.

@@ -1,7 +1,11 @@
 // A new row in a conversation prints in: its dots come in on the 2 pt halftone grid, in ordered-dither order, until it
 // is solid. Played by the render server on the row's own layer, so it costs the main thread nothing while it runs.
+import QuartzCore
 #if os(iOS)
 import UIKit
+#else
+import AppKit
+#endif
 
 enum DitherReveal {
     /// The halftone grid the rest of the app is drawn on.
@@ -13,21 +17,38 @@ enum DitherReveal {
     private static let bayer: [Int] = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5]
 
     /// For each rank, a tile with only that rank's dots: stacked, the sixteen cover the whole tile.
-    @MainActor static let levels: [CGColor] = (0..<16).map(level)
+    @MainActor static let levels: [CGColor] = (0..<16).map { level($0) }
 
-    private static func level(_ rank: Int) -> CGColor {
+    @MainActor private static func level(_ rank: Int) -> CGColor {
         let side = cell * 4
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = UIScreen.main.scale
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { context in
-            UIColor.black.setFill()
+        return tile(CGSize(width: side, height: side)) { context in
+            context.setFillColor(gray: 0, alpha: 1)
             for index in 0..<16 where bayer[index] == rank {
                 // A hair over the cell, so neighbouring dots never leave a seam when the tile scales.
                 context.fill(CGRect(x: CGFloat(index % 4) * cell, y: CGFloat(index / 4) * cell, width: cell + 0.01, height: cell + 0.01))
             }
         }
+    }
+
+    /// A colour that repeats what `draw` paints on a tile of `size` points. Which way up the tile lies differs between
+    /// the platforms; nothing drawn here depends on it.
+    @MainActor private static func tile(_ size: CGSize, draw: (CGContext) -> Void) -> CGColor {
+        #if os(iOS)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { draw($0.cgContext) }
         return UIColor(patternImage: image).cgColor
+        #else
+        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        guard let context = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return CGColor(gray: 0, alpha: 1) }
+        context.scaleBy(x: scale, y: scale)
+        draw(context)
+        guard let image = context.makeImage() else { return CGColor(gray: 0, alpha: 1) }
+        return NSColor(patternImage: NSImage(cgImage: image, size: size)).cgColor
+        #endif
     }
 
     /// The front of a strip of text printing in along its line, `width` wide: solid where it meets the text already
@@ -35,30 +56,25 @@ enum DitherReveal {
     @MainActor static func front(_ width: CGFloat) -> CGColor {
         let columns = max(4, Int(width / cell) / 4 * 4)
         if let made = fronts[columns] { return made }
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = UIScreen.main.scale
-        format.opaque = false
-        let image = UIGraphicsImageRenderer(size: CGSize(width: CGFloat(columns) * cell, height: cell * 4), format: format).image { context in
+        let made = tile(CGSize(width: CGFloat(columns) * cell, height: cell * 4)) { context in
             for column in 0..<columns {
                 let density = 1 - (Double(column) + 0.5) / Double(columns)
-                UIColor.black.withAlphaComponent(0.45 * density * density).setFill()
+                context.setFillColor(gray: 0, alpha: 0.45 * density * density)
                 context.fill(CGRect(x: CGFloat(column) * cell, y: 0, width: cell + 0.01, height: cell * 4))
-                UIColor.black.setFill()
+                context.setFillColor(gray: 0, alpha: 1)
                 for row in 0..<4 where Double(bayer[row * 4 + column % 4]) < density * 16 {
                     context.fill(CGRect(x: CGFloat(column) * cell, y: CGFloat(row) * cell, width: cell + 0.01, height: cell + 0.01))
                 }
             }
         }
-        let made = UIColor(patternImage: image).cgColor
         fronts[columns] = made
         return made
     }
 
     @MainActor private static var fronts: [Int: CGColor] = [:]
 
-    /// Ends a print-in still running on `view`, leaving it solid.
-    @MainActor static func stop(on view: UIView) {
-        let layer = view.layer
+    /// Ends a print-in still running on a row's `layer`, leaving it solid.
+    @MainActor static func stop(on layer: CALayer) {
         guard layer.mask != nil || layer.animation(forKey: "reveal") != nil else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -67,10 +83,9 @@ enum DitherReveal {
         CATransaction.commit()
     }
 
-    /// Prints `view` in. Taller than the view, so a row still growing as it arrives (a reply streaming in) stays
+    /// Prints a row's `layer` in. Taller than the row, so one still growing as it arrives (a reply streaming in) stays
     /// covered; removed once solid.
-    @MainActor static func play(on view: UIView, reduceMotion: Bool = UIAccessibility.isReduceMotionEnabled) {
-        let layer = view.layer
+    @MainActor static func play(on layer: CALayer, reduceMotion: Bool) {
         if reduceMotion {
             let fade = CABasicAnimation(keyPath: "opacity")
             fade.fromValue = 0
@@ -81,7 +96,7 @@ enum DitherReveal {
             return
         }
         let mask = CALayer()
-        mask.frame = CGRect(x: -40, y: -40, width: max(view.bounds.width, 500) + 80, height: max(view.bounds.height, 900) + 2000)
+        mask.frame = CGRect(x: -40, y: -40, width: max(layer.bounds.width, 500) + 80, height: max(layer.bounds.height, 900) + 2000)
         let now = layer.convertTime(CACurrentMediaTime(), from: nil)
         // Each rank fades up over a short step; the ranks start one after another, the last finishing at `duration`.
         let step = duration * 0.3
@@ -113,4 +128,3 @@ enum DitherReveal {
         }
     }
 }
-#endif

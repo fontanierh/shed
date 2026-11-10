@@ -87,6 +87,11 @@ enum InkEdge {
 
 #if os(iOS)
 import UIKit
+private typealias InkAnchorBase = UIView
+#else
+import AppKit
+private typealias InkAnchorBase = NSView
+#endif
 
 /// Reads where a block's text lies and prints what is new.
 struct InkEdgeReader: ViewModifier {
@@ -101,6 +106,7 @@ struct InkEdgeReader: ViewModifier {
     }
 }
 
+#if os(iOS)
 private struct InkEdgeAnchor: UIViewRepresentable {
     let lines: [InkLine]
     /// Where the block stands in its row.
@@ -109,17 +115,29 @@ private struct InkEdgeAnchor: UIViewRepresentable {
     func makeUIView(context: Context) -> InkAnchorView { InkAnchorView() }
     func updateUIView(_ view: InkAnchorView, context: Context) { view.show(lines, at: origin) }
 }
+#else
+private struct InkEdgeAnchor: NSViewRepresentable {
+    let lines: [InkLine]
+    /// Where the block stands in its row.
+    let origin: CGPoint
+
+    func makeNSView(context: Context) -> InkAnchorView { InkAnchorView() }
+    func updateNSView(_ view: InkAnchorView, context: Context) { view.show(lines, at: origin) }
+}
+#endif
 
 /// Remembers a block's lines and prints the new ones on the row it is in.
-final class InkAnchorView: UIView {
+private final class InkAnchorView: InkAnchorBase {
     private var lines: [InkLine]?
     /// Strips to print once this view is in its row.
     private var waiting: [CGRect] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        #if os(iOS)
         isUserInteractionEnabled = false
         backgroundColor = .clear
+        #endif
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -141,7 +159,7 @@ final class InkAnchorView: UIView {
         guard !strips.isEmpty else { return }
         strips = strips.map { $0.offsetBy(dx: origin.x, dy: origin.y) }
         if let row, waiting.isEmpty {
-            InkEdge.print(strips, on: row)
+            InkEdge.print(strips, on: row, scale: scale)
         } else {
             // Not in its row yet. It is put there before it is first drawn, and the strips must be covered by then,
             // or the words show for a frame before they print.
@@ -150,6 +168,14 @@ final class InkAnchorView: UIView {
         }
     }
 
+    private func printWaiting() {
+        guard !waiting.isEmpty, window != nil, let row else { return }
+        let strips = waiting
+        waiting = []
+        InkEdge.print(strips, on: row, scale: scale)
+    }
+
+    #if os(iOS)
     override func didMoveToWindow() {
         super.didMoveToWindow()
         printWaiting()
@@ -160,27 +186,48 @@ final class InkAnchorView: UIView {
         printWaiting()
     }
 
-    private func printWaiting() {
-        guard !waiting.isEmpty, window != nil, let row else { return }
-        let strips = waiting
-        waiting = []
-        InkEdge.print(strips, on: row)
-    }
+    private var scale: CGFloat { traitCollection.displayScale }
 
-    private var row: UIView? {
+    /// The layer of the row this block is in.
+    private var row: CALayer? {
         var view = superview
         while let current = view {
-            if let cell = current as? UICollectionViewCell { return cell.contentView }
+            if let cell = current as? UICollectionViewCell { return cell.contentView.layer }
             view = current.superview
         }
         return nil
     }
+    #else
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        printWaiting()
+    }
+
+    override func layout() {
+        super.layout()
+        printWaiting()
+    }
+
+    /// Never in the way of the text under it: clicks and selections go through.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    private var scale: CGFloat { window?.backingScaleFactor ?? 2 }
+
+    /// The layer of the row this block is in.
+    private var row: CALayer? {
+        var view = superview
+        while let current = view {
+            if let cell = current as? FeedCell { return cell.layer }
+            view = current.superview
+        }
+        return nil
+    }
+    #endif
 }
 
 extension InkEdge {
-    /// Prints `strips` (in `view`'s space) in. Everything else of `view` stays as it is.
-    @MainActor static func print(_ strips: [CGRect], on view: UIView) {
-        let layer = view.layer
+    /// Prints `strips` (in the space of the row whose `layer` this is) in. Everything else of the row stays as it is.
+    @MainActor static func print(_ strips: [CGRect], on layer: CALayer, scale: CGFloat) {
         let mask: InkMask
         if let current = layer.mask as? InkMask {
             mask = current
@@ -194,7 +241,7 @@ extension InkEdge {
             // The whole row is printing in: its words come with it.
             return
         }
-        mask.add(strips, on: layer, scale: view.traitCollection.displayScale)
+        mask.add(strips, on: layer, scale: scale)
     }
 }
 
@@ -207,7 +254,7 @@ private final class InkMask: CALayer {
 
     override init() {
         super.init()
-        base.fillColor = UIColor.black.cgColor
+        base.fillColor = CGColor(gray: 0, alpha: 1)
         addSublayer(base)
     }
 
@@ -243,7 +290,7 @@ private final class InkMask: CALayer {
             runner.frame = CGRect(x: 0, y: 0, width: rect.width + front, height: rect.height)
             let solid = CALayer()
             solid.frame = CGRect(x: 0, y: 0, width: rect.width, height: rect.height)
-            solid.backgroundColor = UIColor.black.cgColor
+            solid.backgroundColor = CGColor(gray: 0, alpha: 1)
             let dots = CALayer()
             dots.frame = CGRect(x: rect.width, y: 0, width: front, height: rect.height)
             dots.backgroundColor = dither
@@ -296,4 +343,3 @@ private final class InkMask: CALayer {
         base.path = all.subtracting(holes, using: .winding)
     }
 }
-#endif

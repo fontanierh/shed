@@ -3,7 +3,7 @@
 import SwiftUI
 
 /// Rendered block by block (paragraphs, headings, lists, code), so a growing reply only lays out its last block again.
-/// A streaming reply grows word by word, and on iPhone its new words print in at the writing edge (`InkEdge`).
+/// A streaming reply grows word by word, and its new words print in at the writing edge (`InkEdge`).
 struct StreamingMarkdown: View {
     let text: String
     let streaming: Bool
@@ -48,16 +48,12 @@ struct StreamingMarkdown: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(blocks.indices, id: \.self) { index in
                     Group {
-                        #if os(iOS)
                         // The last two: a block's last words often come with the first of the next.
                         if inked, index >= blocks.count - 2 {
                             MarkdownBlock(text: blocks[index].text).equatable().modifier(InkEdgeReader())
                         } else {
                             MarkdownBlock(text: blocks[index].text).equatable()
                         }
-                        #else
-                        MarkdownBlock(text: blocks[index].text).equatable()
-                        #endif
                     }
                     .padding(.top, StreamingMarkdown.spacing(blocks, index))
                 }
