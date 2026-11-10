@@ -2,10 +2,10 @@ name: apps
 
 on:
   pull_request:
-    paths: ["apps/**", ".github/workflows/apps.yml"]
+    paths: ["apps/**", "protocol/**", ".github/workflows/apps.yml"]
   push:
     branches: [main]
-    paths: ["apps/**", ".github/workflows/apps.yml"]
+    paths: ["apps/**", "protocol/**", ".github/workflows/apps.yml"]
 
 concurrency:
   group: apps-${{ github.ref }}

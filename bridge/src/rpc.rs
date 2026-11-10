@@ -14,6 +14,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
 pub enum AgentKind {
     Pi,

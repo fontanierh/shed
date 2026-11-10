@@ -1,0 +1,354 @@
+{
+  "enums": {
+    "agent": [
+      "pi",
+      "prime",
+      "deepseek"
+    ],
+    "itemKind": [
+      "user",
+      "text",
+      "thinking",
+      "tool",
+      "compaction",
+      "error",
+      "note"
+    ],
+    "sessionKind": [
+      "root",
+      "subagent"
+    ],
+    "sessionStatus": [
+      "starting",
+      "idle",
+      "running",
+      "compacting",
+      "done",
+      "stopped",
+      "error"
+    ],
+    "toolStatus": [
+      "preparing",
+      "pending",
+      "running",
+      "done",
+      "error"
+    ]
+  },
+  "messages": [
+    {
+      "data": {
+        "branch": "main"
+      },
+      "id": "c1",
+      "ok": true,
+      "type": "reply"
+    },
+    {
+      "error": "no such session",
+      "id": "c2",
+      "ok": false,
+      "type": "reply"
+    },
+    {
+      "sessions": [
+        {
+          "agent": "pi",
+          "autoCompaction": true,
+          "backgroundJobs": 0,
+          "cost": 0.0,
+          "createdAt": 1700000000000,
+          "cwd": "/work/project",
+          "id": "s1",
+          "kind": "root",
+          "queue": {
+            "followUp": [],
+            "steering": []
+          },
+          "readOnly": false,
+          "runningSubagents": false,
+          "sites": [],
+          "status": "starting",
+          "thinkingLevels": [],
+          "title": "New session"
+        },
+        {
+          "agent": "prime",
+          "autoCompaction": false,
+          "backgroundJobs": 2,
+          "context": {
+            "percent": 25.0,
+            "tokens": 50000,
+            "window": 200000
+          },
+          "contextLimit": 200000,
+          "cost": 1.5,
+          "createdAt": 1700000000000,
+          "cwd": "/work/project",
+          "error": "the model stopped answering",
+          "goal": {
+            "lastReason": "two tests still fail",
+            "objective": "Make the tests pass",
+            "status": "active",
+            "timeUsedSeconds": 90,
+            "tokenBudget": 100000,
+            "tokensUsed": 12000
+          },
+          "id": "s2",
+          "kind": "subagent",
+          "lastActiveAt": 1700000002000,
+          "model": {
+            "contextWindow": 400000,
+            "id": "model-1",
+            "name": "Model One",
+            "provider": "example",
+            "reasoning": true
+          },
+          "name": "reviewer",
+          "parentId": "s1",
+          "question": {
+            "continued": false,
+            "id": "q1",
+            "questions": [
+              {
+                "detail": "A plan to review.",
+                "header": "Mode",
+                "id": "mode",
+                "multiSelect": false,
+                "options": [
+                  {
+                    "description": "Skips the slow checks.",
+                    "label": "Fast"
+                  }
+                ],
+                "question": "Which mode?"
+              }
+            ]
+          },
+          "queue": {
+            "followUp": [
+              "then open a pull request"
+            ],
+            "steering": [
+              "look at the tests"
+            ]
+          },
+          "readOnly": true,
+          "runningSubagents": true,
+          "sites": [
+            {
+              "command": "node",
+              "exposed": true,
+              "port": 5173,
+              "published": false,
+              "reason": "Tailscale isn't running on this computer",
+              "title": "Example",
+              "url": "https://host.example.ts.net:5173/"
+            }
+          ],
+          "spend": {
+            "perMinute": 0.25,
+            "runCost": 0.5,
+            "tokensPerMinute": 1500.0
+          },
+          "standardWindow": 272000,
+          "status": "running",
+          "stuck": {
+            "command": "cargo test",
+            "jobId": "job-1",
+            "kind": "command",
+            "probability": 0.75,
+            "reason": "It has printed nothing for ten minutes.",
+            "startedAt": 1700000001000
+          },
+          "thinkingLevel": "high",
+          "thinkingLevels": [
+            "low",
+            "high"
+          ],
+          "title": "New session",
+          "waitingOn": {
+            "command": "cargo test",
+            "startedAt": 1700000001000
+          }
+        }
+      ],
+      "type": "sessions"
+    },
+    {
+      "session": {
+        "agent": "prime",
+        "autoCompaction": false,
+        "backgroundJobs": 2,
+        "context": {
+          "percent": 25.0,
+          "tokens": 50000,
+          "window": 200000
+        },
+        "contextLimit": 200000,
+        "cost": 1.5,
+        "createdAt": 1700000000000,
+        "cwd": "/work/project",
+        "error": "the model stopped answering",
+        "goal": {
+          "lastReason": "two tests still fail",
+          "objective": "Make the tests pass",
+          "status": "active",
+          "timeUsedSeconds": 90,
+          "tokenBudget": 100000,
+          "tokensUsed": 12000
+        },
+        "id": "s2",
+        "kind": "subagent",
+        "lastActiveAt": 1700000002000,
+        "model": {
+          "contextWindow": 400000,
+          "id": "model-1",
+          "name": "Model One",
+          "provider": "example",
+          "reasoning": true
+        },
+        "name": "reviewer",
+        "parentId": "s1",
+        "question": {
+          "continued": false,
+          "id": "q1",
+          "questions": [
+            {
+              "detail": "A plan to review.",
+              "header": "Mode",
+              "id": "mode",
+              "multiSelect": false,
+              "options": [
+                {
+                  "description": "Skips the slow checks.",
+                  "label": "Fast"
+                }
+              ],
+              "question": "Which mode?"
+            }
+          ]
+        },
+        "queue": {
+          "followUp": [
+            "then open a pull request"
+          ],
+          "steering": [
+            "look at the tests"
+          ]
+        },
+        "readOnly": true,
+        "runningSubagents": true,
+        "sites": [
+          {
+            "command": "node",
+            "exposed": true,
+            "port": 5173,
+            "published": false,
+            "reason": "Tailscale isn't running on this computer",
+            "title": "Example",
+            "url": "https://host.example.ts.net:5173/"
+          }
+        ],
+        "spend": {
+          "perMinute": 0.25,
+          "runCost": 0.5,
+          "tokensPerMinute": 1500.0
+        },
+        "standardWindow": 272000,
+        "status": "running",
+        "stuck": {
+          "command": "cargo test",
+          "jobId": "job-1",
+          "kind": "command",
+          "probability": 0.75,
+          "reason": "It has printed nothing for ten minutes.",
+          "startedAt": 1700000001000
+        },
+        "thinkingLevel": "high",
+        "thinkingLevels": [
+          "low",
+          "high"
+        ],
+        "title": "New session",
+        "waitingOn": {
+          "command": "cargo test",
+          "startedAt": 1700000001000
+        }
+      },
+      "type": "session"
+    },
+    {
+      "sessionId": "s2",
+      "type": "session_removed"
+    },
+    {
+      "earlier": 40,
+      "items": [
+        {
+          "id": "i1",
+          "kind": "text",
+          "text": "Done."
+        },
+        {
+          "args": "{\"command\":\"ls\"}",
+          "at": 1700000003000,
+          "durationMs": 120,
+          "id": "i2",
+          "kind": "tool",
+          "output": "Cargo.toml",
+          "status": "done",
+          "text": "",
+          "toolName": "bash"
+        }
+      ],
+      "sessionId": "s1",
+      "type": "snapshot"
+    },
+    {
+      "items": [],
+      "sessionId": "s1",
+      "type": "snapshot"
+    },
+    {
+      "item": {
+        "args": "{\"command\":\"ls\"}",
+        "at": 1700000003000,
+        "durationMs": 120,
+        "id": "i2",
+        "kind": "tool",
+        "output": "Cargo.toml",
+        "status": "done",
+        "text": "",
+        "toolName": "bash"
+      },
+      "sessionId": "s1",
+      "type": "item_add"
+    },
+    {
+      "append": {
+        "args": "}",
+        "text": " More"
+      },
+      "itemId": "i2",
+      "sessionId": "s1",
+      "set": {
+        "args": "{}",
+        "durationMs": 5,
+        "output": "ok",
+        "status": "error",
+        "text": "Done.",
+        "toolName": "bash"
+      },
+      "type": "item_patch"
+    },
+    {
+      "append": {
+        "text": " more"
+      },
+      "itemId": "i1",
+      "sessionId": "s1",
+      "type": "item_patch"
+    }
+  ]
+}

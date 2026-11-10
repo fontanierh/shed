@@ -1,4 +1,5 @@
-//! Wire types shared with the Swift clients (apps/Sources/ShedKit/Protocol.swift).
+//! Wire types shared with the Swift clients (apps/Sources/ShedKit/Protocol.swift). The tests below and the
+//! apps' ProtocolFixtureTests both read protocol/*.json, so a message one side changes fails the other's tests.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,6 +7,7 @@ use serde_json::Value;
 use crate::rpc::AgentKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
 pub enum ItemKind {
     User,
@@ -18,6 +20,7 @@ pub enum ItemKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
 pub enum ToolStatus {
     Preparing,
@@ -124,6 +127,7 @@ pub struct ItemAppend {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     Starting,
@@ -137,6 +141,7 @@ pub enum SessionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "lowercase")]
 pub enum SessionKind {
     Root,
@@ -375,6 +380,7 @@ pub struct Stuck {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg_attr(test, derive(strum::VariantNames), strum(serialize_all = "snake_case"))]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ClientOp {
     ListSessions,
@@ -544,6 +550,7 @@ pub struct ClientMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(test, derive(strum::VariantNames), strum(serialize_all = "snake_case"))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
     Reply {
@@ -588,4 +595,279 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         append: Option<ItemAppend>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeSet;
+    use strum::{IntoEnumIterator, VariantNames};
+
+    const SERVER_MESSAGES: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../protocol/server_messages.json"
+    );
+    const CLIENT_OPS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../protocol/client_ops.json");
+
+    fn values<T: IntoEnumIterator + Serialize>() -> Value {
+        T::iter().map(|value| json!(value)).collect()
+    }
+
+    fn bare_summary() -> SessionSummary {
+        SessionSummary {
+            id: "s1".into(),
+            agent: AgentKind::Pi,
+            kind: SessionKind::Root,
+            parent_id: None,
+            name: None,
+            running_subagents: false,
+            read_only: false,
+            cwd: "/work/project".into(),
+            title: "New session".into(),
+            status: SessionStatus::Starting,
+            error: None,
+            created_at: 1_700_000_000_000,
+            model: None,
+            thinking_level: None,
+            thinking_levels: vec![],
+            context: None,
+            cost: 0.0,
+            queue: Queue::default(),
+            auto_compaction: true,
+            context_limit: None,
+            standard_window: None,
+            background_jobs: 0,
+            waiting_on: None,
+            stuck: None,
+            last_active_at: None,
+            goal: None,
+            question: None,
+            spend: None,
+            sites: vec![],
+        }
+    }
+
+    /// A summary with every optional field set, so the apps prove they read each one.
+    fn full_summary() -> SessionSummary {
+        SessionSummary {
+            id: "s2".into(),
+            agent: AgentKind::Prime,
+            kind: SessionKind::Subagent,
+            parent_id: Some("s1".into()),
+            name: Some("reviewer".into()),
+            running_subagents: true,
+            read_only: true,
+            status: SessionStatus::Running,
+            error: Some("the model stopped answering".into()),
+            model: Some(ModelInfo {
+                provider: "example".into(),
+                id: "model-1".into(),
+                name: "Model One".into(),
+                context_window: Some(400_000),
+                reasoning: true,
+            }),
+            thinking_level: Some("high".into()),
+            thinking_levels: vec!["low".into(), "high".into()],
+            context: Some(ContextUsage {
+                tokens: Some(50_000),
+                window: 200_000,
+                percent: Some(25.0),
+            }),
+            cost: 1.5,
+            queue: Queue {
+                steering: vec!["look at the tests".into()],
+                follow_up: vec!["then open a pull request".into()],
+            },
+            auto_compaction: false,
+            context_limit: Some(200_000),
+            standard_window: Some(272_000),
+            background_jobs: 2,
+            waiting_on: Some(WaitingOn {
+                command: "cargo test".into(),
+                started_at: Some(1_700_000_001_000),
+                pid: Some(4242),
+            }),
+            stuck: Some(Stuck {
+                kind: "command",
+                command: "cargo test".into(),
+                reason: "It has printed nothing for ten minutes.".into(),
+                probability: Some(0.75),
+                job_id: Some("job-1".into()),
+                started_at: Some(1_700_000_001_000),
+            }),
+            last_active_at: Some(1_700_000_002_000),
+            goal: Some(Goal {
+                objective: "Make the tests pass".into(),
+                status: "active".into(),
+                tokens_used: 12_000,
+                token_budget: Some(100_000),
+                time_used_seconds: 90,
+                last_reason: Some("two tests still fail".into()),
+            }),
+            question: Some(json!({
+                "id": "q1",
+                "continued": false,
+                "questions": [{
+                    "id": "mode",
+                    "question": "Which mode?",
+                    "header": "Mode",
+                    "detail": "A plan to review.",
+                    "multiSelect": false,
+                    "options": [{ "label": "Fast", "description": "Skips the slow checks." }],
+                }],
+            })),
+            spend: Some(Spend {
+                per_minute: Some(0.25),
+                tokens_per_minute: Some(1500.0),
+                run_cost: Some(0.5),
+            }),
+            sites: vec![Site {
+                port: 5173,
+                title: Some("Example".into()),
+                command: "node".into(),
+                url: "https://host.example.ts.net:5173/".into(),
+                published: false,
+                exposed: true,
+                reason: Some("Tailscale isn't running on this computer".into()),
+            }],
+            ..bare_summary()
+        }
+    }
+
+    fn tool_item() -> Item {
+        Item {
+            id: "i2".into(),
+            tool_name: Some("bash".into()),
+            args: Some("{\"command\":\"ls\"}".into()),
+            output: Some("Cargo.toml".into()),
+            status: Some(ToolStatus::Done),
+            duration_ms: Some(120),
+            at: Some(1_700_000_003_000),
+            ..Item::new(ItemKind::Tool, "")
+        }
+    }
+
+    fn server_messages() -> Vec<ServerMessage> {
+        let text = Item {
+            id: "i1".into(),
+            ..Item::new(ItemKind::Text, "Done.")
+        };
+        vec![
+            ServerMessage::Reply {
+                id: Some("c1".into()),
+                ok: true,
+                data: Some(json!({ "branch": "main" })),
+                error: None,
+            },
+            ServerMessage::Reply {
+                id: Some("c2".into()),
+                ok: false,
+                data: None,
+                error: Some("no such session".into()),
+            },
+            ServerMessage::Sessions {
+                sessions: vec![bare_summary(), full_summary()],
+            },
+            ServerMessage::Session {
+                session: Box::new(full_summary()),
+            },
+            ServerMessage::SessionRemoved {
+                session_id: "s2".into(),
+            },
+            ServerMessage::Snapshot {
+                session_id: "s1".into(),
+                items: vec![text.clone(), tool_item()],
+                earlier: 40,
+            },
+            ServerMessage::Snapshot {
+                session_id: "s1".into(),
+                items: vec![],
+                earlier: 0,
+            },
+            ServerMessage::ItemAdd {
+                session_id: "s1".into(),
+                item: tool_item(),
+            },
+            ServerMessage::ItemPatch {
+                session_id: "s1".into(),
+                item_id: "i2".into(),
+                set: Some(ItemSet {
+                    text: Some("Done.".into()),
+                    tool_name: Some("bash".into()),
+                    args: Some("{}".into()),
+                    output: Some("ok".into()),
+                    status: Some(ToolStatus::Error),
+                    duration_ms: Some(5),
+                }),
+                append: Some(ItemAppend {
+                    text: Some(" More".into()),
+                    args: Some("}".into()),
+                }),
+            },
+            ServerMessage::ItemPatch {
+                session_id: "s1".into(),
+                item_id: "i1".into(),
+                set: None,
+                append: Some(ItemAppend {
+                    text: Some(" more".into()),
+                    args: None,
+                }),
+            },
+        ]
+    }
+
+    /// Everything the bridge can send, as the apps' tests read it. `UPDATE_FIXTURES=1 cargo test` rewrites the file.
+    #[test]
+    fn server_messages_match_the_shared_fixture() {
+        let messages = server_messages();
+        let sent: BTreeSet<String> = messages
+            .iter()
+            .map(|message| json!(message)["type"].as_str().unwrap().to_string())
+            .collect();
+        let known: BTreeSet<String> = ServerMessage::VARIANTS
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        assert_eq!(sent, known, "a message without an example");
+
+        let fixture = json!({
+            "enums": {
+                "agent": values::<AgentKind>(),
+                "itemKind": values::<ItemKind>(),
+                "toolStatus": values::<ToolStatus>(),
+                "sessionStatus": values::<SessionStatus>(),
+                "sessionKind": values::<SessionKind>(),
+            },
+            "messages": messages,
+        });
+        let expected = serde_json::to_string_pretty(&fixture).unwrap() + "\n";
+        if std::env::var_os("UPDATE_FIXTURES").is_some() {
+            std::fs::write(SERVER_MESSAGES, &expected).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(SERVER_MESSAGES).unwrap(),
+            expected,
+            "protocol/server_messages.json is out of date: run UPDATE_FIXTURES=1 cargo test, then the apps' tests"
+        );
+    }
+
+    /// Every operation, as the apps send it.
+    #[test]
+    fn client_ops_in_the_shared_fixture_parse() {
+        let ops: Vec<Value> =
+            serde_json::from_str(&std::fs::read_to_string(CLIENT_OPS).unwrap()).unwrap();
+        let mut seen = BTreeSet::new();
+        for op in ops {
+            let parsed: ClientMessage =
+                serde_json::from_value(op.clone()).unwrap_or_else(|error| panic!("{op}: {error}"));
+            assert!(parsed.id.is_some(), "{op} has no id");
+            seen.insert(op["op"].as_str().unwrap().to_string());
+        }
+        let known: BTreeSet<String> = ClientOp::VARIANTS
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        assert_eq!(seen, known, "an operation without an example");
+    }
 }
