@@ -1264,7 +1264,7 @@ mod tests {
     #[test]
     fn a_resumed_sessions_subagent_reads_back_as_it_ran() {
         let (feed, events) = replay();
-        let live = events.iter().filter(|e| e["type"] == "dsh_subagent").last().unwrap().clone();
+        let live = events.iter().rfind(|e| e["type"] == "dsh_subagent").unwrap().clone();
         let lines: Vec<Value> = FEED.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
         let history = |id: &str| -> Vec<Value> {
             lines
