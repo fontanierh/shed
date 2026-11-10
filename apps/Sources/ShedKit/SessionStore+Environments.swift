@@ -23,7 +23,7 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
         return host == "127.0.0.1" || host == "localhost" || host == "::1"
     }
 
-    /// "jims-macbook-pro" from "wss://jims-macbook-pro.tail362838.ts.net:7878/ws".
+    /// "my-mac" from "wss://my-mac.tailnet.ts.net:7878/ws".
     public static func name(for url: String) -> String {
         let host = URLComponents(string: url.trimmingCharacters(in: .whitespaces))?.host ?? ""
         return host.split(separator: ".").first.map(String.init) ?? "Computer"
