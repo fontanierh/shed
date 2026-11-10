@@ -172,6 +172,7 @@ This removes the login service, the Tailscale publication, the routes of the sit
 bridge/        Rust bridge: protocol, Pi, Prime and DeepSeek Harness drivers, transcript normalization
   dsh/         the plugin the bridge loads into DeepSeek Harness
   scripts/     end-to-end checks against a running bridge (smoke, subagents, async-subagents, resume-check)
+protocol/      one of every message, read by the bridge's tests and the apps'
 apps/          Swift package: ShedKit (shared client and views) and ShedMac
   iOS/         iPhone app and Live Activity, generated with XcodeGen from project.yml
   scripts/     bundle-mac.sh, install-iphone.sh
@@ -186,7 +187,9 @@ apps/scripts/bundle-mac.sh debug                        # build apps/build/Shed.
 node bridge/scripts/smoke.mjs pi 7878 ~/src/project     # drive a live session through a running bridge
 ```
 
-The wire protocol is defined in [`bridge/src/protocol.rs`](bridge/src/protocol.rs) and mirrored in [`apps/Sources/ShedKit/Protocol.swift`](apps/Sources/ShedKit/Protocol.swift); change both together. After editing `apps/iOS/project.yml`, regenerate the Xcode project with `xcodegen` in `apps/iOS`.
+The wire protocol is defined in [`bridge/src/protocol.rs`](bridge/src/protocol.rs) and mirrored in [`apps/Sources/ShedKit/Protocol.swift`](apps/Sources/ShedKit/Protocol.swift); change both together. Both sides' tests read the messages in `protocol/`, so a change to one side alone fails the other's.
+
+Some bridge tests compare against recorded files: the messages in `protocol/` and what the session code does with each agent's events in `bridge/src/session/pins/`. When a change is meant to alter them, `UPDATE_FIXTURES=1 cargo test` rewrites the files; their diff is the change in behaviour, so read it before committing. After editing `apps/iOS/project.yml`, regenerate the Xcode project with `xcodegen` in `apps/iOS`.
 
 ## License
 

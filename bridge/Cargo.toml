@@ -24,6 +24,7 @@ uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 strum = { version = "0.27", features = ["derive"] }
+tokio = { version = "1", features = ["test-util"] }
 
 [lints.clippy]
 dbg_macro = "deny"
