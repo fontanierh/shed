@@ -54,6 +54,9 @@ pub struct App {
     compacting_for_limit: std::sync::Mutex<HashMap<String, Instant>>,
     /// Prime sessions' spending, subagents included, read from their session files.
     costs: crate::cost::Costs,
+    /// What the tests answer for the agents, and what the bridge asked them.
+    #[cfg(test)]
+    agents: tests::Agents,
 }
 
 /// Room left for the next turn when compacting for a chosen window, as Pi's own auto-compaction leaves (16k), but
@@ -344,10 +347,9 @@ impl Session {
 }
 
 impl App {
+    /// The bridge's state as saved, connected to Prime's daemon and watching what its sessions do.
     pub fn new(store: Store) -> Result<Arc<App>> {
-        let token = store.token()?;
         let (prime, prime_events) = PrimeDaemon::start(store.client_id()?);
-        let (hub, _) = broadcast::channel(4096);
         let mut limits = store.load_limits();
         let home = std::env::var("HOME").unwrap_or_default();
         if crate::store::adopt_stray_limits(
@@ -358,6 +360,22 @@ impl App {
                 eprintln!("failed to save context windows: {e}");
             }
         }
+        let app = App::assemble(store, prime, limits)?;
+        tokio::spawn(app.clone().run_prime(prime_events));
+        tokio::spawn(app.clone().watch_background_jobs());
+        tokio::spawn(app.clone().watch_spend());
+        tokio::spawn(app.clone().watch_sites());
+        Ok(app)
+    }
+
+    /// The saved sessions, stopped, with nothing running yet: no daemon connection, no watchers.
+    fn assemble(
+        store: Store,
+        prime: Arc<PrimeDaemon>,
+        limits: HashMap<String, u64>,
+    ) -> Result<Arc<App>> {
+        let token = store.token()?;
+        let (hub, _) = broadcast::channel(4096);
         let sessions = store
             .load_sessions()
             .into_iter()
@@ -389,11 +407,9 @@ impl App {
             limits,
             compacting_for_limit: std::sync::Mutex::new(HashMap::new()),
             costs: crate::cost::Costs::default(),
+            #[cfg(test)]
+            agents: Default::default(),
         });
-        tokio::spawn(app.clone().run_prime(prime_events));
-        tokio::spawn(app.clone().watch_background_jobs());
-        tokio::spawn(app.clone().watch_spend());
-        tokio::spawn(app.clone().watch_sites());
         Ok(app)
     }
 
@@ -528,6 +544,10 @@ impl App {
 
     /// Run an agent command against a session, whichever backend owns it.
     pub async fn command(&self, session: &Session, kind: &str, fields: Value) -> Result<Value> {
+        #[cfg(test)]
+        if let Some(answer) = self.agents.answer(&session.id, kind, &fields) {
+            return answer;
+        }
         match session.backend {
             Backend::Pi => self.child(session).await?.send(kind, fields).await,
             Backend::Prime => self.prime.session(&session.id, kind, fields).await,
@@ -2374,3 +2394,6 @@ fn agent_session_id(agent: AgentKind, st: &SessionState) -> Option<String> {
         _ => name.to_string(),
     })
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,0 +1,921 @@
+{
+  "asked": [
+    {
+      "command": "get_messages",
+      "fields": {},
+      "session": "pi1"
+    }
+  ],
+  "saved": {
+    "limits.json": {
+      "pi1": 64000
+    },
+    "sessions.json": [
+      {
+        "agent": "pi",
+        "createdAt": 1700000000000,
+        "cwd": "/work/project",
+        "id": "pi1",
+        "sessionFile": "/work/sessions/pi1.jsonl",
+        "title": "Files"
+      },
+      {
+        "agent": "deepseek",
+        "createdAt": 1700000001000,
+        "cwd": "/work/project",
+        "id": "dsh1",
+        "sessionFile": null,
+        "title": "A named session"
+      }
+    ]
+  },
+  "sessions": [
+    {
+      "agent": "pi",
+      "autoCompaction": true,
+      "backgroundJobs": 0,
+      "contextLimit": 64000,
+      "cost": 0.0,
+      "createdAt": 1700000000000,
+      "cwd": "/work/project",
+      "id": "pi1",
+      "kind": "root",
+      "queue": {
+        "followUp": [
+          "open a pull request"
+        ],
+        "steering": [
+          "look at src",
+          "then at tests"
+        ]
+      },
+      "readOnly": false,
+      "runningSubagents": false,
+      "sites": [],
+      "status": "idle",
+      "thinkingLevel": "high",
+      "thinkingLevels": [],
+      "title": "Files"
+    },
+    {
+      "agent": "deepseek",
+      "autoCompaction": true,
+      "backgroundJobs": 0,
+      "cost": 0.0,
+      "createdAt": 1700000001000,
+      "cwd": "/work/project",
+      "id": "dsh1",
+      "kind": "root",
+      "queue": {
+        "followUp": [],
+        "steering": []
+      },
+      "readOnly": false,
+      "runningSubagents": false,
+      "sites": [],
+      "status": "stopped",
+      "thinkingLevels": [],
+      "title": "A named session"
+    },
+    {
+      "agent": "pi",
+      "autoCompaction": true,
+      "backgroundJobs": 0,
+      "cost": 0.25,
+      "createdAt": "now",
+      "cwd": "/work/project",
+      "id": "pi1.bagents2.0",
+      "kind": "subagent",
+      "lastActiveAt": "now",
+      "model": {
+        "id": "model-1",
+        "name": "model-1",
+        "provider": "example",
+        "reasoning": true
+      },
+      "name": "scout",
+      "parentId": "pi1",
+      "queue": {
+        "followUp": [],
+        "steering": []
+      },
+      "readOnly": true,
+      "runningSubagents": false,
+      "sites": [],
+      "status": "done",
+      "thinkingLevels": [],
+      "title": "scout: Find the entry point"
+    },
+    {
+      "agent": "pi",
+      "autoCompaction": true,
+      "backgroundJobs": 0,
+      "cost": 0.0,
+      "createdAt": "now",
+      "cwd": "/work/project",
+      "error": "the model refused",
+      "id": "pi1.bagents2.1",
+      "kind": "subagent",
+      "lastActiveAt": "now",
+      "name": "reviewer",
+      "parentId": "pi1",
+      "queue": {
+        "followUp": [],
+        "steering": []
+      },
+      "readOnly": true,
+      "runningSubagents": false,
+      "sites": [],
+      "status": "error",
+      "thinkingLevels": [],
+      "title": "reviewer: Review the change"
+    }
+  ],
+  "steps": [
+    {
+      "sent": [],
+      "step": "the saved sessions load, stopped"
+    },
+    {
+      "sent": [
+        {
+          "session": "pi1",
+          "summary": {
+            "agent": "pi",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.0,
+            "createdAt": 1700000000000,
+            "cwd": "/work/project",
+            "id": "pi1",
+            "kind": "root",
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": false,
+            "runningSubagents": false,
+            "sites": [],
+            "status": "running",
+            "thinkingLevels": [],
+            "title": "project"
+          }
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i1",
+              "kind": "user",
+              "text": "List the files\nand count them"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 1
+        },
+        {
+          "changed": {
+            "title": "List the files"
+          },
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i2",
+              "kind": "thinking",
+              "text": ""
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 2
+        },
+        {
+          "message": {
+            "append": {
+              "text": "Looking."
+            },
+            "itemId": "i2",
+            "sessionId": "pi1",
+            "type": "item_patch"
+          },
+          "seq": 3
+        },
+        {
+          "message": {
+            "itemId": "i2",
+            "sessionId": "pi1",
+            "set": {
+              "text": "Looking."
+            },
+            "type": "item_patch"
+          },
+          "seq": 4
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i3",
+              "kind": "text",
+              "text": ""
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 5
+        },
+        {
+          "message": {
+            "append": {
+              "text": "I'll list"
+            },
+            "itemId": "i3",
+            "sessionId": "pi1",
+            "type": "item_patch"
+          },
+          "seq": 6
+        },
+        {
+          "message": {
+            "append": {
+              "text": " the files."
+            },
+            "itemId": "i3",
+            "sessionId": "pi1",
+            "type": "item_patch"
+          },
+          "seq": 7
+        },
+        {
+          "message": {
+            "itemId": "i3",
+            "sessionId": "pi1",
+            "set": {
+              "text": "I'll list the files."
+            },
+            "type": "item_patch"
+          },
+          "seq": 8
+        },
+        {
+          "message": {
+            "item": {
+              "args": "",
+              "at": "now",
+              "id": "i4",
+              "kind": "tool",
+              "status": "preparing",
+              "text": "",
+              "toolName": "bash"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 9
+        },
+        {
+          "message": {
+            "append": {
+              "args": "{\"command\":"
+            },
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "type": "item_patch"
+          },
+          "seq": 10
+        },
+        {
+          "message": {
+            "append": {
+              "args": "\"ls\"}"
+            },
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "type": "item_patch"
+          },
+          "seq": 11
+        },
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "args": "{\n  \"command\": \"ls\"\n}",
+              "status": "pending",
+              "toolName": "bash"
+            },
+            "type": "item_patch"
+          },
+          "seq": 12
+        },
+        {
+          "message": {
+            "itemId": "i2",
+            "sessionId": "pi1",
+            "set": {
+              "text": "Looking."
+            },
+            "type": "item_patch"
+          },
+          "seq": 13
+        },
+        {
+          "message": {
+            "itemId": "i3",
+            "sessionId": "pi1",
+            "set": {
+              "text": "I'll list the files."
+            },
+            "type": "item_patch"
+          },
+          "seq": 14
+        },
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "args": "{\n  \"command\": \"ls\"\n}",
+              "toolName": "bash"
+            },
+            "type": "item_patch"
+          },
+          "seq": 15
+        }
+      ],
+      "step": "a reply streams: thinking, text, a tool call"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "args": "{\n  \"command\": \"ls\"\n}",
+              "status": "running"
+            },
+            "type": "item_patch"
+          },
+          "seq": 16
+        },
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "output": "Cargo.toml"
+            },
+            "type": "item_patch"
+          },
+          "seq": 17
+        },
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "durationMs": 12,
+              "output": "Cargo.toml\nsrc",
+              "status": "done"
+            },
+            "type": "item_patch"
+          },
+          "seq": 18
+        },
+        {
+          "message": {
+            "itemId": "i4",
+            "sessionId": "pi1",
+            "set": {
+              "output": "Cargo.toml\nsrc",
+              "status": "done"
+            },
+            "type": "item_patch"
+          },
+          "seq": 19
+        }
+      ],
+      "step": "the tool runs"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "queue": {
+              "followUp": [
+                "open a pull request"
+              ],
+              "steering": [
+                "look at src",
+                "then at tests"
+              ]
+            }
+          },
+          "session": "pi1"
+        },
+        {
+          "changed": {
+            "thinkingLevel": "high"
+          },
+          "session": "pi1"
+        },
+        {
+          "changed": {
+            "title": "Listing"
+          },
+          "session": "pi1"
+        },
+        {
+          "changed": {
+            "title": "List the files"
+          },
+          "session": "pi1"
+        }
+      ],
+      "step": "the queue, the thinking level and the name change; unknown events pass"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "item": {
+              "args": "{}",
+              "at": "now",
+              "id": "i5",
+              "kind": "tool",
+              "status": "running",
+              "text": "",
+              "toolName": "subagent"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 20
+        },
+        {
+          "changed": {
+            "runningSubagents": true
+          },
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "itemId": "i5",
+            "sessionId": "pi1",
+            "set": {
+              "output": "{\n  \"details\": {\n    \"mode\": \"parallel\",\n    \"results\": [\n      {\n        \"agent\": \"scout\",\n        \"exitCode\": -1,\n        \"messages\": [],\n        \"model\": \"example/model-1\",\n        \"stopReason\": null,\n        \"task\": \"Find the entry point\",\n        \"usage\": {\n          \"contextTokens\": 1200,\n          \"cost\": 0.25\n        }\n      },\n      {\n        \"agent\": \"reviewer\",\n        \"exitCode\": -1,\n        \"messages\": [],\n        \"task\": \"Review the change\"\n      }\n    ]\n  }\n}"
+            },
+            "type": "item_patch"
+          },
+          "seq": 21
+        },
+        {
+          "changed": {},
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "items": [],
+            "sessionId": "pi1.bagents2.0",
+            "type": "snapshot"
+          },
+          "seq": 1
+        },
+        {
+          "session": "pi1.bagents2.0",
+          "summary": {
+            "agent": "pi",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.25,
+            "createdAt": "now",
+            "cwd": "/work/project",
+            "id": "pi1.bagents2.0",
+            "kind": "subagent",
+            "lastActiveAt": "now",
+            "model": {
+              "id": "model-1",
+              "name": "model-1",
+              "provider": "example",
+              "reasoning": true
+            },
+            "name": "scout",
+            "parentId": "pi1",
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": true,
+            "runningSubagents": false,
+            "sites": [],
+            "status": "running",
+            "thinkingLevels": [],
+            "title": "scout: Find the entry point"
+          }
+        },
+        {
+          "message": {
+            "items": [],
+            "sessionId": "pi1.bagents2.1",
+            "type": "snapshot"
+          },
+          "seq": 1
+        },
+        {
+          "session": "pi1.bagents2.1",
+          "summary": {
+            "agent": "pi",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.0,
+            "createdAt": "now",
+            "cwd": "/work/project",
+            "id": "pi1.bagents2.1",
+            "kind": "subagent",
+            "lastActiveAt": "now",
+            "name": "reviewer",
+            "parentId": "pi1",
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": true,
+            "runningSubagents": false,
+            "sites": [],
+            "status": "running",
+            "thinkingLevels": [],
+            "title": "reviewer: Review the change"
+          }
+        },
+        {
+          "message": {
+            "itemId": "i5",
+            "sessionId": "pi1",
+            "set": {
+              "output": "{\n  \"details\": {\n    \"mode\": \"parallel\",\n    \"results\": [\n      {\n        \"agent\": \"scout\",\n        \"exitCode\": 0,\n        \"messages\": [\n          {\n            \"content\": \"You are a scout.\",\n            \"role\": \"system\"\n          },\n          {\n            \"content\": [\n              {\n                \"text\": \"Find the entry point\",\n                \"type\": \"text\"\n              }\n            ],\n            \"role\": \"user\",\n            \"timestamp\": 1700000100000\n          },\n          {\n            \"content\": [\n              {\n                \"text\": \"It is src/main.rs.\",\n                \"type\": \"text\"\n              }\n            ],\n            \"role\": \"assistant\",\n            \"stopReason\": \"stop\",\n            \"timestamp\": 1700000101000\n          }\n        ],\n        \"model\": \"example/model-1\",\n        \"stopReason\": \"stop\",\n        \"task\": \"Find the entry point\",\n        \"usage\": {\n          \"contextTokens\": 1200,\n          \"cost\": 0.25\n        }\n      },\n      {\n        \"agent\": \"reviewer\",\n        \"exitCode\": -1,\n        \"messages\": [],\n        \"task\": \"Review the change\"\n      }\n    ]\n  }\n}"
+            },
+            "type": "item_patch"
+          },
+          "seq": 22
+        },
+        {
+          "changed": {},
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "items": [
+              {
+                "at": 1700000100000,
+                "id": "i1",
+                "kind": "user",
+                "text": "Find the entry point"
+              },
+              {
+                "at": 1700000101000,
+                "id": "i2",
+                "kind": "text",
+                "text": "It is src/main.rs."
+              }
+            ],
+            "sessionId": "pi1.bagents2.0",
+            "type": "snapshot"
+          },
+          "seq": 2
+        },
+        {
+          "changed": {
+            "status": "done"
+          },
+          "session": "pi1.bagents2.0"
+        },
+        {
+          "changed": {},
+          "session": "pi1.bagents2.1"
+        }
+      ],
+      "step": "two subagents start; one finishes"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "itemId": "i5",
+            "sessionId": "pi1",
+            "set": {
+              "output": "done",
+              "status": "done"
+            },
+            "type": "item_patch"
+          },
+          "seq": 23
+        },
+        {
+          "changed": {
+            "runningSubagents": false
+          },
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "items": [
+              {
+                "at": 1700000100000,
+                "id": "i3",
+                "kind": "user",
+                "text": "Find the entry point"
+              },
+              {
+                "at": 1700000101000,
+                "id": "i4",
+                "kind": "text",
+                "text": "It is src/main.rs."
+              }
+            ],
+            "sessionId": "pi1.bagents2.0",
+            "type": "snapshot"
+          },
+          "seq": 3
+        },
+        {
+          "changed": {},
+          "session": "pi1.bagents2.0"
+        },
+        {
+          "message": {
+            "items": [
+              {
+                "at": "now",
+                "id": "i1",
+                "kind": "user",
+                "text": "Review the change"
+              }
+            ],
+            "sessionId": "pi1.bagents2.1",
+            "type": "snapshot"
+          },
+          "seq": 2
+        },
+        {
+          "changed": {
+            "error": "the model refused",
+            "status": "error"
+          },
+          "session": "pi1.bagents2.1"
+        }
+      ],
+      "step": "the subagent call ends; the other one failed"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "item": {
+              "args": "",
+              "at": "now",
+              "id": "i6",
+              "kind": "tool",
+              "status": "preparing",
+              "text": "",
+              "toolName": "bash"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 24
+        },
+        {
+          "message": {
+            "itemId": "i6",
+            "sessionId": "pi1",
+            "set": {
+              "output": "Never ran: the reply ended before it.",
+              "status": "error"
+            },
+            "type": "item_patch"
+          },
+          "seq": 25
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i7",
+              "kind": "error",
+              "text": "tool input is invalid JSON"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 26
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i8",
+              "kind": "note",
+              "text": "Retrying (attempt 2) tool input is invalid JSON"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 27
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i9",
+              "kind": "text",
+              "text": "Two files"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 28
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i10",
+              "kind": "note",
+              "text": "Stopped at the model's output limit"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 29
+        }
+      ],
+      "step": "a reply fails and is retried; the retry stops at the output limit"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "status": "compacting"
+          },
+          "session": "pi1"
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i11",
+              "kind": "error",
+              "text": "Compaction failed: nothing to compact"
+            },
+            "sessionId": "pi1",
+            "type": "item_add"
+          },
+          "seq": 30
+        }
+      ],
+      "step": "a compaction fails"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "items": [
+              {
+                "at": 1700000200000,
+                "id": "i12",
+                "kind": "compaction",
+                "output": "52000",
+                "text": "Listed the files."
+              },
+              {
+                "at": 1700000201000,
+                "id": "i13",
+                "kind": "user",
+                "text": "Now review"
+              },
+              {
+                "args": "{\n  \"tasks\": 2\n}",
+                "at": 1700000202000,
+                "durationMs": 1500,
+                "id": "i14",
+                "kind": "tool",
+                "output": "done",
+                "status": "done",
+                "text": "",
+                "toolName": "subagent"
+              },
+              {
+                "args": "ls",
+                "at": 1700000204000,
+                "id": "i15",
+                "kind": "tool",
+                "output": "Cargo.toml",
+                "status": "done",
+                "text": "",
+                "toolName": "user bash"
+              },
+              {
+                "at": 1700000205000,
+                "id": "i16",
+                "kind": "note",
+                "text": "A note"
+              },
+              {
+                "at": 1700000206000,
+                "id": "i17",
+                "kind": "note",
+                "text": "From another branch"
+              }
+            ],
+            "sessionId": "pi1",
+            "type": "snapshot"
+          },
+          "seq": 31
+        },
+        {
+          "message": {
+            "items": [
+              {
+                "at": 1700000100000,
+                "id": "i5",
+                "kind": "user",
+                "text": "Find the entry point"
+              },
+              {
+                "at": 1700000101000,
+                "id": "i6",
+                "kind": "text",
+                "text": "It is src/main.rs."
+              }
+            ],
+            "sessionId": "pi1.bagents2.0",
+            "type": "snapshot"
+          },
+          "seq": 4
+        },
+        {
+          "changed": {},
+          "session": "pi1.bagents2.0"
+        },
+        {
+          "message": {
+            "items": [
+              {
+                "at": "now",
+                "id": "i2",
+                "kind": "user",
+                "text": "Review the change"
+              }
+            ],
+            "sessionId": "pi1.bagents2.1",
+            "type": "snapshot"
+          },
+          "seq": 3
+        },
+        {
+          "changed": {},
+          "session": "pi1.bagents2.1"
+        }
+      ],
+      "step": "a compaction succeeds: the conversation is read again, subagents included"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "status": "idle"
+          },
+          "session": "pi1"
+        }
+      ],
+      "step": "the agent settles"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "title": "Files"
+          },
+          "session": "pi1"
+        }
+      ],
+      "step": "the stopped session is renamed"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "contextLimit": 64000
+          },
+          "session": "pi1"
+        }
+      ],
+      "step": "it is given a context window"
+    }
+  ]
+}

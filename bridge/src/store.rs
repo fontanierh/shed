@@ -215,14 +215,22 @@ fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn store(name: &str) -> Store {
+impl Store {
+    /// An empty store of its own, for a test.
+    pub(crate) fn temporary(name: &str) -> Store {
         let dir = std::env::temp_dir().join(format!("shed-store-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Store { dir }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store(name: &str) -> Store {
+        Store::temporary(name)
     }
 
     #[test]
@@ -299,6 +307,60 @@ mod tests {
         let token = store.token().unwrap();
         assert_eq!(token.len(), 64);
         assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    /// The files as bridges before this one wrote them: reading or writing them another way loses the sessions and
+    /// windows people already have.
+    #[test]
+    fn the_saved_files_keep_their_shape() {
+        let store = store("shape");
+        let sessions = r#"[
+  {
+    "id": "0a1b2c3d",
+    "agent": "pi",
+    "cwd": "/work/project",
+    "title": "List the files",
+    "createdAt": 1700000000000,
+    "sessionFile": "/work/sessions/one.jsonl"
+  },
+  {
+    "id": "4e5f6a7b",
+    "agent": "deepseek",
+    "cwd": "/work",
+    "title": "work",
+    "createdAt": 1700000001000,
+    "sessionFile": null
+  }
+]"#;
+        std::fs::write(store.dir.join("sessions.json"), sessions).unwrap();
+        let records = store.load_sessions();
+        assert_eq!(records[0].agent, AgentKind::Pi);
+        assert_eq!(
+            records[0].session_file.as_deref(),
+            Some("/work/sessions/one.jsonl")
+        );
+        assert_eq!(records[1].created_at, 1_700_000_001_000);
+        store.save_sessions(&records).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(store.dir.join("sessions.json")).unwrap(),
+            sessions
+        );
+
+        // A record written before sessions kept their file still loads.
+        let older = r#"[{ "id": "0a1b2c3d", "agent": "prime", "cwd": "/work", "title": "work", "createdAt": 1 }]"#;
+        std::fs::write(store.dir.join("sessions.json"), older).unwrap();
+        assert_eq!(store.load_sessions()[0].session_file, None);
+
+        let limits = "{\n  \"01a1-conversation\": 200000\n}";
+        std::fs::write(store.dir.join("limits.json"), limits).unwrap();
+        let loaded = store.load_limits();
+        assert_eq!(loaded.get("01a1-conversation"), Some(&200_000));
+        store.save_limits(&loaded).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(store.dir.join("limits.json")).unwrap(),
+            limits
+        );
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 

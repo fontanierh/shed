@@ -1,0 +1,599 @@
+{
+  "asked": [
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_available_models",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1-sub"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1-sub"
+    },
+    {
+      "command": "get_available_models",
+      "fields": {},
+      "session": "p1-sub"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "prompt",
+      "fields": {
+        "message": "/compact",
+        "streamingBehavior": "followUp"
+      },
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "p2"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "p2"
+    },
+    {
+      "command": "get_available_models",
+      "fields": {},
+      "session": "p2"
+    }
+  ],
+  "saved": {
+    "limits.json": {
+      "conversation-after-new": 64000
+    },
+    "sessions.json": null
+  },
+  "sessions": [],
+  "steps": [
+    {
+      "sent": [
+        {
+          "session": "p1",
+          "summary": {
+            "agent": "prime",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.5,
+            "createdAt": 1700000000000,
+            "cwd": "/work/project",
+            "id": "p1",
+            "kind": "root",
+            "lastActiveAt": 1700000040000,
+            "model": {
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": false,
+            "runningSubagents": true,
+            "sites": [],
+            "status": "idle",
+            "thinkingLevel": "medium",
+            "thinkingLevels": [],
+            "title": "Make the tests pass"
+          }
+        },
+        {
+          "session": "p1-sub",
+          "summary": {
+            "agent": "prime",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.5,
+            "createdAt": 1700000000000,
+            "cwd": "/work/project",
+            "id": "p1-sub",
+            "kind": "subagent",
+            "lastActiveAt": 1700000040000,
+            "model": {
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "name": "reviewer",
+            "parentId": "p1",
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": false,
+            "runningSubagents": false,
+            "sites": [],
+            "status": "running",
+            "thinkingLevel": "medium",
+            "thinkingLevels": [],
+            "title": "reviewer"
+          }
+        },
+        {
+          "changed": {
+            "context": {
+              "percent": 50.0,
+              "tokens": 50000,
+              "window": 100000
+            },
+            "contextLimit": 100000,
+            "cost": 0.75,
+            "model": {
+              "contextWindow": 400000,
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "queue": {
+              "followUp": [],
+              "steering": [
+                "look at src"
+              ]
+            },
+            "standardWindow": 272000,
+            "thinkingLevels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "context": {
+              "percent": 18.38235294117647,
+              "tokens": 50000,
+              "window": 272000
+            },
+            "cost": 0.75,
+            "model": {
+              "contextWindow": 400000,
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "queue": {
+              "followUp": [],
+              "steering": [
+                "look at src"
+              ]
+            },
+            "standardWindow": 272000,
+            "status": "idle",
+            "thinkingLevels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "session": "p1-sub"
+        }
+      ],
+      "step": "the daemon lists a session and its subagent; a window saved under the old id moves"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "context": {
+              "percent": 78.125,
+              "tokens": 50000,
+              "window": 64000
+            },
+            "contextLimit": 64000
+          },
+          "session": "p1"
+        }
+      ],
+      "step": "the session is given a smaller context window"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "name": "Tests",
+            "queue": {
+              "followUp": [
+                "then open a pull request"
+              ],
+              "steering": []
+            },
+            "runningSubagents": false,
+            "status": "running",
+            "title": "Tests"
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "queue": {
+              "followUp": [],
+              "steering": [
+                "look at src"
+              ]
+            },
+            "status": "idle"
+          },
+          "session": "p1"
+        }
+      ],
+      "step": "its row changes: working, named, a follow-up queued"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "status": "running"
+          },
+          "session": "p1"
+        },
+        {
+          "message": {
+            "item": {
+              "at": "now",
+              "id": "i1",
+              "kind": "text",
+              "text": ""
+            },
+            "sessionId": "p1",
+            "type": "item_add"
+          },
+          "seq": 1
+        },
+        {
+          "message": {
+            "append": {
+              "text": "Running them."
+            },
+            "itemId": "i1",
+            "sessionId": "p1",
+            "type": "item_patch"
+          },
+          "seq": 2
+        },
+        {
+          "message": {
+            "item": {
+              "args": "",
+              "at": "now",
+              "id": "i2",
+              "kind": "tool",
+              "status": "preparing",
+              "text": "",
+              "toolName": "repl"
+            },
+            "sessionId": "p1",
+            "type": "item_add"
+          },
+          "seq": 3
+        },
+        {
+          "message": {
+            "itemId": "i2",
+            "sessionId": "p1",
+            "set": {
+              "args": "bash('cargo test')",
+              "status": "pending",
+              "toolName": "repl"
+            },
+            "type": "item_patch"
+          },
+          "seq": 4
+        },
+        {
+          "message": {
+            "itemId": "i2",
+            "sessionId": "p1",
+            "set": {
+              "args": "{}",
+              "status": "running"
+            },
+            "type": "item_patch"
+          },
+          "seq": 5
+        },
+        {
+          "message": {
+            "itemId": "i2",
+            "sessionId": "p1",
+            "set": {
+              "output": "2 tests failed",
+              "status": "error"
+            },
+            "type": "item_patch"
+          },
+          "seq": 6
+        },
+        {
+          "changed": {
+            "goal": {
+              "objective": "Make the tests pass",
+              "status": "active",
+              "timeUsedSeconds": 90,
+              "tokenBudget": 100000,
+              "tokensUsed": 12000
+            }
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "goal": null
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "status": "idle"
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {},
+          "session": "p1"
+        }
+      ],
+      "step": "its events arrive: a reply, a tool call, a goal"
+    },
+    {
+      "sent": [
+        {
+          "changed": {},
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "context": {
+              "percent": 93.75,
+              "tokens": 60000,
+              "window": 64000
+            }
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {},
+          "session": "p1"
+        }
+      ],
+      "step": "it settles close to its window: the bridge asks it to compact, once"
+    },
+    {
+      "sent": [
+        {
+          "changed": {},
+          "session": "p1"
+        },
+        {
+          "changed": {},
+          "session": "p1"
+        }
+      ],
+      "step": "still close to it a moment later: not asked again"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "name": null,
+            "title": "project"
+          },
+          "session": "p1"
+        },
+        {
+          "changed": {
+            "context": {
+              "percent": 14.0625,
+              "tokens": 9000,
+              "window": 64000
+            }
+          },
+          "session": "p1"
+        }
+      ],
+      "step": "a new conversation starts in the session: its window goes with it"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "sessionId": "p1-sub",
+            "type": "session_removed"
+          }
+        }
+      ],
+      "step": "the subagent ends"
+    },
+    {
+      "sent": [
+        {
+          "changed": {
+            "error": "Prime daemon unavailable: connection refused",
+            "status": "error"
+          },
+          "session": "p1"
+        }
+      ],
+      "step": "the daemon goes away"
+    },
+    {
+      "sent": [
+        {
+          "session": "p2",
+          "summary": {
+            "agent": "prime",
+            "autoCompaction": true,
+            "backgroundJobs": 0,
+            "cost": 0.5,
+            "createdAt": 1700000000000,
+            "cwd": "/work/project",
+            "id": "p2",
+            "kind": "root",
+            "lastActiveAt": 1700000040000,
+            "model": {
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "queue": {
+              "followUp": [],
+              "steering": []
+            },
+            "readOnly": false,
+            "runningSubagents": false,
+            "sites": [],
+            "status": "compacting",
+            "thinkingLevel": "medium",
+            "thinkingLevels": [],
+            "title": "Make the tests pass"
+          }
+        },
+        {
+          "message": {
+            "sessionId": "p1",
+            "type": "session_removed"
+          }
+        },
+        {
+          "changed": {
+            "context": {
+              "percent": 3.3088235294117645,
+              "tokens": 9000,
+              "window": 272000
+            },
+            "cost": 0.75,
+            "model": {
+              "contextWindow": 400000,
+              "id": "model-1",
+              "name": "Model One",
+              "provider": "example",
+              "reasoning": true
+            },
+            "queue": {
+              "followUp": [],
+              "steering": [
+                "look at src"
+              ]
+            },
+            "standardWindow": 272000,
+            "status": "idle",
+            "thinkingLevels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          },
+          "session": "p2"
+        }
+      ],
+      "step": "it comes back with another session only"
+    },
+    {
+      "sent": [
+        {
+          "message": {
+            "sessionId": "p2",
+            "type": "session_removed"
+          }
+        }
+      ],
+      "step": "that session closes"
+    }
+  ]
+}

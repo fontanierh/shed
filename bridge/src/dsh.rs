@@ -1214,7 +1214,7 @@ fn now_ms() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::protocol::ItemKind;
 
@@ -1244,6 +1244,11 @@ mod tests {
         };
         let events = lines.iter().flat_map(|l| feed.receive(l)).collect();
         (feed, events)
+    }
+
+    /// The events the recorded feed turns into, for the tests of what the bridge does with them.
+    pub(crate) fn recorded_events() -> Vec<Value> {
+        replay().1
     }
 
     fn kinds(events: &[Value]) -> Vec<&str> {

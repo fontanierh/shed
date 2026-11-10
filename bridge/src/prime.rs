@@ -145,15 +145,20 @@ fn launch_env() -> Value {
 }
 
 impl PrimeDaemon {
-    /// Connects in the background and keeps reconnecting; events flow through the returned channel.
-    pub fn start(client_id: String) -> (Arc<PrimeDaemon>, mpsc::UnboundedReceiver<DaemonEvent>) {
-        let daemon = Arc::new(PrimeDaemon {
+    /// A daemon nothing is connected to yet: every command is refused until `start` connects it.
+    pub(crate) fn unconnected(client_id: String) -> Arc<PrimeDaemon> {
+        Arc::new(PrimeDaemon {
             client_id,
             writer: tokio::sync::Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(0),
             shown: Mutex::new(HashSet::new()),
-        });
+        })
+    }
+
+    /// Connects in the background and keeps reconnecting; events flow through the returned channel.
+    pub fn start(client_id: String) -> (Arc<PrimeDaemon>, mpsc::UnboundedReceiver<DaemonEvent>) {
+        let daemon = PrimeDaemon::unconnected(client_id);
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(daemon.clone().run(tx));
         (daemon, rx)
