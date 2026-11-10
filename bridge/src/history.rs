@@ -121,22 +121,17 @@ mod tests {
     use super::*;
     use crate::protocol::ItemKind;
 
+    /// A file of its own for each call: the tests run at once, in one process.
     fn write(lines: &[Value]) -> String {
+        static WRITTEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "history-test-{}-{}.jsonl",
             std::process::id(),
-            rand_suffix()
+            WRITTEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let text: Vec<String> = lines.iter().map(Value::to_string).collect();
         std::fs::write(&path, text.join("\n") + "\n").unwrap();
         path.to_string_lossy().into_owned()
-    }
-
-    fn rand_suffix() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64
     }
 
     fn message(id: &str, parent: &str, message: Value) -> Value {
