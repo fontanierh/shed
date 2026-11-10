@@ -790,7 +790,7 @@ mod tests {
     fn loopback_and_tailnet_binds_are_not_exposed() {
         assert!(!exposed("127.0.0.1"));
         assert!(!exposed("[::1]"));
-        assert!(!exposed("100.121.116.92"));
+        assert!(!exposed("100.64.0.7"));
         assert!(!exposed("[fd7a:115c:a1e0::1]"));
         assert!(exposed("*"));
         assert!(exposed("192.168.0.67"));
@@ -834,10 +834,7 @@ mod tests {
         // Vite on a recent Node: `localhost` there is the IPv6 loopback alone.
         assert_eq!(reach(["[::1]"]), Reach::Local("localhost"));
         // On the tailnet address itself: there already, and a route at its port would shadow it.
-        assert_eq!(
-            reach(["100.121.116.92"]),
-            Reach::Tailnet("100.121.116.92".into())
-        );
+        assert_eq!(reach(["100.64.0.7"]), Reach::Tailnet("100.64.0.7".into()));
         assert_eq!(
             reach(["192.168.1.20"]),
             Reach::Elsewhere("192.168.1.20".into())
