@@ -179,8 +179,6 @@ extension SessionStore {
         return try await client(env).call(.gitBranch(path: folder), as: Reply.self).branch
     }
 
-    // MARK: Background commands
-
     public func listJobs(_ sessionId: String) async throws -> [BackgroundJob] {
         let to = try route(sessionId)
         return try await to.client.call(.listJobs(sessionId: to.raw), as: [BackgroundJob].self)

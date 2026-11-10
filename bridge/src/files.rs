@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 
 use crate::session::expand_dir;
 
-/// The folders inside `path` (default: home), newest first is left to the client; sorted by name here.
+/// The folders inside `path` (default: home), sorted by name. Each says when it last changed, so a client can put the
+/// newest first.
 pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
     let home = std::env::var("HOME").unwrap_or_default();
     let dir = expand_dir(path.filter(|p| !p.is_empty()).unwrap_or("~"))?;

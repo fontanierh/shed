@@ -242,7 +242,7 @@ public struct Site: Codable, Identifiable, Hashable, Sendable {
 
     public var id: Int { port }
     public var name: String { title ?? command }
-    /// `https://jims-macbook-pro.tail362838.ts.net:8890/` → `jims-macbook-pro.tail362838.ts.net:8890`.
+    /// `https://my-mac.tailnet.ts.net:8890/` → `my-mac.tailnet.ts.net:8890`.
     public var host: String {
         guard let components = URLComponents(string: url) else { return url }
         return [components.host, components.port.map(String.init)].compactMap { $0 }.joined(separator: ":")

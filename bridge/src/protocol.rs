@@ -1,5 +1,6 @@
-//! Wire types shared with the Swift clients (apps/Sources/ShedKit/Protocol.swift). The tests below and the
-//! apps' ProtocolFixtureTests both read protocol/*.json, so a message one side changes fails the other's tests.
+//! Wire types shared with the Swift clients (apps/Sources/ShedKit/Protocol.swift and ClientOp.swift). The tests below
+//! and the apps' ProtocolFixtureTests and ClientOpTests read protocol/*.json, so a message or an operation one side
+//! changes fails the other's tests.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -111,7 +111,6 @@ public final class SessionStore {
         return summary
     }
 
-    /// The environment a session runs in.
     public func environment(of sessionId: String) -> BridgeEnvironment? {
         Self.split(sessionId).flatMap { split in environments.first { $0.id == split.env } }
     }

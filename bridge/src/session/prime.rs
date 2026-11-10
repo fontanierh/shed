@@ -302,8 +302,6 @@ impl App {
         }
     }
 
-    // ---- client operations ----
-
     /// A Prime session's spending: its own calls (as Prime reports them, or as its file records them if that's more)
     /// plus its subagents'. Never less than before: a total doesn't go back down.
     pub(super) fn prime_cost(&self, file: Option<&str>, own: f64, before: f64) -> f64 {
