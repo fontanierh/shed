@@ -14,7 +14,7 @@ Shed lets you run coding agents on your Macs and drive them from anywhere. It wo
 
 ## What it does
 
-- **One session list for every computer.** Sessions from each Mac running the bridge, Pi and Prime side by side, including Prime sessions started in its own TUI.
+- **One session list for every computer.** Sessions from each Mac running the bridge, Pi, Prime and DeepSeek Harness side by side, including Prime sessions started in its own TUI.
 - **The full transcript, live.** Reasoning, tool calls and their output, file edits, images and audio stream in as the agent works.
 - **Steer while it runs.** Messages sent during a turn steer it; the rest queue. Stop, compact, and switch model, reasoning effort or context window from the composer.
 - **Subagents and background commands.** Child sessions show under their parent and open like any other. Shell commands an agent leaves running are listed with live output and can be cancelled.
@@ -27,11 +27,11 @@ Shed lets you run coding agents on your Macs and drive them from anywhere. It wo
 
 ```
  iPhone app ─┐                                         ┌─ pi --mode rpc      one process per Pi session
-             ├─ WebSocket over Tailscale ──► bridge ───┤
+             ├─ WebSocket over Tailscale ──► bridge ───┼─ dsh                one process per DeepSeek Harness session
  Mac app ────┘                              (:7878)    └─ Prime daemon       every Prime session and subagent
 ```
 
-Each computer runs the **bridge**, a small Rust service that drives the agents installed there and turns them into one protocol. The agents reach their models through **Open Codex** on `127.0.0.1:10100`: the bridge writes its catalog into each agent's configuration, and reads its request history for what each session spends. The **apps** connect to one or more bridges. The bridge listens on `127.0.0.1` only; [Tailscale](https://tailscale.com) makes it reachable from your other devices, privately and over HTTPS. Sessions belong to the agents, not to Shed: quit the app, or restart the bridge, and they keep running.
+Each computer runs the **bridge**, a small Rust service that drives the agents installed there and turns them into one protocol. The agents reach their models through **Open Codex** on `127.0.0.1:10100`: the bridge writes its catalog into each agent's configuration, and reads its request history for what each session spends. The **apps** connect to one or more bridges. The bridge listens on `127.0.0.1` only; [Tailscale](https://tailscale.com) makes it reachable from your other devices, privately and over HTTPS. Sessions belong to the agents, not to Shed: quit the app and they keep running. Prime's sessions live in its own daemon, so they also outlive a restart of the bridge; Pi's and DeepSeek Harness's stop with the bridge and resume from their saved transcript.
 
 [docs/architecture.md](docs/architecture.md) covers the design in more depth.
 
@@ -62,9 +62,9 @@ Run in a terminal, it walks through each part and asks for what is missing. Keys
 - **Tailscale.** Publishes the bridge on your tailnet (see below).
 - **iPhone app.** With `SHED_TEAM_ID` set, or on request, builds it onto a connected iPhone (see step 3).
 
-It ends with a summary of each part. It is safe to run again, and that is how you update: every step updates in place and leaves settings it doesn't own alone. `--no-app`, `--no-service`, `--no-tailscale` and `--no-iphone` skip those steps. `--no-opencodex` gives the agents your keys directly instead, and leaves their own providers in place.
+It ends with a summary of each part. It is safe to run again, and that is how you update: every step updates in place and leaves settings it doesn't own alone. `--no-app`, `--no-service`, `--no-tailscale` and `--no-iphone` skip those steps. `--no-opencodex` gives Pi and Prime your keys directly instead (the OpenAI, Anthropic, Gemini and DeepSeek ones, from the environment), and leaves every agent's own providers in place.
 
-Keys, subscriptions and models are managed afterwards in the Open Codex dashboard at http://localhost:10100. A model added there shows in every agent within a minute.
+Keys, subscriptions and models are managed afterwards in the Open Codex dashboard at http://localhost:10100. A model added there shows in every agent's list the next time you start a session (the lists are kept for a minute).
 
 Open **Shed** from `~/Applications`. On the Mac that runs the bridge, the app finds it and its token on its own.
 
@@ -145,18 +145,20 @@ A server an agent starts detached (`nohup`, a daemon) stays its session's site: 
 setup/uninstall.sh
 ```
 
-This removes the login service, the Tailscale publication and the Mac app. Pi, Prime Agent, their settings and sessions, and `~/.agent-remote` are left in place.
+This removes the login service, the Tailscale publication and the Mac app. Left in place: Pi, Prime Agent and DeepSeek Harness with their settings and sessions, Open Codex and its login service, and `~/.agent-remote`. So are a `setup/sync-remote.sh --watch` agent (remove it with `--unwatch`) and the tailnet routes of sites that were still published when the bridge stopped (`tailscale serve status` lists them).
 
 ## Development
 
 ```
-bridge/        Rust bridge: protocol, Pi and Prime drivers, transcript normalization
-  scripts/     end-to-end checks against a running bridge (smoke, subagents, resume)
+bridge/        Rust bridge: protocol, Pi, Prime and DeepSeek Harness drivers, transcript normalization
+  dsh/         the plugin the bridge loads into DeepSeek Harness
+  scripts/     end-to-end checks against a running bridge (smoke, subagents, async-subagents, resume-check)
 apps/          Swift package: ShedKit (shared client and views) and ShedMac
   iOS/         iPhone app and Live Activity, generated with XcodeGen from project.yml
   scripts/     bundle-mac.sh, install-iphone.sh
 setup/         installer, uninstaller, remote sync, vendored Pi and Prime configuration, Open Codex patches
 docs/          architecture and the Prime daemon protocol
+design/        scripts and prompts behind the sunburst artwork and its motion studies
 ```
 
 ```bash

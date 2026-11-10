@@ -1,4 +1,5 @@
-//! One agent subprocess speaking the Pi/Prime JSONL RPC protocol on stdin/stdout.
+//! One agent subprocess speaking Pi's JSONL RPC protocol on stdin/stdout: Pi itself, or DeepSeek Harness through
+//! Shed's plugin (`crate::dsh`). Prime's sessions go through its daemon instead (`crate::prime`).
 
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;

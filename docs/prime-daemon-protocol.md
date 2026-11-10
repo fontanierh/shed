@@ -26,7 +26,7 @@ The server speaks first:
 
 Responses: `{"id":"<id>","type":"response","command":"<type>","success":true,"data":…}` or `success:false, error`.
 
-Session commands are Prime's RPC commands with an `activeSessionId` added. Verified: `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_thinking_level`, `prompt`, `steer`, `clear_queue`, `compact`, `new_session`, `attach`, `detach`. `get_available_thinking_levels` is unknown, so use `thinkingLevelMap` from `get_available_models`. Stats, state and prompt work without attaching.
+Session commands are Prime's RPC commands with an `activeSessionId` added. The bridge sends `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_model`, `set_thinking_level`, `set_auto_compaction`, `set_session_name`, `prompt`, `abort`, `compact`, `new_session`, `attach` and `detach`. `steer` and `clear_queue` were verified too and aren't used. `get_available_thinking_levels` is unknown, so use `thinkingLevelMap` from `get_available_models`. Stats, state and prompt work without attaching.
 
 Supervisor commands:
 
@@ -34,7 +34,7 @@ Supervisor commands:
 |---|---|---|
 | `list` | `all` (bool) | Session summaries |
 | `roster_subscribe` | — | Returns `{roster:[{agentId, summary}]}` and then pushes `roster_update` |
-| `list` rows | — | `{sessions:[…]}`, each with `lifecycle` (`live`/`archived`), `runtimeKind` (null on a top-level session without a worker), `activeSessionId`, `workerPid`. After a reboot, open sessions stay `live` but run no worker and are missing from the roster; attaching one starts its worker. The bridge does this for every `live` top-level session when it connects. |
+| `list` rows | — | `{sessions:[…]}`, each with `lifecycle` (`live`/`archived`), `runtimeKind` (null on a top-level session without a worker), `activeSessionId`, `workerPid`. After a reboot, open sessions stay `live` but run no worker and are missing from the roster; attaching one starts its worker. When it connects, the bridge does this (attach, then detach) for the `live` top-level sessions it had listed before, which it keeps in `~/.agent-remote/prime-sessions.json`: Prime also keeps sessions live that nobody has opened since an older reboot. |
 | `create` | `config:{cwd, executionMode:"interactive", sessionDir, model:"provider/id", thinking}`, `launchEnv:{…}` | Returns a summary with `activeSessionId`. `thinking` here doesn't change the saved default. The TUI sends its whole environment as `launchEnv`; the bridge sends a curated one. |
 | `attach` | `activeSessionId`, `capabilities:["attach_snapshot","event_sequence"]` | `data.snapshot = {summary, state, messages, lastEventSequence, lastEventCursor, children}` |
 | `get_direct_worker_transport` | `activeSessionId` | Optional fast path straight to the worker socket. The bridge doesn't use it; everything also routes through the supervisor. |
@@ -42,6 +42,8 @@ Supervisor commands:
 The TUI's `prompt` is `{"type":"prompt","message":…,"streamingBehavior":"steer","queueIfBusy":true}`, which steers when the agent is busy.
 
 `set_thinking_level` changes Prime's saved `defaultThinkingLevel` (the TUI does the same).
+
+A session's goal is `snapshot.state.goal` on attach and then `goal_update` events. There is no command to clear one: the bridge steers in `/goal clear` as a prompt. Nor is there one to restart the Python kernel: the bridge kills the session's own `python -m rlm.repl` process (found by `RLM_SESSION_ID` in its environment) and what runs under it, and Prime starts a fresh kernel on the next Python call.
 
 ## Pushed messages
 

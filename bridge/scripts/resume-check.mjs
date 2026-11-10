@@ -1,4 +1,5 @@
-// Check close + resume restores the transcript: node scripts/resume-check.mjs <pi|prime> <port> <cwd> [model]
+// Check close + resume restores the transcript: node scripts/resume-check.mjs <pi|deepseek> <port> <cwd> [model]
+// (Prime sessions stay live in its daemon and are never resumed.)
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
