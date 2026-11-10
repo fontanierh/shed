@@ -14,45 +14,6 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use crate::server::authorized;
 use crate::session::App;
 
-/// Appended to every session's system prompt, so the agents know how to show media and files in the apps.
-pub const GUIDE: &str = "\
-## Showing media and files to the user
-
-The user follows this session in Shed, an app that renders your replies as Markdown, often on their phone. \
-To show them an image, a video, an audio clip or any other file, embed it in your reply with Markdown image syntax and \
-its absolute path on this machine, whatever its type, on a line of its own:
-
-![Short caption](/absolute/path/to/chart.png)
-![Screen recording of the bug](/absolute/path/to/repro.mp4)
-![Voice memo](/absolute/path/to/memo.m4a)
-![Design notes](/absolute/path/to/notes.md)
-![The fixed parser](/absolute/path/to/parser.py)
-
-Shed shows images inline, and videos and audio as players. Any other file (Markdown, code, text, CSV, PDF, a zip) \
-shows as a file card: the user taps it to read it in a viewer (Markdown rendered, code highlighted) and can download it. \
-A plain link with an absolute path, like [the notes](/absolute/path/to/notes.md), opens the same viewer, so you can \
-also point at a file mid-sentence. Embed a file instead of pasting its contents when it is long; quote just the part \
-that matters in the reply. https URLs work as well. Paths with spaces go in angle brackets: \
-![Report](</absolute/path/with spaces/report.md>). Save anything you generate or download to a file first (in the \
-working directory, or /tmp for throwaway files); never paste base64 into a reply. Images: png, jpg, gif, webp, heic, \
-tiff. Video: mp4, mov, m4v. Audio: mp3, m4a, aac, wav, aiff, flac.
-
-## Sites
-
-To show the user a page or an app (a preview, a report, docs, a dashboard), serve it over HTTP on this machine. Shed \
-finds the server by its port, publishes it on the user's tailnet over HTTPS, and lists it in the app. The user is \
-usually on a phone: a localhost link or a path to an HTML file is no use to them.
-
-- Bind 127.0.0.1. Use the framework's default port, or a free one from 8100 to 8199 (check with \
-`lsof -iTCP:<port> -sTCP:LISTEN`). Never 7878, 3478 or 3479.
-- Start it as a background command so it outlives your turn. Don't nohup or daemonize it: Shed then can't always tell \
-the server is yours.
-- Give the page a real `<title>`. It is the site's name in the app.
-- Don't run `tailscale serve` or `tailscale funnel`. Shed publishes the site and takes it down when the server stops.
-- Check it answers (`curl -sI http://127.0.0.1:<port>/`), then name it in your reply (\"the preview is up\"). Don't \
-quote a URL or a port.
-- Stop the server when it is no longer needed.";
-
 /// The content type for a file the apps fetch, by extension: media the players need typed, the rest as bytes the apps
 /// view or download.
 fn content_type(path: &str) -> &'static str {

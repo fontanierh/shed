@@ -134,6 +134,13 @@ fn launch_env() -> Value {
     }
     env.entry("TERM")
         .or_insert_with(|| Value::String("xterm-256color".into()));
+    // The web the guide tells Prime about: the `shed-web` command, and the `shed_web` module for its Python.
+    let path = env.get("PATH").and_then(Value::as_str).unwrap_or_default();
+    let path = crate::web::prepend_path(&crate::web::bin_dir(), path);
+    env.insert("PATH".into(), Value::String(path));
+    let python = std::env::var("PYTHONPATH").unwrap_or_default();
+    let python = crate::web::prepend_path(&crate::web::python_dir(), &python);
+    env.insert("PYTHONPATH".into(), Value::String(python));
     Value::Object(env)
 }
 
@@ -372,7 +379,7 @@ impl PrimeDaemon {
             "cwd": cwd,
             "executionMode": "interactive",
             "sessionDir": format!("{home}/.prime/agent/sessions"),
-            "appendSystemPrompt": [crate::media::GUIDE],
+            "appendSystemPrompt": [crate::guide::text(crate::rpc::AgentKind::Prime)],
         });
         if let Some(model) = model {
             config["model"] = json!(model);
