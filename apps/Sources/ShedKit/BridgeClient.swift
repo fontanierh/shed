@@ -160,8 +160,12 @@ public final class BridgeClient {
             }
             return
         }
-        if let message = try? JSONDecoder().decode(ServerMessage.self, from: data) {
-            onMessage(message)
+        do {
+            onMessage(try JSONDecoder().decode(ServerMessage.self, from: data))
+        } catch {
+            // Said in the log: a message the app can't read was dropped without a trace, and a list or a
+            // conversation simply stayed as it was.
+            NSLog("Shed: a %@ message from the bridge couldn't be read: %@", head.type, String(describing: error))
         }
     }
 

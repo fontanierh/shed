@@ -410,21 +410,26 @@ public final class SessionStore {
             guard let (env, raw) = Self.split(id) else { return }
             try await call(env, "attach", ["sessionId": raw], repeatable: true)
         } catch {
-            // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
-            if sessions[id] == nil {
-                if selectedId == id { select(nil) }
-                return
-            }
-            // A subagent its agent has let go of. The bridge may list it a while longer, but there is nothing to
-            // open: no alert, its screen says so for a moment, then gives way to its parent.
-            if error is BridgeError, let parent = sessions[id]?.parentId {
-                ended.insert(id)
-                try? await Task.sleep(for: .milliseconds(1400))
-                if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
-                return
-            }
-            report(error)
+            await attachFailed(id, error)
         }
+    }
+
+    func attachFailed(_ id: String, _ error: Error) async {
+        // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
+        if sessions[id] == nil {
+            if selectedId == id { select(nil) }
+            return
+        }
+        // A subagent its agent has let go of, which is the one thing the bridge answers with these words. It may
+        // list it a while longer, but there is nothing to open: no alert, its screen says so for a moment, then
+        // gives way to its parent. Any other failure (a bridge out of reach) says nothing about the subagent.
+        if (error as? BridgeError)?.message == "session ended", let parent = sessions[id]?.parentId {
+            ended.insert(id)
+            try? await Task.sleep(for: .milliseconds(1400))
+            if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
+            return
+        }
+        report(error)
     }
 
     // MARK: Incoming messages
@@ -450,9 +455,11 @@ public final class SessionStore {
             sessions[summary.id] = summary
         case .sessionRemoved(let id):
             let id = Self.tag(env, id)
+            // An open subagent that goes gives way to its parent, as when its agent lets go of it.
+            let parent = sessions[id]?.parentId.flatMap { sessions[$0] == nil ? nil : $0 }
             sessions[id] = nil
             ended.remove(id)
-            if selectedId == id { select(nil) }
+            if selectedId == id { select(parent) }
         case .snapshot(let raw, var snapshot, let earlier):
             let sessionId = Self.tag(env, raw)
             guard sessionId == selectedId else { return }

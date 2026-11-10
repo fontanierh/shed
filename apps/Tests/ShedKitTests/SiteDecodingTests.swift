@@ -16,6 +16,16 @@ final class SiteDecodingTests: XCTestCase {
         XCTAssertEqual(session.servedSites, [])
     }
 
+    /// One session the app can't read doesn't hide the others.
+    func testAListKeepsTheSessionsItCanRead() throws {
+        let broken = summary("").replacingOccurrences(of: #""status":"idle""#, with: #""status":7"#)
+        let list = #"{"type":"sessions","sessions":[\#(summary("")),\#(broken),\#(summary(""))]}"#
+        guard case .sessions(let sessions) = try JSONDecoder().decode(ServerMessage.self, from: Data(list.utf8)) else {
+            return XCTFail("not a list of sessions")
+        }
+        XCTAssertEqual(sessions.count, 2)
+    }
+
     func testSitesDecode() throws {
         let sites = #","sites":[{"port":5173,"title":"Atelier","command":"node","url":"https://h.ts.net:5173/","published":true,"exposed":false}]"#
         let session = try JSONDecoder().decode(SessionSummary.self, from: Data(summary(sites).utf8))
