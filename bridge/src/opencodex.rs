@@ -24,10 +24,8 @@ const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "
 /// its defaults when it's installed (~/.opencodex). `"opencodex": false` turns routing off.
 pub struct Gateway {
     pub url: String,
-    pub(crate) management: String,
-    pub(crate) token_file: PathBuf,
-    /// Whether the bridge finds out what a newly listed model takes (`upkeep.rs`); `"upkeep": false` turns it off.
-    pub upkeep: bool,
+    management: String,
+    token_file: PathBuf,
 }
 
 fn home() -> PathBuf {
@@ -57,12 +55,11 @@ pub fn gateway() -> Option<Gateway> {
             .as_str()
             .map(PathBuf::from)
             .unwrap_or_else(|| home().join(".opencodex/admin-api-token")),
-        upkeep: ours["upkeep"] != json!(false),
     })
 }
 
 /// GET a JSON document. The admin token goes in on stdin, never in the arguments, where `ps` would show it.
-pub(crate) async fn get(url: &str, token: Option<&str>) -> Result<Value> {
+async fn get(url: &str, token: Option<&str>) -> Result<Value> {
     let mut child = tokio::process::Command::new("/usr/bin/curl")
         .args([
             "-sS",
@@ -95,75 +92,15 @@ pub(crate) async fn get(url: &str, token: Option<&str>) -> Result<Value> {
     Ok(serde_json::from_slice(&out.stdout)?)
 }
 
-/// Send a JSON document and return the status with the answer, whatever the status: a refusal is an answer here.
-/// An error is the request not getting one at all.
-pub(crate) async fn send(
-    method: &str,
-    url: &str,
-    token: Option<&str>,
-    body: &Value,
-) -> Result<(u16, Value)> {
-    let mut child = tokio::process::Command::new("/usr/bin/curl")
-        .args(["-sS", "--max-time", "120", "-X", method])
-        .args(["-H", "Content-Type: application/json"])
-        .args(["--data-binary", &body.to_string()])
-        .args(["-w", "\n%{http_code}", "-K", "-", url])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
-    if let Some(token) = token {
-        stdin
-            .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
-            .await?;
-    }
-    drop(stdin);
-    let out = child.wait_with_output().await?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "Open Codex: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    let (answer, status) = text
-        .rsplit_once('\n')
-        .ok_or_else(|| anyhow!("Open Codex: no status"))?;
-    Ok((
-        status.trim().parse()?,
-        serde_json::from_str(answer).unwrap_or(Value::Null),
-    ))
-}
-
-/// The admin token Open Codex's management API asks for.
-pub(crate) fn admin_token(gateway: &Gateway) -> Result<String> {
-    Ok(std::fs::read_to_string(&gateway.token_file)
-        .map_err(|e| anyhow!("Open Codex admin token: {e}"))?
-        .trim()
-        .to_string())
-}
-
 /// Open Codex's provider for a Claude Pro or Max login. Its models stay out of Shed: a Claude subscription is
 /// meant for Anthropic's own apps, so Claude reaches the agents through an API key alone.
 const CLAUDE_SUBSCRIPTION: &str = "anthropic/";
 
-static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
-/// Set while `upkeep.rs` is trying a model's efforts one at a time: Open Codex lists the one being tried, which
-/// no agent should be given, so the catalog stays as it was last read until the trial is over.
-pub(crate) static TRYING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Read the catalog again at the next asking.
-pub(crate) fn forget_catalog() {
-    *CACHE.lock().unwrap() = None;
-}
-
 /// The models Open Codex serves, as it lists them, less the Claude subscription's. Cached for a minute.
 pub async fn catalog(gateway: &Gateway) -> Result<Vec<Value>> {
+    static CACHE: Mutex<Option<(Instant, Vec<Value>)>> = Mutex::new(None);
     if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
-        let trying = TRYING.load(std::sync::atomic::Ordering::Relaxed);
-        if trying || at.elapsed() < Duration::from_secs(60) {
+        if at.elapsed() < Duration::from_secs(60) {
             return Ok(models.clone());
         }
     }
@@ -187,7 +124,7 @@ fn offered(model: &Value) -> bool {
 }
 
 /// The reasoning efforts a model takes, as Open Codex names them.
-pub(crate) fn efforts(model: &Value) -> Vec<String> {
+fn efforts(model: &Value) -> Vec<String> {
     model["reasoning_efforts"]
         .as_array()
         .into_iter()
@@ -433,8 +370,9 @@ pub struct Tally {
 impl Tally {
     /// Count the requests made after this tally's latest one.
     pub async fn update(&mut self, gateway: &Gateway, conversation: &str) -> Result<()> {
-        let token = admin_token(gateway)?;
-        let token = token.as_str();
+        let token = std::fs::read_to_string(&gateway.token_file)
+            .map_err(|e| anyhow!("Open Codex admin token: {e}"))?;
+        let token = token.trim();
         let since = if self.through == 0 {
             0
         } else {
@@ -487,77 +425,6 @@ mod tests {
             conversation("01a1a741-a177-717e-a671-ac8139c47b00"),
             "9632a2da6f62ee6f41b8490a792783b8"
         );
-    }
-
-    /// A server that answers one request with `status` and `body`, and hands back what it was sent.
-    async fn serve_once(
-        status: &'static str,
-        body: &'static str,
-    ) -> (String, tokio::task::JoinHandle<String>) {
-        use tokio::io::AsyncReadExt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!(
-            "http://{}/api/model-settings",
-            listener.local_addr().unwrap()
-        );
-        let served = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut got = Vec::new();
-            let mut buffer = [0u8; 4096];
-            // Headers, then as many bytes as Content-Length says.
-            loop {
-                let n = socket.read(&mut buffer).await.unwrap();
-                got.extend_from_slice(&buffer[..n]);
-                let text = String::from_utf8_lossy(&got).to_string();
-                let Some((head, sent)) = text.split_once("\r\n\r\n") else {
-                    continue;
-                };
-                let length = head
-                    .lines()
-                    .find_map(|line| {
-                        line.to_lowercase()
-                            .strip_prefix("content-length:")?
-                            .trim()
-                            .parse::<usize>()
-                            .ok()
-                    })
-                    .unwrap_or(0);
-                if n == 0 || sent.len() >= length {
-                    break;
-                }
-            }
-            let reply = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            socket.write_all(reply.as_bytes()).await.unwrap();
-            String::from_utf8_lossy(&got).to_string()
-        });
-        (url, served)
-    }
-
-    #[tokio::test]
-    async fn a_refusal_comes_back_as_an_answer_with_its_status() {
-        let (url, served) = serve_once(
-            "400 Bad Request",
-            r#"{"error":{"message":"no such level"}}"#,
-        )
-        .await;
-        let body = json!({ "provider": "google", "reasoningEfforts": ["low"] });
-        let (status, answer) = send("PUT", &url, Some("s3cret"), &body).await.unwrap();
-        assert_eq!(status, 400);
-        assert_eq!(answer["error"]["message"], "no such level");
-        let sent = served.await.unwrap();
-        assert!(sent.starts_with("PUT /api/model-settings "));
-        assert!(sent.contains("Authorization: Bearer s3cret"));
-        assert!(sent.ends_with(&body.to_string()));
-
-        let (url, served) = serve_once("200 OK", r#"{"ok":true}"#).await;
-        let (status, answer) = send("POST", &url, None, &json!({})).await.unwrap();
-        assert_eq!((status, answer["ok"].as_bool()), (200, Some(true)));
-        assert!(!served.await.unwrap().contains("Authorization"));
-        // Nothing listening: an error, never mistaken for a refusal.
-        assert!(send("POST", &url, None, &json!({})).await.is_err());
     }
 
     #[test]
