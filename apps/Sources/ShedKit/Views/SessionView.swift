@@ -38,6 +38,7 @@ struct SessionView: View {
     /// Why the conversation isn't shown yet, while it hasn't arrived: an empty transcript is then no empty conversation.
     private var pendingTranscript: String? {
         guard !store.transcriptLoaded else { return nil }
+        if ended { return "This subagent has ended." }
         switch store.connection {
         case .connected: return "Loading conversation…"
         case .connecting: return "Connecting to \(store.environment(of: session.id)?.name ?? "the bridge")…"
@@ -61,8 +62,18 @@ struct SessionView: View {
 
     private var hasJobs: Bool { session.hasBackgroundCommands }
 
-    /// Connected and waiting for the conversation: the phone's dither rain plays.
-    private var raining: Bool { beamStage && !reduceMotion && store.connection == .connected && !store.transcriptLoaded }
+    /// Connected and waiting for the conversation: the dither rain plays.
+    private var raining: Bool { rains && !reduceMotion && store.connection == .connected && !store.transcriptLoaded && !ended }
+    /// The conversation opens out of the rain: on the phone's stage, and on the Mac.
+    private var rains: Bool {
+        #if os(iOS)
+        beamStage
+        #else
+        true
+        #endif
+    }
+    /// A subagent that turned out to have ended as it was opened: its screen says so, then gives way to its parent.
+    private var ended: Bool { store.ended.contains(session.id) }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// A phone in portrait: the text runs edge to edge.
@@ -80,41 +91,136 @@ struct SessionView: View {
     @Environment(\.beamStage) private var beamStage
     #else
     private let beamStage = false
+    /// The details open beside the conversation.
+    @State private var detail = DetailSelection()
     #endif
 
     var body: some View {
+        content
+        .background {
+            // One plain dark field behind the whole session, and the beam running
+            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
+            // there the beam lies along the bottom, under the composer, where no text runs.
+            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
+            if beamStage {
+                Color.clear
+            } else if narrow {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
+            } else {
+                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
+            }
+        }
+        .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
+        #if os(macOS)
+        // The header already shows the title.
+        .toolbar(removing: .title)
+        #else
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
+                                                  showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
+        .modifier(SoftTopEdge(off: beamStage))
+        .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
+        .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
+        .sheet(isPresented: $showingSites) {
+            NavigationStack {
+                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
+                           title: "Sites", empty: "Servers this session starts appear here.")
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        #endif
+        .renameSession($renaming, store: store)
+    }
+
+    #if os(macOS)
+    /// The conversation, and beside it the details of the row the reader opened.
+    private var content: some View {
+        HStack(spacing: 0) {
+            column
+            if let sheet = detail.sheet {
+                reading(DetailPanel(sheet: sheet, selection: detail) { show(nil) })
+                    .transition(.move(edge: .trailing))
+            }
+        }
+        // How far the panel's edge can be dragged.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { detail.area = $0 }
+        // Another session's details have no place beside this one.
+        .onChange(of: session.id) { detail.sheet = nil }
+    }
+
+    /// Opens the panel, closes it, or changes what it shows. It slides as it comes and goes.
+    private func show(_ sheet: FeedSheet?) {
+        let change = { if let sheet { detail.toggle(sheet) } else { detail.sheet = nil } }
+        if reduceMotion { return change() }
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.92)) { change() }
+    }
+    #else
+    private var content: some View { column }
+    #endif
+
+    /// What the conversation reads of its session, and the details beside it too.
+    private func reading(_ view: some View) -> some View {
+        view
+            .fileLinks()
+            .environment(\.media, store.media(for: session.id))
+            .environment(\.liveText, store.live)
+            .environment(\.stopTool, stopTool)
+            .environment(\.restartKernel, restartKernel)
+            .environment(\.subagents, SubagentLinks(store: store, parent: session.id))
+    }
+
+    private var column: some View {
         VStack(spacing: 0) {
             #if os(macOS)
             SessionHeader(store: store, session: session) { renaming = session }
             #endif
-            // The transcript and, on the phone, the dither it materialises out of: a sibling, so the transcript
+            // The transcript and the dither it materialises out of: a sibling, so the transcript
             // changing identity as it arrives doesn't start the effect over.
-            ZStack {
+            reading(ZStack {
+            #if os(iOS)
+            TranscriptView(
+                items: store.transcript,
+                session: session,
+                pending: raining ? "" : pendingTranscript,
+                idle: idleLines,
+                openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
+                earlier: store.earlier,
+                loadingEarlier: store.loadingEarlier,
+                loadEarlier: { await store.loadEarlier() }
+            )
+            .opacity(veiled ? 0 : 1)
+            .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
+            .transition(beamStage ? .identity : .opacity)
+            .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
+            #else
             TranscriptView(
                 items: store.transcript,
                 session: session,
                 // The rain says it is loading; the line stays for a connection that isn't there.
                 pending: raining ? "" : pendingTranscript,
                 idle: idleLines,
-                openChild: { name in store.child(of: session.id, named: name).map { store.select($0.id) } },
                 openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
                 earlier: store.earlier,
                 loadingEarlier: store.loadingEarlier,
                 loadEarlier: { await store.loadEarlier() }
             )
-            .equatable()
             .opacity(veiled ? 0 : 1)
-            // Each session opens at its end, following new output. The conversation arriving replaces the waiting
-            // line with a cross-fade, not a cut.
+            .environment(\.openSheet, SheetOpener { show($0) })
+            .environment(\.detailSelection, detail)
+            // Each session opens at its end, following new output. The rain brings the conversation in; a fade as well
+            // would leave it faint when the rain reads it. With Reduce Motion there is no rain, and it cross-fades.
             .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
-            // On the phone the rain brings it in; a fade as well would leave it faint when the rain reads it.
-            .transition(beamStage ? .identity : .opacity)
-            // On the phone nothing animates as it arrives: the rain prints it, and an animation there laid the whole
-            // conversation out again under it.
-            .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
-            // On the phone the conversation materialises out of the beam's dither instead of a loading line.
-            if beamStage {
+            .transition(reduceMotion ? .opacity : .identity)
+            // Nothing animates as it arrives: the rain prints it, and an animation there lays the whole conversation
+            // out again under it.
+            .animation(reduceMotion ? .easeOut(duration: 0.35) : nil, value: store.transcriptLoaded)
+            #endif
+            // The conversation materialises out of the beam's dither instead of a loading line.
+            if rains {
                 Materialize(loading: raining, veiled: $veiled)
+            }
+            if beamStage {
                 // The phone's own fade under the navigation bar, in place of the system's soft edge: dark under the
                 // bar, easing out over a line's height below it.
                 GeometryReader { geometry in
@@ -128,31 +234,18 @@ struct SessionView: View {
                 }
                 .allowsHitTesting(false)
             }
-            }
+            })
             .fillsProposal()
             // On the phone the conversation stops at the composer rather than running on under it and the beam below:
             // off the edge by a hair, so the scroll view doesn't stretch into the composer's inset. The composer's
             // soft pool covers where it ends.
             .padding(.bottom, beamStage ? 1 : 0)
             #if os(iOS)
-            // Reading, not typing: a tap or a drag on the conversation puts the keyboard away. Simultaneous, so the
-            // blocks' own buttons still work.
-            .scrollDismissesKeyboard(.interactively)
-            // A plain rectangle: otherwise each touch first works out the shape of everything in the conversation to
-            // see whether it lands on this gesture, which held the start of a scroll.
-            .contentShape(.interaction, Rectangle())
-            .simultaneousGesture(TapGesture().onEnded {
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            })
+            // A tap or a drag on the conversation puts the keyboard away: the feed's collection view does both itself.
             // Under the session's header: inside a session, a dropped connection otherwise just looks like an agent
             // that stopped answering.
             .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store, sessionId: session.id) }
             #endif
-            .fileLinks()
-            .environment(\.media, store.media(for: session.id))
-            .environment(\.liveText, store.live)
-            .environment(\.stopTool, stopTool)
-            .environment(\.restartKernel, restartKernel)
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
@@ -212,40 +305,6 @@ struct SessionView: View {
                 .frame(maxWidth: .infinity)
             }
         }
-        .background {
-            // One plain dark field behind the whole session, and the beam running
-            // down the right edge, beside the text rather than under it. A phone has no margin beside the text, so
-            // there the beam lies along the bottom, under the composer, where no text runs.
-            // On the phone the shared stage behind the navigation stack draws it (`BeamPose.conversation`).
-            if beamStage {
-                Color.clear
-            } else if narrow {
-                Backdrop(beam: 1, anchor: UnitPoint(x: 0.4, y: 1.0), shape: .floor)
-            } else {
-                Backdrop(beam: 1, anchor: UnitPoint(x: 0.93, y: 0.4), shape: .edge)
-            }
-        }
-        .navigationTitle(session.isSubagent ? (session.name ?? "Subagent") : session.title)
-        #if os(macOS)
-        // The header already shows the title.
-        .toolbar(removing: .title)
-        #else
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar { PhoneSessionToolbar(store: store, session: session, rename: { renaming = session }, showJobs: { showingJobs = true },
-                                                  showSites: { showingSites = true }, restartKernel: { restartingKernel = true }) }
-        .modifier(SoftTopEdge(off: beamStage))
-        .sheet(isPresented: $showingJobs) { PhoneBackgroundCommands(store: store, session: session) }
-        .sheet(isPresented: $showingSubagents) { PhoneSubagentList(store: store, parentId: session.id) }
-        .sheet(isPresented: $showingSites) {
-            NavigationStack {
-                SitesPanel(entries: session.servedSites.map { SiteEntry(site: $0, session: session) },
-                           title: "Sites", empty: "Servers this session starts appear here.")
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
-        #endif
-        .renameSession($renaming, store: store)
     }
 
     /// The phone opens the lists from the idle lines; the Mac has both in its header.
@@ -481,6 +540,7 @@ struct PhoneSubagentList: View {
         let children = store.children(of: parentId)
         let working = children.filter(\.isActive)
         let finished = children.filter { !$0.isActive }
+        let ended = store.endedChildren(of: parentId)
         NavigationStack {
             List {
                 if !working.isEmpty {
@@ -488,6 +548,10 @@ struct PhoneSubagentList: View {
                 }
                 if !finished.isEmpty {
                     Section("Finished") { ForEach(finished) { row($0) } }
+                }
+                // Named still, with nowhere left to go.
+                if !ended.isEmpty {
+                    Section("Ended") { ForEach(ended) { row($0, ended: true) } }
                 }
             }
             .listStyle(.insetGrouped)
@@ -504,13 +568,13 @@ struct PhoneSubagentList: View {
         .presentationDragIndicator(.visible)
     }
 
-    private func row(_ child: SessionSummary) -> some View {
+    private func row(_ child: SessionSummary, ended: Bool = false) -> some View {
         Button {
             dismiss()
             store.select(child.id)
         } label: {
             HStack(spacing: 12) {
-                AgentMark(name: child.name ?? "s", size: 30, working: child.status.isBusy)
+                AgentMark(name: child.name ?? "s", size: 30, working: child.status.isBusy && !ended, asleep: ended)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(child.name ?? "Subagent").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
                         .lineLimit(1)
@@ -522,9 +586,11 @@ struct PhoneSubagentList: View {
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 3) {
-                    Text(child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(child.isActive ? Palette.accent : child.status == .error ? Palette.danger : Palette.moon.opacity(0.5))
+                    if !ended {
+                        Text(child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(child.isActive ? Palette.accent : child.status == .error ? Palette.danger : Palette.moon.opacity(0.5))
+                    }
                     if child.cost > 0 {
                         Text(child.cost.formatted(.currency(code: "USD").precision(.fractionLength(2))))
                             .font(.system(size: 12).monospacedDigit()).foregroundStyle(.tertiary)
@@ -533,7 +599,9 @@ struct PhoneSubagentList: View {
             }
             .padding(.vertical, 4)
             .contentShape(Rectangle())
+            .opacity(ended ? 0.5 : 1)
         }
+        .disabled(ended)
         .listRowBackground(Palette.surface.opacity(0.6))
     }
 }
@@ -572,6 +640,12 @@ struct SubagentMenu: View {
                         Text([child.isActive ? (child.activityText() ?? "working").sentenceCased : child.status.rawValue.capitalized, child.model?.name]
                             .compactMap { $0 }.joined(separator: " · "))
                     }
+                }
+            }
+            let ended = children.first?.parentId.map { store.endedChildren(of: $0) } ?? []
+            if !ended.isEmpty {
+                Section("Ended") {
+                    ForEach(ended) { child in Button(child.name ?? child.title) {}.disabled(true) }
                 }
             }
         } label: {
@@ -783,6 +857,8 @@ struct ContextGauge: View {
 struct ModelPicker: View {
     let store: SessionStore
     let current: ModelInfo?
+    /// The session whose reasoning effort is set here too.
+    var session: SessionSummary?
     let done: () -> Void
     @State private var query = ""
     /// Provider groups shown open: the current model's at first. A search opens them all.
@@ -797,6 +873,9 @@ struct ModelPicker: View {
             .padding(.horizontal, 10).frame(height: 32)
             .card(radius: 9, fill: Palette.sunken)
             .padding(10)
+            if let session, !session.thinkingLevels.isEmpty {
+                EffortRow(store: store, session: session).padding(.horizontal, 10).padding(.bottom, 8)
+            }
             if store.models.isEmpty {
                 ProgressView().padding(30)
             } else {
@@ -1112,39 +1191,20 @@ struct Composer: View {
 
             HStack(spacing: 8) {
                 Button { showModels = true } label: {
-                    ChipLabel(text: session.model?.name ?? "No model", menu: true) {
-                        Image(systemName: "cube").foregroundStyle(Palette.moon.opacity(0.75))
-                    }
+                    ModelChip(model: session.model, models: store.models, level: session.thinkingLevel, levels: session.thinkingLevels)
+                        .equatable()
                 }
                 .buttonStyle(PressStyle())
                 #if os(iOS)
                 .sheet(isPresented: $showModels) {
-                    PhoneModelPicker(store: store, current: session.model)
+                    PhoneModelPicker(store: store, current: session.model, session: session)
                 }
                 #else
                 .popover(isPresented: $showModels, arrowEdge: .top) {
-                    ModelPicker(store: store, current: session.model) { showModels = false }
+                    ModelPicker(store: store, current: session.model, session: session) { showModels = false }
                 }
                 #endif
-                .help("Model")
-
-                if !session.thinkingLevels.isEmpty {
-                    Menu {
-                        Picker("Effort", selection: Binding(get: { session.thinkingLevel ?? "" }, set: { store.setThinking($0) })) {
-                            ForEach(session.thinkingLevels, id: \.self) { Text($0.capitalized).tag($0) }
-                        }
-                        .pickerStyle(.inline)
-                    } label: {
-                        ChipLabel(text: (session.thinkingLevel ?? "default").capitalized, menu: true) {
-                            EffortBars(level: effortLevel)
-                        }
-                    }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("Reasoning effort")
-                }
+                .help(session.thinkingLevels.isEmpty ? "Model" : "Model and reasoning effort")
 
                 Spacer(minLength: 8)
 
@@ -1195,13 +1255,6 @@ struct Composer: View {
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.queue.forReader.steering.count + session.queue.forReader.followUp.count)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.goal?.objective)
         .animation(.spring(response: 0.38, dampingFraction: 0.78), value: session.question?.id)
-    }
-
-    /// The effort level's position, 0...1, for the bars.
-    private var effortLevel: Double {
-        let levels = session.thinkingLevels
-        guard let current = session.thinkingLevel, let index = levels.firstIndex(of: current), levels.count > 1 else { return 0.5 }
-        return Double(index) / Double(levels.count - 1)
     }
 
     /// Something to send, and no file still on its way to the session's computer. Asked several times a redraw, so
@@ -1304,38 +1357,92 @@ struct SendButton: View {
 struct EffortBars: View {
     let level: Double
 
+    /// A level's position among its model's, 0...1.
+    static func level(of current: String?, in levels: [String]) -> Double {
+        guard let current, let index = levels.firstIndex(of: current), levels.count > 1 else { return 0.5 }
+        return Double(index) / Double(levels.count - 1)
+    }
+
     var body: some View {
         let lit = Int((level * 3).rounded()) + 1
+        // Four bars written out, not a `ForEach`: the chip is measured again while the composer animates, off the
+        // main thread, and a `ForEach`'s closure made here may only run on it.
         HStack(alignment: .bottom, spacing: 1.5) {
-            ForEach(0..<4, id: \.self) { index in
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(index < lit ? Palette.accent : Palette.rail)
-                    .frame(width: 2.5, height: 4 + CGFloat(index) * 2.5)
-            }
+            bar(0, lit: lit)
+            bar(1, lit: lit)
+            bar(2, lit: lit)
+            bar(3, lit: lit)
         }
         .frame(height: 12)
         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: lit)
     }
+
+    private func bar(_ index: Int, lit: Int) -> some View {
+        RoundedRectangle(cornerRadius: 1)
+            .fill(index < lit ? Palette.accent : Palette.rail)
+            .frame(width: 2.5, height: 4 + CGFloat(index) * 2.5)
+    }
 }
 
-/// A chip below the composer: icon, label, and a chevron when it opens a menu.
-struct ChipLabel<Icon: View>: View {
-    let text: String
-    var menu = false
-    @ViewBuilder let icon: Icon
+/// The model and its reasoning effort in one chip below the composer. As room runs out the effort's word goes,
+/// then the name's later words; the name's first words and the effort's bars always stay.
+struct ModelChip: View, Equatable {
+    let model: ModelInfo?
+    /// The models on offer, to tell apart two that go by the same name.
+    let models: [ModelInfo]
+    let level: String?
+    let levels: [String]
 
     var body: some View {
+        let name = model?.chipName(among: models) ?? "No model"
+        let short = model?.essentialName ?? name
+        ViewThatFits(in: .horizontal) {
+            label(name, word: true)
+            label(name)
+            label(short)
+            label(short, squeezed: true)
+        }
+    }
+
+    private func label(_ name: String, word: Bool = false, squeezed: Bool = false) -> some View {
         HStack(spacing: 7) {
-            icon.font(.system(size: 12, weight: .medium))
-            Text(text).lineLimit(1).foregroundStyle(Palette.moon)
-            if menu {
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary)
+            Image(systemName: "cube").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon.opacity(0.75))
+            Text(name).lineLimit(1).truncationMode(.middle).foregroundStyle(Palette.moon)
+                .fixedSize(horizontal: !squeezed, vertical: false)
+            if !levels.isEmpty {
+                Capsule().fill(Palette.moon.opacity(0.18)).frame(width: 1, height: 12)
+                EffortBars(level: EffortBars.level(of: level, in: levels))
+                if word {
+                    Text(ModelInfo.effortName(level, among: levels)).lineLimit(1).fixedSize()
+                        .foregroundStyle(Palette.moon.opacity(0.75))
+                }
             }
+            Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary)
         }
         .font(.system(size: 12.5, weight: .medium))
         .padding(.horizontal, 12).frame(height: 30)
         .card(radius: 15, fill: Palette.surface.opacity(0.85), border: Palette.lit.opacity(0.8))
         .contentShape(Capsule())
+    }
+}
+
+/// The reasoning effort, above the models in their picker. Choosing one applies it and leaves the picker open.
+struct EffortRow: View {
+    let store: SessionStore
+    let session: SessionSummary
+
+    var body: some View {
+        let levels = session.thinkingLevels
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                EffortBars(level: EffortBars.level(of: session.thinkingLevel, in: levels))
+                Text("Effort").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            }
+            .padding(.leading, 4)
+            GlassSegments(options: levels.map { ($0, ModelInfo.effortName($0, among: levels)) },
+                          selection: Binding(get: { session.thinkingLevel ?? "" }, set: { store.setThinking($0) }),
+                          height: 32, inset: levels.count > 4 ? 4 : 12)
+        }
     }
 }
 

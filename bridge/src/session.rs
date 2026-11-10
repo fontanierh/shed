@@ -176,7 +176,7 @@ fn log_loop(
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -602,12 +602,21 @@ impl App {
         thinking: Option<String>,
     ) -> Result<()> {
         // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
-        let env = vec![(
-            "AGENT_REMOTE_JOBS_DIR".to_string(),
-            crate::jobs::pi_dir(&session.id)
-                .to_string_lossy()
-                .into_owned(),
-        )];
+        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
+        let guide = self.store.dir().join("guide.md");
+        let _ = std::fs::write(&guide, crate::media::GUIDE);
+        let env = vec![
+            (
+                "AGENT_REMOTE_JOBS_DIR".to_string(),
+                crate::jobs::pi_dir(&session.id)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            (
+                "AGENT_REMOTE_GUIDE".to_string(),
+                guide.to_string_lossy().into_owned(),
+            ),
+        ];
         let opts = SpawnOptions {
             agent: session.agent,
             cwd: session.cwd.clone(),
@@ -1149,7 +1158,10 @@ impl App {
                     }
                 }
                 DaemonEvent::SessionClosed(id) => self.remove(&id).await,
-                DaemonEvent::Inactive { session_file } => {
+                DaemonEvent::Inactive {
+                    session_file,
+                    session_id,
+                } => {
                     let prime: Vec<Arc<Session>> = self
                         .sessions
                         .read()
@@ -1159,9 +1171,16 @@ impl App {
                         .cloned()
                         .collect();
                     for s in prime {
-                        if s.state.lock().await.session_file.as_deref()
-                            == Some(session_file.as_str())
-                        {
+                        let ended = {
+                            let st = s.state.lock().await;
+                            // A subagent's row may come without its file. Its session id never changes, unlike a
+                            // top-level session's, which `new_session` replaces.
+                            (session_file.is_some() && st.session_file == session_file)
+                                || (st.summary.kind == SessionKind::Subagent
+                                    && session_id.is_some()
+                                    && st.prime_session == session_id)
+                        };
+                        if ended {
                             self.remove(&s.id).await;
                         }
                     }
@@ -1328,7 +1347,19 @@ impl App {
             self.load_history(session, &messages).await;
             return Ok(());
         }
-        let data = self.prime.attach(&session.id).await?;
+        let data = match self.prime.attach(&session.id).await {
+            Ok(data) => data,
+            Err(error) => {
+                // The daemon no longer has this subagent: it ended. Off the list, so nobody is sent to it again.
+                let subagent = session.state.lock().await.summary.kind == SessionKind::Subagent;
+                if subagent && error.downcast_ref::<crate::prime::Refused>().is_some() {
+                    eprintln!("Prime subagent {} is gone: {error}", session.id);
+                    self.remove(&session.id).await;
+                    bail!("session ended");
+                }
+                return Err(error);
+            }
+        };
         let messages = data["snapshot"]["messages"]
             .as_array()
             .cloned()

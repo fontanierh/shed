@@ -129,13 +129,15 @@ The bridge then asks OpenAI's [Decisions API](https://developers.openai.com/api/
 
 An agent that starts a web server — `vite`, `python -m http.server`, anything — gets it listed as a **site**. The bridge finds it by the ports the session's own processes listen on, so no agent has to register anything. Sites show in the session's header and, all together, in the sidebar, on the Mac and the iPhone.
 
-Publishing is off by default. To reach a site from another device, turn it on in `~/.agent-remote/config.json`:
+Each site is published on its own tailnet HTTPS port (`tailscale serve --bg --https=<port>`), so the iPhone can open it: tailnet only, never Funnel. When the site's port is already taken on the tailnet, it goes on the first free one from 8100 to 8199. A route you made by hand to the same server is used as it is. A server that listens on the Mac's tailnet address itself is on the tailnet already: it is listed at that address and gets no route, since a route at its port would take its place. The bridge only ever takes down the routes it recorded in `~/.agent-remote/sites.json`: whatever else you publish on the same machine is left alone.
+
+To keep sites on the Mac, turn publishing off in `~/.agent-remote/config.json`:
 
 ```json
-"sites": { "publish": true }
+"sites": { "publish": false }
 ```
 
-Each site is then published on its own tailnet HTTPS port (`tailscale serve --bg --https=<port>`), so the iPhone can open it. The bridge only ever takes down the routes it recorded in `~/.agent-remote/sites.json`: whatever else you publish by hand on the same machine is left alone.
+A server an agent starts detached (`nohup`, a daemon) stays its session's site: the bridge remembers whose it was, and one it never saw start goes to the session working in the folder the server runs in.
 
 ## Uninstall
 

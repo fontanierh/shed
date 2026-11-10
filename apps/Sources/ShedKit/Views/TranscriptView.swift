@@ -133,101 +133,12 @@ final class BlockTop {
     var y: CGFloat = 0
 }
 
-/// Where the transcript's blocks were last laid out, in its content's coordinates. A block that has been measured and is
-/// a few screens away from the reader draws as an empty space of its height: in one stack, a block that changes size
-/// (a streaming reply, 12 times a second) moves every block after it and re-checks every block before it, down to each
-/// line of text, so a reader deep in a long conversation kept the main thread busy. The heights are the ones measured,
-/// so the scroll view's content stays exactly as tall and nothing moves when a block comes back. A class, so measuring
-/// never re-renders the transcript.
-final class BlockFrames {
-    private var frames: [String: (frame: CGRect, since: Date)] = [:]
-    /// The width blocks lay out at now. A height measured at another width no longer holds.
-    private var width: CGFloat = 0
-
-    /// The heights to hold for the blocks outside `near`; the others draw.
-    func held(_ ids: [String], near: Range<CGFloat>?) -> [String: CGFloat] {
-        guard let near else { return [:] }
-        var held: [String: CGFloat] = [:]
-        for id in ids {
-            // A height only just measured may not hold yet: on the Mac, selectable text lays out again a moment later.
-            if let (frame, since) = frames[id], frame.width == width, -since.timeIntervalSinceNow > 0.5,
-               !near.overlaps(frame.minY..<frame.maxY + 1) { held[id] = frame.height }
-        }
-        return held
-    }
-
-    func known(_ id: String) -> Bool { frames[id] != nil }
-
-    func height(of id: String) -> CGFloat? { frames[id]?.frame.height }
-
-    /// Drawn blocks span the column, so any of them gives its width.
-    func measured(_ id: String, _ frame: CGRect) {
-        if let known = frames[id], known.frame.size == frame.size {
-            frames[id]?.frame.origin = frame.origin
-        } else {
-            frames[id] = (frame, .now)
-        }
-        width = frame.width
-    }
-
-    /// A block held as a space moved with the blocks above it; its height and width are still the drawn ones.
-    func moved(_ id: String, to y: CGFloat) { frames[id]?.frame.origin.y = y }
-}
-
-/// The stretch of the transcript's content that is drawn, in its content's coordinates; measured blocks outside it are
-/// held as spaces. Every drawn block costs on each frame of a scroll (its layout, its display list, the accessibility
-/// and focus walks over its text), and drawing one again costs its whole layout at once, so the band moves half a
-/// screen at a time and a reader hovering at a boundary swaps nothing.
-struct Band: Equatable {
-    var near: Range<CGFloat>
-    /// How tall the content is, in screens: a change re-checks which blocks are far enough to hold.
-    var content: Int
-
-    /// How far behind the reader, in screens, the band lets go while they scroll. On iPhone the band is trimmed back
-    /// while they rest instead, so a fling only ever adds blocks.
-    #if os(iOS)
-    private static let behind: CGFloat = 4
-    #else
-    private static let behind: CGFloat = 2
-    #endif
-
-    /// While the reader scrolls: grows toward where they are heading once they come within a screen of its edge.
-    static func following(_ band: Band?, offset: CGFloat, container: CGFloat, content: CGFloat) -> Band {
-        let unit = container / 2
-        let ahead = container, behind = Self.behind * container
-        let top = offset, bottom = offset + container
-        var near = band?.near ?? (top - ahead)..<(bottom + ahead)
-        while near.lowerBound > top - ahead { near = (near.lowerBound - unit)..<near.upperBound }
-        while near.upperBound < bottom + ahead { near = near.lowerBound..<(near.upperBound + unit) }
-        while near.lowerBound + unit <= top - behind { near = (near.lowerBound + unit)..<near.upperBound }
-        while near.upperBound - unit >= bottom + behind { near = near.lowerBound..<(near.upperBound - unit) }
-        return Band(near: near, content: Int(content / container))
-    }
-
-    /// While the reader rests, one step at a time: draws three screens above them and two below, ready for their next
-    /// move, and lets go of what is further. Nil once there is nothing left to do.
-    func settling(offset: CGFloat, container: CGFloat, height: CGFloat) -> Band? {
-        let unit = container / 2
-        let top = offset, bottom = offset + container
-        var near = self.near
-        if near.lowerBound > max(0, top - 3 * container) {
-            near = (near.lowerBound - unit)..<near.upperBound
-        } else if near.upperBound < min(height, bottom + 2 * container) {
-            near = near.lowerBound..<(near.upperBound + unit)
-        } else if near.lowerBound + unit <= top - 4 * container {
-            near = (near.lowerBound + unit)..<near.upperBound
-        } else if near.upperBound - unit >= bottom + 3 * container {
-            near = near.lowerBound..<(near.upperBound - unit)
-        } else {
-            return nil
-        }
-        return Band(near: near, content: content)
-    }
-}
-
 /// Collapsing a block that starts above the top of the screen would leave the reader somewhere further down: this
 /// brings its header back to the top instead. Called inside the collapse's animation.
 struct KeepInView: Equatable {
+    /// The space blocks say where they start in: the content of the scroll view that keeps them in view.
+    nonisolated static let space = "keep-in-view"
+
     var action: @MainActor (CGFloat) -> Void = { _ in }
 
     @MainActor func callAsFunction(_ top: BlockTop) { action(top.y) }
@@ -245,6 +156,102 @@ extension EnvironmentValues {
     @Entry var restartKernel: ReaderAction? = nil
     /// Replies streaming in, ahead of the transcript's items.
     @Entry var liveText: LiveText? = nil
+    /// Where a row's details open instead of unfolding in place: on the phone a sheet over the conversation, on the
+    /// Mac a panel beside it.
+    @Entry var openSheet: SheetOpener? = nil
+    /// Set inside such a sheet: closes it, then does what was asked once it has gone. Going to another session from
+    /// under a sheet would leave the sheet standing over it.
+    @Entry var closeSheet: SheetCloser? = nil
+    /// Where the conversation's mentions of subagents lead.
+    @Entry var subagents: SubagentLinks? = nil
+    /// Whether text can be selected where it stands. The phone's conversation says no: every selectable text is
+    /// something a touch is checked against before a scroll can start, so there a long press copies instead.
+    @Entry var inlineSelection = true
+}
+
+extension View {
+    /// Selectable text, unless selecting in place is off here (`inlineSelection`).
+    @ViewBuilder func selectable(_ on: Bool) -> some View {
+        if on { textSelection(.enabled) } else { textSelection(.disabled) }
+    }
+}
+
+/// What a row shows when its details open beside or over the conversation, rather than unfolding in it.
+struct FeedSheet: Identifiable {
+    let id = UUID()
+    let title: String
+    /// What it was opened from, where that is one thing the reader can open again: the Mac's panel closes when it is.
+    let source: String?
+    let content: @MainActor () -> AnyView
+
+    init<Content: View>(title: String, source: String? = nil, @ViewBuilder content: @escaping @MainActor () -> Content) {
+        self.title = title
+        self.source = source
+        self.content = { AnyView(content()) }
+    }
+}
+
+/// Closes the sheet a view is in, then runs the action. Any two compare equal, like `SheetOpener`.
+struct SheetCloser: Equatable {
+    let action: @MainActor (@escaping @MainActor () -> Void) -> Void
+
+    @MainActor func callAsFunction(then: @escaping @MainActor () -> Void) { action(then) }
+
+    static func == (_: SheetCloser, _: SheetCloser) -> Bool { true }
+}
+
+/// The subagents of the session a conversation belongs to: what a mention of one leads to, and the way there. The
+/// store is observed where a link is read, so a chip follows its subagent ending without the conversation redrawing.
+struct SubagentLinks: Equatable {
+    let store: SessionStore
+    let parent: String
+
+    @MainActor func link(_ mention: SubagentMention) -> SubagentLink { store.link(of: parent, to: mention) }
+    @MainActor func open(_ id: String) { store.select(id) }
+
+    static func == (a: SubagentLinks, b: SubagentLinks) -> Bool { a.store === b.store && a.parent == b.parent }
+}
+
+/// A subagent a step started, as a chip that opens it. One that has ended stays named, dimmed, and leads nowhere.
+struct SubagentChip: View {
+    let mention: SubagentMention
+    @Environment(\.subagents) private var subagents
+    @Environment(\.closeSheet) private var closeSheet
+
+    var body: some View {
+        let name = mention.name
+        let link = subagents?.link(mention) ?? .pending
+        Button {
+            guard case .open(let id) = link, let subagents else { return }
+            if let closeSheet { closeSheet { subagents.open(id) } } else { subagents.open(id) }
+        } label: {
+            HStack(spacing: 6) {
+                AgentMark(name: name, size: 18, asleep: link == .ended)
+                Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon.opacity(link == .ended ? 0.5 : 1))
+                    .lineLimit(1)
+                if link != .ended {
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, 4).padding(.trailing, 10).frame(height: 26)
+            .card(radius: 13, fill: Palette.raised.opacity(link == .ended ? 0.5 : 1),
+                  border: link == .ended ? Palette.border.opacity(0.6) : Palette.avatar(name).opacity(0.35))
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(link != .ended)
+        .help(link == .ended ? "\(name) has ended" : "Open subagent \(name)")
+        .accessibilityLabel(link == .ended ? "\(name), ended" : "Open subagent \(name)")
+        .animation(.easeOut(duration: 0.25), value: link)
+    }
+}
+
+/// Opens a row's details in a sheet. Any two compare equal, like `ReaderAction`: a fresh closure changes nothing shown.
+struct SheetOpener: Equatable {
+    let action: @MainActor (FeedSheet) -> Void
+
+    @MainActor func callAsFunction(_ sheet: FeedSheet) { action(sheet) }
+
+    static func == (_: SheetOpener, _: SheetOpener) -> Bool { true }
 }
 
 /// An action the open session offers its transcript. Whether it is there is all that changes what a view shows, so
@@ -267,574 +274,9 @@ extension View {
 }
 
 extension View {
-    /// Records where this view starts in the transcript, for `KeepInView`.
+    /// Records where this view starts in the scroll view it is in, for `KeepInView`.
     func trackTop(_ top: BlockTop) -> some View {
-        onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(TranscriptView.content)).minY } action: { top.y = $0 }
-    }
-}
-
-#if os(iOS)
-/// The UIScrollView behind the transcript's ScrollView. A class, so finding it never re-renders the transcript.
-@MainActor final class ScrollViewHandle {
-    weak var view: UIScrollView? {
-        didSet { if view !== oldValue { watch() } }
-    }
-    /// Counts the reader's rests: work done while they rest stops when a newer rest takes over.
-    var rest = 0
-    /// Blocks are going in above the reader: what they are looking at stays put as the content grows.
-    var placing = false
-    /// The reader follows the end, and nothing is moving the scroll view: the end stays put.
-    var following = true
-    private var watching: NSKeyValueObservation?
-
-    /// Moves the offset as the scroll view takes the content's new height, in that same pass. Moved from SwiftUI's
-    /// report of the change instead, a frame was sometimes drawn with the new height and the old offset, which showed as
-    /// the conversation jumping for a frame and back.
-    private func watch() {
-        watching = view?.observe(\.contentSize, options: [.old, .new]) { [weak self] view, change in
-            guard let old = change.oldValue?.height, let new = change.newValue?.height, old != new else { return }
-            MainActor.assumeIsolated { self?.resized(view, by: new - old) }
-        }
-    }
-
-    private func resized(_ view: UIScrollView, by change: CGFloat) {
-        if placing {
-            // By exactly what was added, so a fling or a finger carries on: `scrollTo` would end it.
-            view.contentOffset.y += change
-        } else if following {
-            let inset = view.adjustedContentInset
-            view.contentOffset.y = max(-inset.top, view.contentSize.height + inset.bottom - view.bounds.height)
-        }
-    }
-}
-
-/// Zero-sized, inside the scroll view's content: finds the UIScrollView above it (SwiftUI's own) as soon as it is in a
-/// window, so the transcript can move the offset the UIKit way, which keeps a fling or a finger going.
-private struct ScrollViewFinder: UIViewRepresentable {
-    let handle: ScrollViewHandle
-
-    final class Finder: UIView {
-        var handle: ScrollViewHandle?
-
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            guard window != nil else { return }
-            var view = superview
-            while let v = view, !(v is UIScrollView) { view = v.superview }
-            handle?.view = view as? UIScrollView
-        }
-    }
-
-    func makeUIView(context: Context) -> Finder {
-        let finder = Finder()
-        finder.handle = handle
-        finder.isUserInteractionEnabled = false
-        return finder
-    }
-
-    func updateUIView(_ finder: Finder, context: Context) { finder.handle = handle }
-}
-#endif
-
-/// Equatable on what it shows: the session's summary changes with every event of the session and its subagents (its
-/// cost, what it is doing), and the callbacks are new closures each time, so otherwise every such change laid out the
-/// whole conversation again. The callbacks only route to the store, so they don't count.
-struct TranscriptView: View, Equatable {
-    nonisolated static func == (a: TranscriptView, b: TranscriptView) -> Bool {
-        a.items == b.items && a.session.id == b.session.id && a.session.agent == b.session.agent
-            && a.session.status.isBusy == b.session.status.isBusy && a.session.isSubagent == b.session.isSubagent
-            && (a.session.status == .compacting) == (b.session.status == .compacting)
-            && a.session.cwd == b.session.cwd && a.pending == b.pending && a.idle == b.idle && a.earlier == b.earlier
-            && a.loadingEarlier == b.loadingEarlier && (a.openParent == nil) == (b.openParent == nil)
-            && (a.loadEarlier == nil) == (b.loadEarlier == nil)
-    }
-
-    nonisolated static let content = "transcript"
-
-    let items: [Item]
-    let session: SessionSummary
-    /// Set while the conversation hasn't arrived: what it waits on, shown instead of an empty conversation.
-    var pending: String? = nil
-    /// Where an idle session stands, under its last message: what it waits on, or that nothing will wake it.
-    var idle: [IdleLine] = []
-    var openChild: (String) -> Void = { _ in }
-    var openParent: (@MainActor () -> Void)? = nil
-    /// Older items not loaded yet, and how to load the next page of them.
-    var earlier = 0
-    var loadingEarlier = false
-    var loadEarlier: (() async -> Void)? = nil
-
-    /// Following the end of the transcript. Only the reader's own scrolling changes it: content growing below doesn't.
-    @State private var atBottom = true
-    /// Opens at the end. The bottom edge counts the composer's inset, so the last line is never left behind it.
-    @State private var position = ScrollPosition(edge: .bottom)
-    @State private var metrics = ScrollMetrics()
-    /// Idle unless the reader is dragging or the scroll view is still settling.
-    @State private var phase = ScrollPhase.idle
-    /// The first item of the first block laid out. Only the end of a long conversation is laid out at first, and more
-    /// as the reader scrolls up: SwiftUI walks every block on each frame anything animates, so a session of hundreds of
-    /// blocks kept the main thread busy even at rest. Fixed once set, so the window only grows: new blocks join at the
-    /// end, and the blocks above what the reader is looking at never shift.
-    @State private var shownFrom: String?
-    /// Where the reader was when blocks were added above them, until the scroll view has measured them.
-    @State private var revealing: Reveal?
-    /// Set once the transcript has first appeared: blocks arriving after that spring in, the ones it opens with don't.
-    @State private var opened = false
-    /// Where each block was last laid out. Writing it never re-renders the transcript.
-    @State private var frames = BlockFrames()
-    /// The screen the reader is on, and how tall the content is, both counted in screens: which blocks are near enough
-    /// to draw changes only when one of them does.
-    @State private var band: Band?
-    #if os(iOS)
-    /// The scroll view underneath, for moving its offset without ending a fling.
-    @State private var scroller = ScrollViewHandle()
-    #endif
-
-    /// Blocks laid out when a session opens.
-    /// On iPhone fewer: they all lay out as the conversation arrives, under the rain that brings it in, and the
-    /// blocks before them come in once it rests.
-    #if os(iOS)
-    private static let window = 16
-    #else
-    private static let window = 40
-    #endif
-    /// Blocks added each time the reader nears the top. Few at a time: each new block lays out in full before it can be
-    /// held as a space, and a big batch landing mid-scroll is a visible stutter. On iPhone a reveal costs no momentum
-    /// and settles within a frame, so they come smaller and more often.
-    #if os(iOS)
-    private static let step = 4
-    /// How long a reveal may still settle after its first measurement, before the next may start.
-    private static let settle: TimeInterval = 0.1
-    /// How far from the top, in screens, the blocks before the window are brought in: runway for a fast fling.
-    private static let runway: CGFloat = 6
-    /// How far from the top, in screens, the blocks before the window are brought in while the reader rests: laying
-    /// them out then costs nothing they can feel, and a fling up rarely has to lay any out on its way.
-    private static let reserve: CGFloat = 14
-    #else
-    private static let step = 12
-    private static let settle: TimeInterval = 0.6
-    private static let runway: CGFloat = 4
-    #endif
-
-    /// Blocks just added above the reader: where they were before, as the scroll view measures the new ones. A class:
-    /// it is updated on each frame of a scroll while they settle, and written back to state as a struct it ran the
-    /// whole transcript's body every one of those frames.
-    private final class Reveal {
-        var offset: CGFloat
-        var content: CGFloat
-        /// Until when the new blocks may still be settling, from the first time they were measured.
-        var until: Date?
-        /// Offsets asked of the scroll view so far.
-        var issued: [CGFloat] = []
-        let started = Date.now
-
-        /// Settled, or never grew the content at all.
-        var done: Bool { if let until { Date.now > until } else { Date.now > started + 1 } }
-
-        init(offset: CGFloat, content: CGFloat) {
-            self.offset = offset
-            self.content = content
-        }
-    }
-
-    /// What the follow logic needs from the scroll view's geometry.
-    private struct Scroll: Equatable {
-        var offset: CGFloat
-        var content: CGFloat
-        var container: CGFloat
-        /// The offset at the very end: the last line just above the composer.
-        var maxOffset: CGFloat
-        var distanceToEnd: CGFloat { maxOffset - offset }
-    }
-
-    var body: some View {
-        let all = Activity.blocks(items, busy: session.status.isBusy)
-        let start = Self.start(of: all, from: shownFrom)
-        let blocks = all[start...]
-        // Worked out here rather than in each row: the rows only run again when what they capture changes.
-        let held = frames.held(blocks.map(\.id), near: band?.near)
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                if blocks.isEmpty {
-                    if let pending {
-                        // Empty: something else is showing that it loads.
-                        if !pending.isEmpty { PendingTranscript(text: pending, unreachable: pending.hasPrefix("Can't")) }
-                    } else {
-                        EmptyTranscript(session: session)
-                    }
-                }
-                if start > 0 || (earlier > 0 && loadEarlier != nil) {
-                    Button { showEarlier() } label: {
-                        HStack(spacing: 8) {
-                            if loadingEarlier { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.up") }
-                            Text("Earlier conversation")
-                        }
-                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Palette.moon)
-                        .padding(.horizontal, 14).frame(height: 32)
-                        .card(radius: 16, fill: Palette.raised, border: Palette.border)
-                    }
-                    .buttonStyle(PressStyle())
-                    .disabled(loadingEarlier)
-                    .frame(maxWidth: .infinity)
-                }
-                ForEach(blocks) { block in
-                    let last = block.id == blocks.last?.id
-                    Group {
-                        if let height = held[block.id] {
-                            // Measured, and screens away from the reader: only its height takes part in the layout. A
-                            // reply streaming far below them keeps the height it had until they come near it.
-                            Color.clear.frame(height: height)
-                                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.content)).minY } action: { frames.moved(block.id, to: $0) }
-                        } else {
-                            BlockView(block: block, agent: session.agent, openChild: openChild, openParent: openParent,
-                                      streaming: session.status.isBusy && last)
-                                .equatable()
-                                // Coming back from being held as a space isn't arriving.
-                                .modifier(Arrival(animate: opened && last && !frames.known(block.id)))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                #if os(macOS)
-                                .modifier(Returning(height: frames.height(of: block.id)))
-                                #endif
-                                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.content)) } action: { frames.measured(block.id, $0) }
-                        }
-                    }
-                    // Swapped in place: a fade would leave it see-through until an animation runs.
-                    .transition(.identity)
-                    .id(block.id)
-                }
-                if session.status == .compacting {
-                    CompactingMarker()
-                        .transition(.opacity)
-                }
-                if !idle.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(idle) { line in
-                            if let action = line.action {
-                                Button(action: action) {
-                                    HStack(spacing: 6) {
-                                        WorkingIndicator(text: line.text, systemImage: line.systemImage, tint: line.tint, live: false)
-                                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(line.tint.opacity(0.7))
-                                    }
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-                            } else {
-                                WorkingIndicator(text: line.text, systemImage: line.systemImage, tint: line.tint, live: false)
-                            }
-                        }
-                    }
-                    .transition(.opacity)
-                }
-            }
-            .frame(maxWidth: Layout.column, alignment: .leading)
-            .padding(.horizontal, Layout.gutter)
-            .padding(.top, 20)
-            .padding(.bottom, 44)
-            .frame(maxWidth: .infinity)
-            // Exactly as wide as the screen: a block that lays out wider can't make the conversation drift sideways.
-            .containerRelativeFrame(.horizontal)
-            .coordinateSpace(.named(Self.content))
-            // On iPhone only the prose is selectable (set where it is drawn): every selectable text is something a
-            // touch must be checked against before the scroll can start.
-            #if os(macOS)
-            .textSelection(.enabled)
-            #endif
-            .environment(\.keepInView, KeepInView { top in
-                // Measured from the top of the content, like the offset: 0 is the content's top at the top of the screen.
-                if top < metrics.offset {
-                    // Up to the block's top: the reader is reading there now, not at the end.
-                    atBottom = false
-                    position.scrollTo(y: max(0, top - 12))
-                }
-            })
-            #if os(iOS)
-            .background(ScrollViewFinder(handle: scroller).frame(width: 0, height: 0))
-            #endif
-        }
-        #if os(iOS)
-        // Told rather than asked: a closure reading this view's state from the handle saw it as it was when made.
-        .onChange(of: atBottom, initial: true) { _, now in scroller.following = now && phase == .idle }
-        #endif
-        .scrollIndicators(.never)
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .scrollPosition($position)
-        #if os(iOS)
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { note in
-            let duration = note.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.35
-            metrics.keyboardUntil = .now + duration + 0.15
-        }
-        #endif
-        .onScrollPhaseChange { _, new in
-            phase = new
-            #if os(iOS)
-            scroller.following = atBottom && new == .idle
-            #endif
-            // A drag that ended in the empty space past the end, before it could spring back.
-            if new == .idle { pullBackToEnd() }
-            #if os(iOS)
-            if new == .idle {
-                // The reader let go: back within reach of the end, follow it again (nothing moved them there while
-                // their finger or fling had the scroll view).
-                let end = max(0, metrics.content - metrics.container)
-                if end - metrics.offset < 40 {
-                    if !atBottom { atBottom = true }
-                    if abs(end - metrics.offset) > 0.5 { position.scrollTo(y: end) }
-                }
-                prefill()
-            }
-            #endif
-        }
-        .onChange(of: items.isEmpty, initial: true) { _, empty in
-            // Opening: lay out the end of the conversation, and keep to that start from now on.
-            guard shownFrom == nil, !empty else { return }
-            let all = Activity.blocks(items, busy: session.status.isBusy)
-            shownFrom = all[max(0, all.count - Self.window)...].first?.firstItemId
-            opened = true
-            #if os(iOS)
-            // The reader hasn't touched it yet: get the blocks around them ready (after the rain, if it plays).
-            prefill()
-            #endif
-        }
-        .onScrollGeometryChange(for: Scroll.self) { geometry in
-            // The container already leaves out the insets (the composer, and on iPhone the navigation bar), but the offset
-            // starts above the top one: measure from the top of the content.
-            Scroll(offset: geometry.contentOffset.y + geometry.contentInsets.top, content: geometry.contentSize.height,
-                   container: geometry.containerSize.height, maxOffset: geometry.contentSize.height - geometry.containerSize.height)
-        } action: { old, new in
-            metrics.content = new.content
-            metrics.container = new.container
-            if new.offset != old.offset {
-                metrics.offset = new.offset
-                metrics.moved &+= 1
-            }
-            if new.container > 0 {
-                let band = Band.following(self.band, offset: new.offset, container: new.container, content: new.content)
-                if band != self.band { self.band = band }
-            }
-            if let reveal = revealing, reveal.done { endReveal() }
-            #if os(iOS)
-            if let reveal = revealing, scroller.view != nil {
-                // Blocks just went in above: the scroll view handle has already moved the offset by what they added
-                // (`anchor`). Only how long they may still settle is kept here.
-                if new.content != reveal.content {
-                    reveal.content = new.content
-                    reveal.until = reveal.until ?? .now + Self.settle
-                }
-                return
-            }
-            #endif
-            if let reveal = revealing, new.content != reveal.content {
-                // Blocks just went in above: keep what the reader was looking at where it was. They lay out again a
-                // moment later, a little taller (on the Mac, their selectable text), so this holds for a moment.
-                if new.offset != old.offset, !reveal.issued.isEmpty, !reveal.issued.contains(where: { abs($0 - new.offset) < 0.5 }) {
-                    // The reader scrolled meanwhile: keep their move. (Landing where an earlier request pointed means
-                    // the latest one was dropped, so it goes out again.)
-                    reveal.offset = new.offset - (old.content - reveal.content)
-                }
-                let target = reveal.offset + new.content - reveal.content
-                if abs(new.offset - target) > 0.5 {
-                    position.scrollTo(y: target)
-                    reveal.issued.append(target)
-                }
-                reveal.until = reveal.until ?? .now + Self.settle
-                return
-            }
-            // Reading up toward the top: bring in the blocks before it, a few screens ahead, so the smaller batches
-            // land before the reader gets there.
-            // On iPhone only the reader's own scroll counts: the scroll view settling as the conversation arrives isn't
-            // reading up, and while they rest `prefill` brings the blocks in.
-            if new.offset < old.offset, new.offset < new.container * Self.runway, revealing == nil, !loadingEarlier,
-               !Self.hasPhases || Self.readerMoving(phase) { showEarlier() }
-            // A scroll toward the end that landed short: when the content grows twice in a row, the second request can be
-            // dropped while the first is still being applied.
-            #if os(iOS)
-            if Self.readerMoving(phase) {
-                // The reader's finger or fling has the scroll view: nothing here moves it, as any scroll request ends a
-                // fling. Scrolling up stops following; letting go near the end picks it up again.
-                if atBottom, new.offset < old.offset - 1 { atBottom = false }
-                return
-            }
-            if new.container != old.container, new.content == old.content, atBottom || new.offset > max(0, new.maxOffset) + 0.5 {
-                // The screen resized under a still transcript. When the keyboard is coming or going (its notification
-                // lands just after the resize), the composer slides with it: move the end along with it, rather than
-                // jump there ahead of it and leave a gap above the rising keyboard. Otherwise just keep to the end.
-                metrics.easingUntil = .now + 0.1
-                Task { @MainActor in
-                    try? await Task.sleep(for: .milliseconds(40))
-                    // The reader took hold of the scroll view meanwhile: theirs.
-                    guard !Self.readerMoving(phase) else { metrics.easingUntil = .distantPast; return }
-                    let end = max(0, metrics.content - metrics.container)
-                    if Date.now < metrics.keyboardUntil {
-                        metrics.easingUntil = .now + 0.45
-                        withAnimation(.spring(response: 0.36, dampingFraction: 1)) { position.scrollTo(y: end) }
-                    } else {
-                        metrics.easingUntil = .distantPast
-                        position.scrollTo(y: end)
-                    }
-                }
-                return
-            }
-            // While that scroll eases in, its own steps aren't the reader scrolling, nor the end moving away.
-            if Date.now < metrics.easingUntil { return }
-            if atBottom, phase == .idle, let scrollView = scroller.view {
-                // Following the end. As the content grows or shrinks, the handle keeps the offset there (`anchor`);
-                // anything else that moved it (SwiftUI settling its opening position) is undone here, in this frame. A
-                // scroll request lands a frame or more later, and by then blocks may have come in above, so it landed
-                // short and left the last reply behind the composer.
-                let end = max(0, new.maxOffset)
-                if new.content == old.content, abs(new.offset - end) > 0.5 { scrollView.contentOffset.y += end - new.offset }
-                return
-            }
-            #endif
-            // Only the app's own scroll toward the end can land short: the reader's drag or fling stops where it stops, and
-            // snapping it to the end from within the last few points fights their finger.
-            let landedShort = new.offset > old.offset && new.distanceToEnd > 0.5 && !Self.readerMoving(phase)
-            if phase == .idle, new.offset > max(0, new.maxOffset) + 0.5 {
-                // Past the end with nothing below: the content shrank under a still scroll view (a run folding into
-                // its summary, a block collapsing, the keyboard going away). Bring the end back down to the composer.
-                if !atBottom { atBottom = true }
-                position.scrollTo(y: max(0, new.maxOffset))
-            } else if new.distanceToEnd < 40 {
-                // At (or back at) the end, however it got there.
-                if !atBottom { atBottom = true }
-                if new.maxOffset != old.maxOffset || landedShort, new.distanceToEnd > 0.5 { position.scrollTo(y: new.maxOffset) }
-            } else if new.maxOffset != old.maxOffset || landedShort {
-                // New output, a growing block, or a resized window: stay at the end if the reader was there.
-                // While reading further up, nothing moves.
-                if atBottom { position.scrollTo(y: new.maxOffset) }
-            } else if atBottom, new.offset < old.offset - 1, Self.readerMoving(phase) || !Self.hasPhases {
-                // Only the reader scrolls up, by dragging (or the rail, below). The scroll view moves on its own too, as a
-                // streaming reply lays out again: that mustn't stop it following the end.
-                atBottom = false
-            }
-        }
-        .overlay(alignment: .trailing) {
-            ScrollRail(metrics: metrics) { y in
-                if y < metrics.content - metrics.container - 40 { atBottom = false }
-                position.scrollTo(y: y)
-            }
-                .padding(.vertical, 16)
-                .padding(.trailing, 4)
-        }
-        .overlay(alignment: .bottom) {
-            ZStack {
-            if !atBottom {
-                Button {
-                    atBottom = true
-                    withAnimation(.easeOut(duration: 0.2)) { position.scrollTo(edge: .bottom) }
-                } label: {
-                    Label(session.status.isBusy ? "New activity" : "Jump to latest", systemImage: "arrow.down")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(session.status.isBusy ? Palette.accent : Palette.moon)
-                        .padding(.horizontal, 14).frame(height: 32)
-                        .card(radius: 16, fill: Palette.raised, border: session.status.isBusy ? Palette.accent.opacity(0.5) : Palette.border)
-                        .glow(radius: 10, on: session.status.isBusy)
-                        .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
-                }
-                .buttonStyle(PressStyle())
-                .padding(.bottom, 10)
-                .transition(.scale(scale: 0.8).combined(with: .opacity).combined(with: .offset(y: 12)))
-            }
-            }
-            // Only the button springs in and out: on the whole transcript, this animated its layout every time the
-            // reader crossed the end.
-            .animation(.spring(response: 0.35, dampingFraction: 0.7), value: atBottom)
-        }
-    }
-
-    /// Where the window starts: the block holding `shownFrom`, or the last `window` blocks before it is set.
-    private static func start(of blocks: [Block], from item: String?) -> Int {
-        if let item, let index = blocks.firstIndex(where: { $0.contains(item) }) { return index }
-        return max(0, blocks.count - window)
-    }
-
-    /// Lays out the blocks before the first one shown, loading the page before the first item when none are left,
-    /// and keeps what the reader was looking at in place.
-    private func showEarlier() {
-        let start = Self.start(of: Activity.blocks(items, busy: session.status.isBusy), from: shownFrom)
-        if start > 0 {
-            reveal()
-        } else if earlier > 0, let loadEarlier {
-            Task {
-                await loadEarlier()
-                // This view still holds the items from before the page arrived: on iPhone the next scroll step, or the
-                // rest that follows, brings the new blocks in from the fresh ones.
-                #if os(macOS)
-                reveal()
-                #endif
-            }
-        }
-    }
-
-    private func endReveal() {
-        revealing = nil
-        #if os(iOS)
-        scroller.placing = false
-        #endif
-    }
-
-    private func reveal() {
-        let all = Activity.blocks(items, busy: session.status.isBusy)
-        let start = Self.start(of: all, from: shownFrom)
-        guard start > 0, let first = all[max(0, start - Self.step)].firstItemId else { return }
-        revealing = Reveal(offset: metrics.offset, content: metrics.content)
-        #if os(iOS)
-        scroller.placing = true
-        #endif
-        shownFrom = first
-    }
-
-    #if os(iOS)
-
-    /// While the reader rests, a step at a time: brings in the blocks above until there are `reserve` screens of them,
-    /// then draws the blocks around the reader, so their next move mostly scrolls through blocks already laid out.
-    /// Stops as soon as they touch the screen again.
-    private func prefill() {
-        scroller.rest &+= 1
-        let rest = scroller.rest
-        Task { @MainActor in
-            for _ in 0..<160 {
-                try? await Task.sleep(for: .milliseconds(100))
-                guard rest == scroller.rest, phase == .idle, metrics.container > 0 else { return }
-                // The conversation is still raining in: every frame goes to the rain.
-                if Materialize.active { continue }
-                if let reveal = revealing {
-                    guard reveal.done else { continue }
-                    endReveal()
-                }
-                if loadingEarlier { continue }
-                if metrics.offset < metrics.container * Self.reserve {
-                    let start = Self.start(of: Activity.blocks(items, busy: session.status.isBusy), from: shownFrom)
-                    if start > 0 || (earlier > 0 && loadEarlier != nil) {
-                        showEarlier()
-                        continue
-                    }
-                }
-                guard let next = band?.settling(offset: metrics.offset, container: metrics.container, height: metrics.content) else { return }
-                band = next
-            }
-        }
-    }
-    #endif
-
-    /// On iPhone a scroll the reader makes has a phase; the scroll view's own adjustments don't. A Mac's mouse wheel
-    /// may report none, so there phases tell nothing.
-    private static var hasPhases: Bool {
-        #if os(iOS)
-        true
-        #else
-        false
-        #endif
-    }
-
-    /// The reader is dragging, or their fling is still running.
-    private static func readerMoving(_ phase: ScrollPhase) -> Bool {
-        hasPhases && (phase == .tracking || phase == .interacting || phase == .decelerating)
-    }
-
-    private func pullBackToEnd() {
-        let end = max(0, metrics.content - metrics.container)
-        if metrics.offset > end + 0.5 { position.scrollTo(y: end) }
+        onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(KeepInView.space)).minY } action: { top.y = $0 }
     }
 }
 
@@ -932,49 +374,11 @@ struct WorkingIndicator: View {
     }
 }
 
-/// A block drawn again after being held as a space keeps at least the height it had, for a moment: on the Mac its
-/// selectable text first lays out a little shorter, which moved everything below it for a frame as the reader scrolled.
-/// Only the height it came back with counts: a block drawn all along may grow and shrink as it likes.
-private struct Returning: ViewModifier {
-    @State private var height: CGFloat?
-
-    init(height: CGFloat?) { _height = State(initialValue: height) }
-
-    func body(content: Content) -> some View {
-        content
-            .frame(minHeight: height, alignment: .top)
-            .task {
-                guard height != nil else { return }
-                try? await Task.sleep(for: .seconds(0.5))
-                height = nil
-            }
-    }
-}
-
-/// A block arriving at the end springs in. Only the block itself animates: an animation on the whole transcript moved
-/// every block's frame on every frame until it settled, which in a long conversation kept the main thread busy.
-private struct Arrival: ViewModifier {
-    @State private var shown: Bool
-
-    init(animate: Bool) { _shown = State(initialValue: !animate) }
-
-    func body(content: Content) -> some View {
-        content
-            .opacity(shown ? 1 : 0)
-            .offset(y: shown ? 0 : 14)
-            .onAppear {
-                guard !shown else { return }
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.85)) { shown = true }
-            }
-    }
-}
-
 /// Equatable so a block that hasn't changed skips its body (and its Markdown parse) when the transcript re-renders,
 /// as it does on every streamed delta. The callbacks only route to the store, so they don't count.
 struct BlockView: View, Equatable {
     let block: Block
     let agent: AgentKind
-    let openChild: (String) -> Void
     let openParent: (@MainActor () -> Void)?
     /// The last block of a running turn: text still arriving.
     var streaming = false
@@ -985,8 +389,9 @@ struct BlockView: View, Equatable {
 
     var body: some View {
         switch block {
-        case .activity(let activity):
-            ActivityView(activity: activity, openChild: openChild)
+        case .activity:
+            // A row of its own in the feed: `ActivityRow`.
+            EmptyView()
         case .jobsDone(let items):
             JobsDoneGroup(notes: items.map { Note($0.text) })
         case .item(let item):
@@ -1005,7 +410,7 @@ struct BlockView: View, Equatable {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .card(radius: 12, fill: Palette.danger.opacity(0.08), border: Palette.danger.opacity(0.45))
             case .note:
-                NoteView(note: Note(item.text), date: item.date, openChild: openChild, openParent: openParent)
+                NoteView(note: Note(item.text), date: item.date, openParent: openParent)
             case .thinking, .tool:
                 EmptyView()
             }
@@ -1015,6 +420,7 @@ struct BlockView: View, Equatable {
 
 struct UserMessage: View {
     let item: Item
+    @Environment(\.inlineSelection) private var inlineSelection
 
     var body: some View {
         let (text, files) = MessageAttachments.split(item.text)
@@ -1025,7 +431,7 @@ struct UserMessage: View {
             }
             if !text.isEmpty {
                 Text(text)
-                    .textSelection(.enabled)
+                    .selectable(inlineSelection)
                     .font(.system(size: 15.5))
                     .foregroundStyle(Palette.moon)
                     .lineSpacing(4)
@@ -1055,79 +461,10 @@ struct UserMessage: View {
 
 // MARK: Activity
 
-/// "Worked for 3m · 18 tool calls · 6 reasoning steps", expanding into a timeline of every step.
-struct ActivityView: View {
-    let activity: Activity
-    let openChild: (String) -> Void
-    @State private var expanded: Bool?
-    @State private var top = BlockTop()
-    @Environment(\.keepInView) private var keepInView
-
-    private var isExpanded: Bool { expanded ?? activity.live }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.spring(response: 0.4, dampingFraction: 0.82)) {
-                    if isExpanded { keepInView(top) }
-                    expanded = !isExpanded
-                }
-            } label: {
-                header.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("\(headline), \(counts)")
-            .accessibilityHint(isExpanded ? "Collapse" : "Expand")
-
-            if isExpanded {
-                Timeline(steps: activity.steps, live: activity.live, openChild: openChild)
-                    .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: -6)), removal: .opacity))
-            } else {
-                // Keep what matters visible when collapsed: failures and subagents started here.
-                let notable = activity.steps.filter { $0.item.status == .error || !ToolDescription($0.item).spawned.isEmpty }
-                if !notable.isEmpty {
-                    Timeline(steps: notable, live: false, openChild: openChild)
-                }
-            }
-        }
-        .trackTop(top)
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                .frame(width: 14)
-            if activity.live {
-                AgentMark(symbol: "sparkle", color: Palette.accent, size: 18, working: true)
-            }
-            Text(headline).font(.system(size: 13, weight: .medium))
-                .foregroundStyle(activity.live ? Palette.accent : Palette.moon)
-                .lineLimit(1)
-                .shimmer(activity.live)
-                .contentTransition(.opacity)
-            Text(counts).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
-                .contentTransition(.numericText())
-            if activity.failures > 0 {
-                Label("\(activity.failures) failed", systemImage: "xmark.circle.fill")
-                    .font(.caption.weight(.medium)).foregroundStyle(Palette.danger)
-            }
-            Spacer(minLength: 8)
-            if !activity.live, let duration = activity.duration, duration >= 1000 {
-                Text(Format.duration(ms: duration)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .card(radius: 12, fill: Palette.surface.opacity(isExpanded ? 0.95 : 0.7),
-              border: activity.live ? Palette.accent.opacity(0.5) : Palette.lit.opacity(isExpanded ? 1 : 0.85))
-        .glow(radius: 8, on: activity.live)
-        .animation(.easeOut(duration: 0.3), value: activity.live)
-    }
-
-    private var headline: String {
+extension Activity {
+    /// What it is doing now while live, how long it worked once done.
+    var headline: String {
+        let activity = self
         if activity.live {
             let last = activity.steps.last.map(\.item)
             if last?.kind == .thinking { return Reasoning(last!.text).title ?? "Thinking" }
@@ -1137,7 +474,9 @@ struct ActivityView: View {
         return activity.duration.map { $0 >= 1000 ? "Worked for \(Format.duration(ms: $0))" : "Worked" } ?? "Worked"
     }
 
-    private var counts: String {
+    /// "· 18 tool calls · 6 reasoning steps".
+    var counts: String {
+        let activity = self
         var parts: [String] = []
         if activity.toolCount > 0 { parts.append(activity.toolCount == 1 ? "1 tool call" : "\(activity.toolCount) tool calls") }
         if activity.reasoningCount > 0 { parts.append(activity.reasoningCount == 1 ? "1 reasoning step" : "\(activity.reasoningCount) reasoning steps") }
@@ -1145,30 +484,24 @@ struct ActivityView: View {
     }
 }
 
-/// Steps along a vertical rail, each with a status node, separated by hairlines.
+/// Steps along a vertical rail, each with a status node.
 struct Timeline: View {
     let steps: [Activity.Step]
     let live: Bool
-    let openChild: (String) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+            ForEach(steps) { step in
                 HStack(alignment: .top, spacing: 12) {
                     StepNode(item: step.item, running: live && step.id == steps.last?.id)
-                    VStack(spacing: 0) {
-                        Group {
-                            if step.item.kind == .thinking {
-                                ReasoningRow(text: step.item.text, duration: step.duration)
-                            } else {
-                                ToolRow(item: step.item, duration: step.duration, openChild: openChild)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        if index < steps.count - 1 {
-                            Rectangle().fill(Palette.border.opacity(0.6)).frame(height: 0.5)
+                    Group {
+                        if step.item.kind == .thinking {
+                            ReasoningRow(text: step.item.text, duration: step.duration)
+                        } else {
+                            ToolRow(item: step.item, duration: step.duration)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: -8)), removal: .opacity))
             }
@@ -1329,23 +662,40 @@ struct ReasoningLines: View {
 struct CompactionMarker: View {
     let item: Item
     @State private var expanded = false
+    @Environment(\.openSheet) private var openSheet
 
     var body: some View {
         let before = item.output.flatMap(Int.init).map { " at " + Format.tokens($0) + " tokens" } ?? ""
         VStack(spacing: 10) {
-            Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() } } label: {
+            Button {
+                if let openSheet {
+                    let summary = item.text
+                    openSheet(FeedSheet(title: "Context compacted") {
+                        StreamingMarkdown(text: summary, streaming: false)
+                    })
+                } else {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() }
+                }
+            } label: {
                 HStack(spacing: 10) {
-                    VStack { Divider() }
+                    if openSheet == nil { VStack { Divider() } }
                     HStack(spacing: 6) {
                         Label("Context compacted" + before, systemImage: "rectangle.compress.vertical")
-                        if !item.text.isEmpty { Chevron(open: expanded) }
+                        if !item.text.isEmpty {
+                            if openSheet != nil {
+                                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                            } else {
+                                Chevron(open: expanded)
+                            }
+                        }
                     }
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.lilac)
                     .lineLimit(1)
                     .padding(.horizontal, 12).frame(height: 26)
                     .card(radius: 13, fill: Palette.lilac.opacity(0.08), border: Palette.lilac.opacity(0.3))
-                    VStack { Divider() }
+                    if openSheet == nil { VStack { Divider() } }
                 }
+                .frame(maxWidth: .infinity)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -1401,7 +751,6 @@ struct Chevron: View {
 struct ToolRow: View {
     let item: Item
     let duration: Double?
-    let openChild: (String) -> Void
     @State private var expanded = false
     @State private var top = BlockTop()
     @Environment(\.keepInView) private var keepInView
@@ -1448,17 +797,7 @@ struct ToolRow: View {
             if !description.spawned.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(description.spawned, id: \.self) { name in
-                        Button { openChild(name) } label: {
-                            HStack(spacing: 6) {
-                                AgentMark(name: name, size: 18)
-                                Text(name).font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.moon)
-                                Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, 4).padding(.trailing, 10).frame(height: 26)
-                            .card(radius: 13, fill: Palette.raised, border: Palette.avatar(name).opacity(0.35))
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open subagent \(name)")
+                        SubagentChip(mention: SubagentMention(name: name, date: item.date, spawning: true, running: running))
                     }
                 }
                 .padding(.leading, 32)
@@ -1765,20 +1104,18 @@ struct Note {
 struct NoteView: View {
     let note: Note
     let date: Date?
-    let openChild: (String) -> Void
     let openParent: (@MainActor () -> Void)?
 
     var body: some View {
         switch note.kind {
         case .fromChild:
-            ReportCard(name: note.child ?? "subagent", caption: "reported", date: date, text: note.body) {
-                openChild(note.child ?? "")
-            }
+            ReportCard(name: note.child ?? "subagent", caption: "reported", date: date, text: note.body,
+                       child: note.child.map { SubagentMention(name: $0, date: date) })
         case .fromParent:
             ReportCard(name: "Parent", caption: note.tag.hasPrefix("task") ? "sent a task" : "sent a message", date: date, text: note.body,
                        icon: "arrow.turn.right.down", open: openParent)
         case .childExited:
-            PausedChild(name: note.child ?? "subagent", date: date, detail: note.body) { openChild(note.child ?? "") }
+            PausedChild(name: note.child ?? "subagent", date: date, detail: note.body)
         case .jobDone:
             JobDoneView(note: note)
         case .other:
@@ -1788,15 +1125,19 @@ struct NoteView: View {
     }
 }
 
-/// A subagent that stopped without reporting back: one quiet line like a report's, opening the subagent.
+/// A subagent that stopped without reporting back: one quiet line like a report's, opening the subagent while it
+/// can still be opened.
 struct PausedChild: View {
     let name: String
     let date: Date?
     let detail: String
-    let open: () -> Void
+    @Environment(\.subagents) private var subagents
 
     var body: some View {
-        Button(action: open) {
+        let link = subagents?.link(SubagentMention(name: name, date: date)) ?? .pending
+        Button {
+            if case .open(let id) = link { subagents?.open(id) }
+        } label: {
             HStack(spacing: 8) {
                 Avatar(name: name, size: 22).saturation(0.4).opacity(0.8)
                 (Text(name).fontWeight(.semibold).foregroundStyle(.primary)
@@ -1808,7 +1149,9 @@ struct PausedChild: View {
                 if let date {
                     Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
                 }
-                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                if link != .ended {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                }
             }
             .padding(.horizontal, 10)
             .frame(height: 36)
@@ -1816,7 +1159,8 @@ struct PausedChild: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(detail.isEmpty ? "Open subagent \(name)" : detail)
+        .allowsHitTesting(link != .ended)
+        .help(link == .ended ? "\(name) has ended" : detail.isEmpty ? "Open subagent \(name)" : detail)
         .accessibilityLabel("\(name) paused without a reply")
     }
 }
@@ -1830,15 +1174,22 @@ struct ReportCard: View {
     let date: Date?
     let text: String
     var icon: String? = nil
-    var open: (() -> Void)? = nil
+    /// The subagent that sent it, when one did: Open leads to its session while it has one.
+    var child: SubagentMention? = nil
+    var open: (@MainActor () -> Void)? = nil
     @State private var expanded = false
     @State private var hovering = false
     @State private var top = BlockTop()
     @Environment(\.keepInView) private var keepInView
+    @Environment(\.openSheet) private var openSheet
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
+                if let openSheet {
+                    openSheet(FeedSheet(title: "\(name) \(caption)") { details })
+                    return
+                }
                 withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
                     if expanded { keepInView(top) }
                     expanded.toggle()
@@ -1861,7 +1212,11 @@ struct ReportCard: View {
                     if let date {
                         Text(Format.time(date)).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).fixedSize()
                     }
-                    Chevron(open: expanded)
+                    if openSheet != nil {
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                    } else {
+                        Chevron(open: expanded)
+                    }
                 }
                 .padding(.horizontal, 10)
                 .frame(height: 36)
@@ -1874,29 +1229,27 @@ struct ReportCard: View {
             .help(expanded ? "Hide the message" : "Show the full message")
 
             if expanded {
-                VStack(alignment: .leading, spacing: 10) {
-                    Markdown(text).markdownTheme(.agent).markdownImageProvider(.media)
-                    HStack(spacing: 14) {
-                        CopyButton(text: text, label: "Copy")
-                        if let open {
-                            Button(action: open) {
-                                Label("Open session", systemImage: "arrow.up.forward")
-                                    .font(.caption.weight(.medium))
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Palette.ice)
-                        }
-                    }
-                }
-                .padding(16)
-                .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
-                }
-                .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
+                details
+                    .transition(.asymmetric(insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .top)), removal: .opacity))
             }
         }
         .trackTop(top)
+    }
+
+    /// The whole message, with Copy and Open.
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Markdown(text).markdownTheme(.agent).markdownImageProvider(.media)
+            HStack(spacing: 14) {
+                CopyButton(text: text, label: "Copy")
+                OpenSession(child: child, open: open)
+            }
+        }
+        .padding(16)
+        .card(radius: 12, fill: Palette.surface.opacity(0.9), border: tint.opacity(0.4))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1).fill(tint.opacity(0.9)).frame(width: 2).padding(.vertical, 14)
+        }
     }
 
     private var tint: Color { icon == nil ? Palette.avatar(name) : Palette.accent }
@@ -1911,6 +1264,41 @@ struct ReportCard: View {
         } else {
             Avatar(name: name, size: 22)
         }
+    }
+}
+
+/// "Open session" under a message between agents: the sender's session. Says so instead, quietly, once a subagent's
+/// session has ended.
+private struct OpenSession: View {
+    let child: SubagentMention?
+    let open: (@MainActor () -> Void)?
+    @Environment(\.subagents) private var subagents
+    @Environment(\.closeSheet) private var closeSheet
+
+    var body: some View {
+        if let child, let subagents {
+            switch subagents.link(child) {
+            case .open(let id): button { subagents.open(id) }
+            case .pending: EmptyView()
+            case .ended:
+                Label("Session ended", systemImage: "moon.zzz")
+                    .font(.caption).foregroundStyle(.tertiary)
+                    .accessibilityLabel("\(child.name)'s session has ended")
+            }
+        } else if let open {
+            button(open)
+        }
+    }
+
+    private func button(_ action: @escaping @MainActor () -> Void) -> some View {
+        Button {
+            if let closeSheet { closeSheet(then: action) } else { action() }
+        } label: {
+            Label("Open session", systemImage: "arrow.up.forward")
+                .font(.caption.weight(.medium))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.ice)
     }
 }
 

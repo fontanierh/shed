@@ -1,10 +1,14 @@
 //! Sites: web servers the agents start. The bridge finds them by looking at the ports the sessions' own processes
 //! listen on, so any server counts (`vite`, `python -m http.server`, `cargo run`) without the agent registering it.
 //!
-//! Publishing is opt-in (`sites.publish` in config.json). When it is on, each site gets its own `tailscale serve`
-//! HTTPS port, so the iPhone can open it: one port per site, never a path prefix, because an app with absolute asset
-//! URLs breaks under a prefix. The bridge only ever removes routes it recorded in `sites.json`: the serve config is
-//! shared with whatever else the user publishes by hand, and a sweep would take those too.
+//! Each site gets its own `tailscale serve` HTTPS port, so the iPhone can open it: one port per site, never a path
+//! prefix, because an app with absolute asset URLs breaks under a prefix. Tailnet only, never Funnel;
+//! `"sites": {"publish": false}` in config.json turns it off. A route somebody else made to the same server is used
+//! as it is. The bridge only ever removes routes it recorded in `sites.json`: the serve config is shared with whatever
+//! else the user publishes by hand, and a sweep would take those too.
+//!
+//! A server started detached (`nohup`, a daemon) leaves its session's process tree for launchd's. It stays its
+//! session's once seen there; one never seen goes to the session working in the folder it runs in.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
@@ -30,24 +34,38 @@ pub struct Listener {
 pub struct Published {
     pub port: u16,
     pub session_id: String,
+    /// The tailnet port it answers on, when the site's own was taken there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub served: Option<u16>,
 }
 
-/// `sites` in config.json: `{ "publish": true }`. Read each time, so editing the file takes effect without a restart.
-#[derive(Debug, Clone, Copy, Default)]
+impl Published {
+    fn tailnet_port(&self) -> u16 {
+        self.served.unwrap_or(self.port)
+    }
+}
+
+/// Tailnet ports for sites whose own port is taken there. The agents are told to serve on these too.
+const SPARE_PORTS: std::ops::RangeInclusive<u16> = 8100..=8199;
+
+/// `sites` in config.json: `{ "publish": false }` keeps sites off the tailnet. Read each time, so editing the file
+/// takes effect without a restart.
+#[derive(Debug, Clone, Copy)]
 pub struct Config {
     pub publish: bool,
 }
 
 impl Config {
     pub fn read(dir: &std::path::Path) -> Config {
-        let Ok(raw) = std::fs::read_to_string(dir.join("config.json")) else {
-            return Config::default();
-        };
-        let Ok(config) = serde_json::from_str::<Value>(&raw) else {
-            return Config::default();
-        };
+        let raw = std::fs::read_to_string(dir.join("config.json")).unwrap_or_default();
+        Config::parse(&raw)
+    }
+
+    /// Published unless the file says not to: a site nobody can open from the phone is no use.
+    fn parse(raw: &str) -> Config {
+        let config = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
         Config {
-            publish: config["sites"]["publish"].as_bool().unwrap_or(false),
+            publish: config["sites"]["publish"].as_bool().unwrap_or(true),
         }
     }
 }
@@ -124,15 +142,61 @@ fn exposed(bind: &str) -> bool {
     }
 }
 
+/// Where a listening port answers, from the addresses it is bound to.
+#[derive(Debug, Clone, PartialEq)]
+enum Reach {
+    /// On this Mac's loopback, at this host: Tailscale can route to it.
+    Local(&'static str),
+    /// On the Mac's own tailnet address only: it is on the tailnet already, at its own port, and a route there would
+    /// take its place and find nothing behind it.
+    Tailnet(String),
+    /// On another address only (a LAN one): Tailscale can't route to it.
+    Elsewhere(String),
+}
+
+impl Reach {
+    /// Where the bridge itself asks the site for its title.
+    fn host(&self) -> &str {
+        match self {
+            Reach::Local(host) => host,
+            Reach::Tailnet(bind) | Reach::Elsewhere(bind) => bind,
+        }
+    }
+}
+
+fn reach<'a>(binds: impl IntoIterator<Item = &'a str>) -> Reach {
+    let mut v6_only = false;
+    let mut tailnet = None;
+    let mut other = None;
+    for bind in binds {
+        let addr = bind.trim_start_matches('[').trim_end_matches(']');
+        match addr.parse::<std::net::IpAddr>() {
+            Ok(std::net::IpAddr::V4(ip)) if ip.is_loopback() => return Reach::Local("127.0.0.1"),
+            Ok(std::net::IpAddr::V6(ip)) if ip.is_loopback() => v6_only = true,
+            Ok(_) if !exposed(bind) => tailnet = Some(bind),
+            Ok(_) => other = Some(bind),
+            // `*` (every interface) and `localhost`.
+            Err(_) => return Reach::Local("127.0.0.1"),
+        }
+    }
+    match (v6_only, tailnet, other) {
+        // `localhost` rather than `[::1]`: the one name for it `tailscale serve` takes.
+        (true, _, _) => Reach::Local("localhost"),
+        (_, Some(bind), _) => Reach::Tailnet(bind.to_string()),
+        (_, _, Some(bind)) => Reach::Elsewhere(bind.to_string()),
+        (false, None, None) => Reach::Local("127.0.0.1"),
+    }
+}
+
 /// The `<title>` of the page a site serves, for the list. One short request, made once per site.
-async fn title(port: u16) -> Option<String> {
+async fn title(host: &str, port: u16) -> Option<String> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    let connect = tokio::net::TcpStream::connect(("127.0.0.1", port));
+    let connect = tokio::net::TcpStream::connect(format!("{host}:{port}"));
     let mut stream = tokio::time::timeout(Duration::from_millis(1500), connect)
         .await
         .ok()?
         .ok()?;
-    let request = format!("GET / HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nAccept: text/html\r\n\r\n");
+    let request = format!("GET / HTTP/1.0\r\nHost: {host}:{port}\r\nAccept: text/html\r\n\r\n");
     tokio::time::timeout(
         Duration::from_millis(1500),
         stream.write_all(request.as_bytes()),
@@ -252,10 +316,107 @@ fn served_ports(served: &Value) -> HashMap<u16, String> {
     out
 }
 
+/// The served port that already leads to a site: a route the user or an agent made by hand, or the bridge's own.
+fn route_to(served: &HashMap<u16, String>, port: u16) -> Option<u16> {
+    served
+        .iter()
+        .filter(|(_, proxy)| proxies_to(proxy, port))
+        .map(|(served, _)| *served)
+        .min()
+}
+
+/// `http://127.0.0.1:8123`, `localhost:8123`, `https+insecure://127.0.0.1:8123/`: this Mac's `port`.
+fn proxies_to(proxy: &str, port: u16) -> bool {
+    let address = proxy.rsplit_once("://").map_or(proxy, |(_, rest)| rest);
+    let address = address.split('/').next().unwrap_or(address);
+    let Some((host, to)) = address.rsplit_once(':') else {
+        // `tailscale serve 8123` records the bare port.
+        return address.parse() == Ok(port);
+    };
+    matches!(host, "127.0.0.1" | "localhost" | "[::1]") && to.parse() == Ok(port)
+}
+
+/// A tailnet port for a site: its own, or the first spare one when that is taken.
+fn tailnet_port(port: u16, served: &HashMap<u16, String>, listening: &[u16]) -> Option<u16> {
+    if !served.contains_key(&port) {
+        return Some(port);
+    }
+    SPARE_PORTS
+        .into_iter()
+        .find(|spare| !served.contains_key(spare) && !listening.contains(spare))
+}
+
 /// A site as the bridge found it, before it is published.
 struct Found {
     session_id: String,
+    pid: u32,
     listener: Listener,
+}
+
+/// A session a detached server may belong to.
+#[derive(Debug, Clone)]
+pub(crate) struct Candidate {
+    id: String,
+    cwd: String,
+    created_at: u64,
+}
+
+/// Whose a detached server is: the session working in the folder the server runs in (or a folder above it) that was
+/// there before the server started. The nearest folder wins, then the newest session. A session in the home folder or
+/// at the root is too wide a net to claim anything.
+fn owner_of(cwd: &str, started_ms: u64, sessions: &[Candidate], home: &str) -> Option<String> {
+    sessions
+        .iter()
+        .filter(|s| {
+            let folder = s.cwd.trim_end_matches('/');
+            !folder.is_empty()
+                && folder != home.trim_end_matches('/')
+                && (cwd == folder || cwd.strip_prefix(folder).is_some_and(|rest| rest.starts_with('/')))
+                // The clocks are a second apart at most; `ps` rounds.
+                && s.created_at <= started_ms + 5_000
+        })
+        .max_by_key(|s| (s.cwd.trim_end_matches('/').len(), s.created_at))
+        .map(|s| s.id.clone())
+}
+
+/// The folder each of `pids` runs in. One `lsof` for all of them.
+async fn working_folders(pids: &[u32]) -> HashMap<u32, String> {
+    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+    let out = tokio::process::Command::new("/usr/sbin/lsof")
+        .args(["-a", "-d", "cwd", "-p", &list, "-Fpn"])
+        .output()
+        .await;
+    let Ok(out) = out else {
+        return HashMap::new();
+    };
+    parse_folders(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// `lsof -Fpn` output: `p<pid>`, then `n<folder>`.
+fn parse_folders(text: &str) -> HashMap<u32, String> {
+    let mut out = HashMap::new();
+    let mut pid: Option<u32> = None;
+    for line in text.lines() {
+        match line.split_at_checked(1) {
+            Some(("p", rest)) => pid = rest.parse().ok(),
+            Some(("n", rest)) => {
+                if let Some(pid) = pid {
+                    out.insert(pid, rest.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// What the bridge knows of servers that left their session's process tree.
+#[derive(Default)]
+struct Detached {
+    /// The session of every site seen in a session's tree, by process and port.
+    owners: HashMap<(u32, u16), String>,
+    /// The folder of each launchd-parented listener, asked once (`None`: it wouldn't say).
+    folders: HashMap<u32, Option<String>>,
 }
 
 impl crate::session::App {
@@ -265,14 +426,27 @@ impl crate::session::App {
         // Titles are fetched once per (port, command), not on every tick.
         let mut titles: HashMap<(u16, String), Option<String>> = HashMap::new();
         let mut published: BTreeMap<u16, Published> = self.store.load_published_sites();
+        let mut detached = Detached::default();
         loop {
             ticker.tick().await;
             let Some(listeners) = listeners().await else {
                 continue;
             };
             let tree = ProcessTree::snapshot().await;
-            let found = self.found_sites(&listeners, tree.as_ref()).await;
+            let found = self
+                .found_sites(&listeners, tree.as_ref(), &mut detached)
+                .await;
             let config = Config::read(self.store.dir());
+            // Every address a site's process listens on at its port, not just the first.
+            let reaches: HashMap<u16, Reach> = found
+                .iter()
+                .map(|site| {
+                    let port = site.listener.port;
+                    let binds = listeners.get(&site.pid).into_iter().flatten();
+                    let binds = binds.filter(|l| l.port == port).map(|l| l.bind.as_str());
+                    (port, reach(binds))
+                })
+                .collect();
 
             // Fetched together, so one slow server doesn't hold up the rest.
             let missing: Vec<(u16, String)> = found
@@ -280,8 +454,10 @@ impl crate::session::App {
                 .map(|s| (s.listener.port, s.listener.command.clone()))
                 .filter(|key| !titles.contains_key(key))
                 .collect();
-            let fetched =
-                futures_util::future::join_all(missing.iter().map(|(port, _)| title(*port))).await;
+            let fetched = futures_util::future::join_all(
+                missing.iter().map(|(port, _)| title(reaches[port].host(), *port)),
+            )
+            .await;
             titles.extend(missing.into_iter().zip(fetched));
             titles.retain(|(port, _), _| found.iter().any(|s| s.listener.port == *port));
 
@@ -297,29 +473,37 @@ impl crate::session::App {
             if known {
                 // A route taken down from outside the bridge (`tailscale serve reset`) is published again.
                 let before = published.len();
-                published.retain(|port, _| served.contains_key(port));
+                published.retain(|_, site| served.contains_key(&site.tailnet_port()));
                 if published.len() != before {
                     let _ = self.store.save_published_sites(&published);
                 }
             }
 
             if known {
+                let listening: Vec<u16> = listeners.values().flatten().map(|l| l.port).collect();
                 for site in &found {
                     let port = site.listener.port;
-                    if published.contains_key(&port) {
+                    // Only what answers on this Mac's loopback can be routed to.
+                    let Reach::Local(local) = reaches[&port] else {
+                        continue;
+                    };
+                    // Already on the tailnet, by the bridge or by a route made by hand: that one is used as it is.
+                    if published.contains_key(&port) || route_to(&served, port).is_some() {
                         continue;
                     }
                     // Never take over a route the bridge didn't make: 443 and anything else the user serves by hand.
-                    if served.contains_key(&port) {
+                    // The site then goes on a spare port.
+                    let Some(to) = tailnet_port(port, &served, &listening) else {
                         continue;
-                    }
-                    if publish(port).await {
-                        served.insert(port, format!("http://127.0.0.1:{port}"));
+                    };
+                    if publish(to, local, port).await {
+                        served.insert(to, format!("http://{local}:{port}"));
                         published.insert(
                             port,
                             Published {
                                 port,
                                 session_id: site.session_id.clone(),
+                                served: (to != port).then_some(to),
                             },
                         );
                         let _ = self.store.save_published_sites(&published);
@@ -327,16 +511,22 @@ impl crate::session::App {
                 }
             }
 
-            // Take down the routes whose site is gone, and only those. Turning publishing off takes them all down.
-            let live: Vec<u16> = found.iter().map(|s| s.listener.port).collect();
-            let gone: Vec<u16> = published
-                .keys()
-                .copied()
-                .filter(|port| !config.publish || !live.contains(port))
+            // Take down the routes whose site is gone or can't be routed to, and only those. Turning publishing off
+            // takes them all down.
+            let live: Vec<u16> = found
+                .iter()
+                .map(|s| s.listener.port)
+                .filter(|port| matches!(reaches[port], Reach::Local(_)))
+                .collect();
+            let gone: Vec<(u16, u16)> = published
+                .iter()
+                .filter(|(port, _)| !config.publish || !live.contains(port))
+                .map(|(port, site)| (*port, site.tailnet_port()))
                 .collect();
             // A route that wouldn't come down stays recorded, so the next tick tries again.
-            for port in gone {
-                if unpublish(port).await {
+            for (port, to) in gone {
+                if unpublish(to).await {
+                    served.remove(&to);
                     published.remove(&port);
                     let _ = self.store.save_published_sites(&published);
                 }
@@ -345,7 +535,40 @@ impl crate::session::App {
             let mut by_session: HashMap<String, Vec<Site>> = HashMap::new();
             for found in &found {
                 let port = found.listener.port;
-                let is_published = published.contains_key(&port) && served.contains_key(&port);
+                let reach = &reaches[&port];
+                let to = match published.get(&port) {
+                    _ if !matches!(reach, Reach::Local(_)) => None,
+                    Some(site) => Some(site.tailnet_port()).filter(|to| served.contains_key(to)),
+                    None => route_to(&served, port),
+                };
+                let to = to.filter(|_| !host.is_empty());
+                let (url, reason) = match (to, reach) {
+                    (Some(443), _) => (format!("https://{host}/"), None),
+                    (Some(to), _) => (format!("https://{host}:{to}/"), None),
+                    // On the tailnet by itself, at the Mac's name when the bridge knows it.
+                    (None, Reach::Tailnet(bind)) => {
+                        let at = if host.is_empty() { bind } else { &host };
+                        (format!("http://{at}:{port}/"), None)
+                    }
+                    (None, Reach::Elsewhere(bind)) => (
+                        format!("http://{bind}:{port}/"),
+                        Some(format!("It only listens on {bind}")),
+                    ),
+                    (None, Reach::Local(local)) => (
+                        format!("http://{local}:{port}/"),
+                        Some(
+                            if !config.publish {
+                                "Publishing is off on this computer"
+                            } else if !known {
+                                "Tailscale isn't running on this computer"
+                            } else {
+                                "Tailscale wouldn't publish it"
+                            }
+                            .to_string(),
+                        ),
+                    ),
+                };
+                let on_tailnet = to.is_some() || matches!(reach, Reach::Tailnet(_));
                 by_session
                     .entry(found.session_id.clone())
                     .or_default()
@@ -356,41 +579,110 @@ impl crate::session::App {
                             .cloned()
                             .flatten(),
                         command: found.listener.command.clone(),
-                        url: if is_published && !host.is_empty() {
-                            format!("https://{host}:{port}/")
-                        } else {
-                            format!("http://127.0.0.1:{port}/")
-                        },
-                        published: is_published,
+                        url,
+                        published: on_tailnet,
                         exposed: exposed(&found.listener.bind),
+                        reason,
                     });
             }
             self.set_sites(by_session).await;
         }
     }
 
-    /// Each session's own listening ports, from the process it runs.
+    /// Each session's own listening ports, from the process it runs, and the detached servers that are its too.
     async fn found_sites(
         &self,
         listeners: &HashMap<u32, Vec<Listener>>,
         tree: Option<&ProcessTree>,
+        detached: &mut Detached,
     ) -> Vec<Found> {
         let Some(tree) = tree else {
             return Vec::new();
         };
         let mut roots: Vec<(String, u32)> = Vec::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
         for session in self.sessions.read().await.clone() {
             let root = match session.backend {
                 crate::session::Backend::Pi => session.pid().await,
                 crate::session::Backend::Prime => session.state.lock().await.worker_pid,
                 // A Pi subagent runs inside its parent's process, so its ports are the parent's.
-                crate::session::Backend::PiSubagent => None,
+                crate::session::Backend::PiSubagent => continue,
             };
+            candidates.push(Candidate {
+                id: session.id.clone(),
+                cwd: session.cwd.clone(),
+                created_at: session.state.lock().await.summary.created_at,
+            });
             if let Some(root) = root {
                 roots.push((session.id.clone(), root));
             }
         }
-        sites_of(&roots, listeners, tree)
+        let mut found = sites_of(&roots, listeners, tree);
+        for site in &found {
+            detached
+                .owners
+                .insert((site.pid, site.listener.port), site.session_id.clone());
+        }
+
+        // Launchd's own children that listen: a detached server is one of them. Each is asked its folder once.
+        let own = std::process::id();
+        let orphans: Vec<u32> = listeners
+            .keys()
+            .copied()
+            .filter(|pid| *pid != own && tree.parent(*pid) == Some(1))
+            .collect();
+        detached.folders.retain(|pid, _| orphans.contains(pid));
+        let unknown: Vec<u32> = orphans
+            .iter()
+            .copied()
+            .filter(|pid| !detached.folders.contains_key(pid))
+            .filter(|pid| {
+                let ports = &listeners[pid];
+                ports.iter().any(|l| !detached.owners.contains_key(&(*pid, l.port)))
+            })
+            .collect();
+        if !unknown.is_empty() {
+            let mut folders = working_folders(&unknown).await;
+            for pid in unknown {
+                detached.folders.insert(pid, folders.remove(&pid));
+            }
+        }
+        let home = std::env::var("HOME").unwrap_or_default();
+        let now = crate::session::now_ms();
+        for pid in &orphans {
+            for listener in &listeners[pid] {
+                if found.iter().any(|site| site.listener.port == listener.port) {
+                    continue;
+                }
+                let key = (*pid, listener.port);
+                let session_id = match detached.owners.get(&key) {
+                    Some(id) => Some(id.clone()),
+                    None => detached.folders.get(pid).cloned().flatten().and_then(|folder| {
+                        let started = now.saturating_sub(tree.elapsed(*pid)? * 1000);
+                        owner_of(&folder, started, &candidates, &home)
+                    }),
+                };
+                let Some(session_id) = session_id else {
+                    continue;
+                };
+                // Its session ended: the server is nobody's, and its route comes down.
+                if !candidates.iter().any(|s| s.id == session_id) {
+                    continue;
+                }
+                detached.owners.insert(key, session_id.clone());
+                found.push(Found {
+                    session_id,
+                    pid: *pid,
+                    listener: listener.clone(),
+                });
+            }
+        }
+        detached.owners.retain(|(pid, port), _| {
+            listeners
+                .get(pid)
+                .is_some_and(|list| list.iter().any(|l| l.port == *port))
+        });
+        found
     }
 }
 
@@ -414,6 +706,7 @@ fn sites_of(
                 claimed.push(listener.port);
                 out.push(Found {
                     session_id: session_id.clone(),
+                    pid,
                     listener: listener.clone(),
                 });
             }
@@ -422,11 +715,11 @@ fn sites_of(
     out
 }
 
-/// `tailscale serve --bg --https=<port> http://127.0.0.1:<port>`: the site on its own tailnet port, tailnet only.
-async fn publish(port: u16) -> bool {
-    let target = format!("http://127.0.0.1:{port}");
+/// `tailscale serve --bg --https=<to> http://127.0.0.1:<port>`: the site on its own tailnet port, tailnet only.
+async fn publish(to: u16, local: &str, port: u16) -> bool {
+    let target = format!("http://{local}:{port}");
     tailscale()
-        .args(["serve", "--bg", &format!("--https={port}"), &target])
+        .args(["serve", "--bg", &format!("--https={to}"), &target])
         .output()
         .await
         .map(|out| out.status.success())
@@ -494,7 +787,7 @@ mod tests {
             );
             let _ = socket.write_all(response.as_bytes()).await;
         });
-        assert_eq!(title(port).await.as_deref(), Some("Atelier"));
+        assert_eq!(title("127.0.0.1", port).await.as_deref(), Some("Atelier"));
     }
 
     #[test]
@@ -503,6 +796,19 @@ mod tests {
         assert_eq!(page_title(html).as_deref(), Some("Atelier Studio"));
         assert_eq!(page_title("<html><body>no title</body></html>"), None);
         assert_eq!(page_title("<title>  </title>"), None);
+    }
+
+    #[test]
+    fn only_what_answers_on_loopback_is_routed_to() {
+        assert_eq!(reach(["127.0.0.1"]), Reach::Local("127.0.0.1"));
+        assert_eq!(reach(["*"]), Reach::Local("127.0.0.1"));
+        assert_eq!(reach(["[::1]", "127.0.0.1"]), Reach::Local("127.0.0.1"));
+        // Vite on a recent Node: `localhost` there is the IPv6 loopback alone.
+        assert_eq!(reach(["[::1]"]), Reach::Local("localhost"));
+        // On the tailnet address itself: there already, and a route at its port would shadow it.
+        assert_eq!(reach(["100.121.116.92"]), Reach::Tailnet("100.121.116.92".into()));
+        assert_eq!(reach(["192.168.1.20"]), Reach::Elsewhere("192.168.1.20".into()));
+        assert_eq!(reach(["192.168.1.20", "127.0.0.1"]), Reach::Local("127.0.0.1"));
     }
 
     #[test]
@@ -545,6 +851,74 @@ mod tests {
             (found[1].session_id.as_str(), found[1].listener.port),
             ("b", 8000)
         );
+    }
+
+    #[test]
+    fn sites_are_published_unless_the_config_says_not_to() {
+        assert!(Config::parse("").publish);
+        assert!(Config::parse(r#"{"token":"x"}"#).publish);
+        assert!(Config::parse(r#"{"sites":{"publish":true}}"#).publish);
+        assert!(!Config::parse(r#"{"sites":{"publish":false}}"#).publish);
+    }
+
+    #[test]
+    fn a_route_made_by_hand_to_a_site_is_used() {
+        let mut served = HashMap::new();
+        served.insert(443, "http://127.0.0.1:7878".to_string());
+        served.insert(8443, "http://localhost:5173".to_string());
+        served.insert(9000, "https+insecure://127.0.0.1:8123/".to_string());
+        served.insert(5432, String::new());
+        assert_eq!(route_to(&served, 5173), Some(8443));
+        assert_eq!(route_to(&served, 8123), Some(9000));
+        assert_eq!(route_to(&served, 7878), Some(443));
+        assert_eq!(route_to(&served, 3000), None);
+        assert!(proxies_to("8123", 8123));
+        assert!(!proxies_to("http://192.168.0.4:8123", 8123));
+        assert!(!proxies_to("http://127.0.0.1:81230", 8123));
+    }
+
+    #[test]
+    fn a_site_whose_port_is_taken_on_the_tailnet_gets_a_spare_one() {
+        let mut served = HashMap::new();
+        assert_eq!(tailnet_port(5173, &served, &[5173]), Some(5173));
+        served.insert(5173, "http://127.0.0.1:9999".to_string());
+        served.insert(8100, String::new());
+        // 8101 is some server's own port on this Mac: left to it.
+        assert_eq!(tailnet_port(5173, &served, &[5173, 8101]), Some(8102));
+    }
+
+    #[test]
+    fn a_detached_server_goes_to_the_session_in_its_folder() {
+        let session = |id: &str, cwd: &str, created_at: u64| Candidate {
+            id: id.into(),
+            cwd: cwd.into(),
+            created_at,
+        };
+        let sessions = vec![
+            session("home", "/Users/me", 100_000),
+            session("old", "/Users/me/src/app", 100_000),
+            session("new", "/Users/me/src/app", 200_000),
+            session("later", "/Users/me/src/app", 900_000),
+            session("web", "/Users/me/src/app/web", 150_000),
+            session("other", "/Users/me/src/application", 100_000),
+        ];
+        let owner = |cwd: &str, started: u64| owner_of(cwd, started, &sessions, "/Users/me");
+        // The newest session that was there before the server started.
+        assert_eq!(owner("/Users/me/src/app", 500_000).as_deref(), Some("new"));
+        // The nearest folder wins.
+        assert_eq!(owner("/Users/me/src/app/web/dist", 500_000).as_deref(), Some("web"));
+        assert_eq!(owner("/Users/me/src/app/api", 500_000).as_deref(), Some("new"));
+        // A server older than every session there is nobody's, and the home folder claims nothing.
+        assert_eq!(owner("/Users/me/src/app", 10), None);
+        assert_eq!(owner("/Users/me/Library", 500_000), None);
+        assert_eq!(owner("/", 500_000), None);
+    }
+
+    #[test]
+    fn folders_come_out_of_lsof() {
+        let folders = parse_folders("p4821\nfcwd\nn/Users/me/src/app\np4900\nfcwd\nn/\n");
+        assert_eq!(folders[&4821], "/Users/me/src/app");
+        assert_eq!(folders[&4900], "/");
     }
 
     #[test]

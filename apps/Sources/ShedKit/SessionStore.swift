@@ -80,6 +80,9 @@ public final class SessionStore {
     public private(set) var connections: [String: BridgeClient.State] = [:]
     public private(set) var models: [ModelInfo] = []
     public var errorMessage: String?
+    /// Subagents the bridge still lists but that can't be opened any more, found out by trying. They leave the
+    /// lists, and what mentions them in a conversation stops leading anywhere.
+    public private(set) var ended: Set<String> = []
     /// Unsent composer text per session, kept while switching between sessions and across launches.
     public private(set) var drafts: [String: String] = UserDefaults.standard.dictionary(forKey: "drafts") as? [String: String] ?? [:]
 
@@ -307,9 +310,14 @@ public final class SessionStore {
         return SessionNode(session: session, children: kids.isEmpty ? nil : kids)
     }
 
-    /// This session's subagents, leaving out the ones long idle (unless one is open).
+    /// This session's subagents, leaving out the ones long idle or ended (unless one is open).
     public func children(of id: String) -> [SessionSummary] {
-        allChildren(of: id).filter { !$0.isDormant(at: clock) || $0.id == selectedId }
+        allChildren(of: id).filter { (!$0.isDormant(at: clock) && !ended.contains($0.id)) || $0.id == selectedId }
+    }
+
+    /// This session's subagents that have ended: still named, no longer somewhere to go.
+    public func endedChildren(of id: String) -> [SessionSummary] {
+        allChildren(of: id).filter { ended.contains($0.id) && $0.id != selectedId }
     }
 
     private func allChildren(of id: String) -> [SessionSummary] {
@@ -329,7 +337,7 @@ public final class SessionStore {
 
     /// Every subagent still at work (running, or idle with background jobs), across all sessions.
     public var activeSubagents: [SessionSummary] {
-        sessions.values.filter { $0.isSubagent && $0.isActive }.sorted { $0.createdAt < $1.createdAt }
+        sessions.values.filter { $0.isSubagent && $0.isActive && !ended.contains($0.id) }.sorted { $0.createdAt < $1.createdAt }
     }
 
     /// Every site any session serves, newest session first, so the app can list them all in one place.
@@ -352,9 +360,27 @@ public final class SessionStore {
         children(of: id).reduce(0) { $0 + ($1.isActive ? 1 : 0) + activeDescendants(of: $1.id) }
     }
 
-    /// A subagent of this session by its name, as child notes refer to it (`child:<name>`).
-    public func child(of id: String, named name: String) -> SessionSummary? {
-        allChildren(of: id).first { $0.name == name }
+    /// The subagent a conversation mentions by its name, as child notes do (`child:<name>`). A session may give the
+    /// same name to one subagent after another: the mention's time tells which. `spawning` is the call that started
+    /// it, so the subagent is the first to come after; anything else (a report, an exit) comes from one that was
+    /// already there.
+    public func child(of id: String, named name: String, near date: Date? = nil, spawning: Bool = false) -> SessionSummary? {
+        let named = allChildren(of: id).filter { $0.name == name }
+        guard let at = date.map({ $0.timeIntervalSince1970 * 1000 }) else { return named.last }
+        // The agent's clock and the bridge's stamps are a moment apart.
+        let slack = 2000.0
+        return spawning ? named.first { $0.createdAt >= at - slack } ?? named.last
+                        : named.last { $0.createdAt <= at + slack } ?? named.first
+    }
+
+    /// Where a mention of a subagent leads.
+    public func link(of id: String, to mention: SubagentMention) -> SubagentLink {
+        guard let child = child(of: id, named: mention.name, near: mention.date, spawning: mention.spawning) else {
+            // Just mentioned: the bridge may not have listed it yet.
+            let recent = mention.date.map { clock.timeIntervalSince($0) < 30 } ?? false
+            return mention.running || recent ? .pending : .ended
+        }
+        return ended.contains(child.id) ? .ended : .open(child.id)
     }
 
     public func select(_ id: String?) {
@@ -387,6 +413,14 @@ public final class SessionStore {
                 if selectedId == id { select(nil) }
                 return
             }
+            // A subagent its agent has let go of. The bridge may list it a while longer, but there is nothing to
+            // open: no alert, its screen says so for a moment, then gives way to its parent.
+            if error is BridgeError, let parent = sessions[id]?.parentId {
+                ended.insert(id)
+                try? await Task.sleep(for: .milliseconds(1400))
+                if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
+                return
+            }
             report(error)
         }
     }
@@ -397,24 +431,33 @@ public final class SessionStore {
         switch message {
         case .sessions(let list):
             var all = sessions.filter { Self.split($0.key)?.env != env }
-            for summary in list.map({ tagged($0, env) }) { all[summary.id] = summary }
+            for summary in list.map({ replayed(tagged($0, env)) }) { all[summary.id] = summary }
             if let selectedId, sessions[selectedId]?.status != all[selectedId]?.status { flush() }
             sessions = all
             snapshots += 1
+            ended.formIntersection(all.keys)
             if let selectedId, sessions[selectedId] == nil, Self.split(selectedId)?.env == env { select(nil) }
         case .session(let summary):
-            let summary = tagged(summary, env)
+            let summary = replayed(tagged(summary, env))
             // Summary traffic must not commit streamed text; only a state change can stop the reply reading `live`.
             if summary.id == selectedId, sessions[summary.id]?.status != summary.status { flush() }
+            // An ended subagent that does something again is back.
+            if ended.contains(summary.id), summary.status.isBusy || (summary.lastActiveAt ?? 0) > (sessions[summary.id]?.lastActiveAt ?? 0) {
+                ended.remove(summary.id)
+            }
             sessions[summary.id] = summary
         case .sessionRemoved(let id):
             let id = Self.tag(env, id)
             sessions[id] = nil
+            ended.remove(id)
             if selectedId == id { select(nil) }
-        case .snapshot(let sessionId, let snapshot, let earlier):
-            let sessionId = Self.tag(env, sessionId)
+        case .snapshot(let raw, var snapshot, let earlier):
+            let sessionId = Self.tag(env, raw)
             guard sessionId == selectedId else { return }
+            let held = holdForReplay(&snapshot, of: sessionId)
+            defer { if !held.isEmpty { replay(held, of: raw, in: env) } }
             loadedId = sessionId
+            ended.remove(sessionId)
             self.earlier = earlier
             flushing?.cancel()
             flushing = nil
@@ -473,6 +516,77 @@ public final class SessionStore {
         items = all
         if changes.values.contains(where: { live.texts[$0.id] != nil }) {
             live.texts = live.texts.filter { id, _ in !changes.values.contains { $0.id == id } }
+        }
+    }
+
+    // MARK: Replay, for measuring the conversation while it streams
+
+    /// `-replay YES` (and `-replayCount N`, 30 by default): each session opened holds its last items back and streams
+    /// them in again, through the same deltas the bridge sends, as if the agent were writing them now. Nothing is sent
+    /// to the agent: it's for measuring a streaming conversation in the simulator.
+    @ObservationIgnored private static let replays = UserDefaults.standard.bool(forKey: "replay")
+    @ObservationIgnored private var replaying: String?
+    @ObservationIgnored private var replayedIds: Set<String> = []
+
+    private func holdForReplay(_ snapshot: inout [Item], of sessionId: String) -> [Item] {
+        guard Self.replays, !replayedIds.contains(sessionId), replaying == nil else { return [] }
+        replayedIds.insert(sessionId)
+        let count = UserDefaults.standard.integer(forKey: "replayCount")
+        let held = Array(snapshot.suffix(count > 0 ? count : 30))
+        snapshot.removeLast(held.count)
+        return held
+    }
+
+    /// While a session replays it shows as running, whatever the bridge says.
+    private func replayed(_ summary: SessionSummary) -> SessionSummary {
+        guard replaying == summary.id, summary.status != .running,
+              var json = (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(summary))) as? [String: Any]
+        else { return summary }
+        json["status"] = SessionStatus.running.rawValue
+        guard let data = try? JSONSerialization.data(withJSONObject: json),
+              let running = try? JSONDecoder().decode(SessionSummary.self, from: data) else { return summary }
+        return running
+    }
+
+    private func replay(_ held: [Item], of raw: String, in env: String) {
+        let sessionId = Self.tag(env, raw)
+        replaying = sessionId
+        if let summary = sessions[sessionId] { sessions[sessionId] = replayed(summary) }
+        Task { @MainActor [weak self] in
+            /// About what a model streams: a few characters every 25 ms.
+            @MainActor func stream(_ text: String?, _ itemId: String, args: Bool) async {
+                var rest = Substring(text ?? "")
+                while !rest.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(25))
+                    guard let self, self.selectedId == sessionId else { return }
+                    let chunk = String(rest.prefix(Int.random(in: 4...12)))
+                    rest = rest.dropFirst(chunk.count)
+                    let append = args ? ItemAppend(text: nil, args: chunk) : ItemAppend(text: chunk, args: nil)
+                    self.apply(.itemPatch(sessionId: raw, itemId: itemId, set: nil, append: append), from: env)
+                }
+            }
+            for item in held {
+                guard let self, self.selectedId == sessionId else { break }
+                if item.kind == .user {
+                    try? await Task.sleep(for: .milliseconds(400))
+                    self.apply(.itemAdd(sessionId: raw, item: item), from: env)
+                    continue
+                }
+                var start = item
+                start.text = ""
+                if item.kind == .tool { start.args = ""; start.output = nil; start.status = .running; start.durationMs = nil }
+                self.apply(.itemAdd(sessionId: raw, item: start), from: env)
+                await stream(item.text, item.id, args: false)
+                if item.kind == .tool {
+                    await stream(item.args, item.id, args: true)
+                    try? await Task.sleep(for: .milliseconds(300))
+                    let done = ItemSet(output: item.output, status: item.status ?? .done, durationMs: item.durationMs)
+                    self.apply(.itemPatch(sessionId: raw, itemId: item.id, set: done, append: nil), from: env)
+                }
+            }
+            guard let self, self.replaying == sessionId else { return }
+            self.replaying = nil
+            self.connect(env)
         }
     }
 

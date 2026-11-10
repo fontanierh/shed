@@ -428,13 +428,25 @@ struct JobDoneView: View {
 struct JobsDoneGroup: View {
     let notes: [Note]
     @State private var expanded = false
+    @Environment(\.openSheet) private var openSheet
 
     var body: some View {
         let failed = notes.filter { JobStatusIcon.look(exitCode: $0.exitCode).1 == Palette.danger }.count
         let cancelled = notes.filter { JobStatusIcon.signal($0.exitCode) != nil }.count
         let tint = failed > 0 ? Palette.danger : Palette.moon
         VStack(alignment: .leading, spacing: 8) {
-            Button { withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() } } label: {
+            Button {
+                if let openSheet {
+                    let notes = notes
+                    openSheet(FeedSheet(title: title(failed: failed, cancelled: cancelled)) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(Array(notes.enumerated()), id: \.offset) { _, note in JobDoneView(note: note) }
+                        }
+                    })
+                } else {
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) { expanded.toggle() }
+                }
+            } label: {
                 HStack(spacing: 12) {
                     Image(systemName: failed > 0 ? "xmark.circle.fill" : cancelled == notes.count ? "stop.circle.fill" : "checkmark.circle.fill")
                         .font(.system(size: 17, weight: .medium))
@@ -444,7 +456,11 @@ struct JobsDoneGroup: View {
                         Text(breakdown(failed: failed, cancelled: cancelled)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Chevron(open: expanded)
+                    if openSheet != nil {
+                        Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                    } else {
+                        Chevron(open: expanded)
+                    }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 9)
                 .card(radius: 12, fill: Palette.surface.opacity(0.75), border: failed > 0 ? Palette.danger.opacity(0.45) : Palette.border)

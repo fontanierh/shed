@@ -37,6 +37,30 @@ public struct Item: Codable, Identifiable, Equatable, Sendable {
     public var date: Date? { at.map { Date(timeIntervalSince1970: $0 / 1000) } }
 }
 
+/// A conversation's mention of a subagent: a call that started it, its report, its exit.
+public struct SubagentMention: Equatable, Sendable {
+    public var name: String
+    public var date: Date?
+    /// The call that started it, rather than something it sent later.
+    public var spawning = false
+    /// That call still running: the subagent may not be listed yet.
+    public var running = false
+
+    public init(name: String, date: Date?, spawning: Bool = false, running: Bool = false) {
+        self.name = name
+        self.date = date
+        self.spawning = spawning
+        self.running = running
+    }
+}
+
+/// Where a mention of a subagent leads: its session, nowhere yet, or nowhere any more.
+public enum SubagentLink: Equatable, Sendable {
+    case open(String)
+    case pending
+    case ended
+}
+
 public struct ItemSet: Codable, Sendable {
     public var text: String?
     public var toolCallId: String?
@@ -219,6 +243,8 @@ public struct Site: Codable, Identifiable, Hashable, Sendable {
     public let published: Bool
     /// Bound to every interface rather than loopback: reachable from the LAN too, not only this Mac.
     public let exposed: Bool
+    /// Why it isn't published, when it isn't (a bridge from before this said nothing).
+    public let reason: String?
 
     public var id: Int { port }
     public var name: String { title ?? command }

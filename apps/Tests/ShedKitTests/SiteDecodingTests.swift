@@ -21,5 +21,12 @@ final class SiteDecodingTests: XCTestCase {
         let session = try JSONDecoder().decode(SessionSummary.self, from: Data(summary(sites).utf8))
         XCTAssertEqual(session.servedSites.first?.name, "Atelier")
         XCTAssertEqual(session.servedSites.first?.host, "h.ts.net:5173")
+        XCTAssertNil(session.servedSites.first?.reason)
+    }
+
+    func testAnUnpublishedSiteSaysWhy() throws {
+        let sites = #","sites":[{"port":8123,"command":"python3","url":"http://127.0.0.1:8123/","published":false,"exposed":false,"reason":"Tailscale isn't running on this computer"}]"#
+        let session = try JSONDecoder().decode(SessionSummary.self, from: Data(summary(sites).utf8))
+        XCTAssertEqual(session.servedSites.first?.reason, "Tailscale isn't running on this computer")
     }
 }

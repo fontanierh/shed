@@ -18,8 +18,9 @@ public struct PhoneRootView: View {
     /// Set once the way back is under way, inside its animation.
     @State private var going = false
     @State private var sessionView = NavigationViewHandle()
-    @State private var showNewSession = false
-    @State private var newSession = NewSessionDraft()
+    /// New Session, open with this draft. One value rather than a flag beside a draft: the sheet read the draft a
+    /// beat late and opened without the message.
+    @State private var newSession: NewSessionDraft?
     @State private var showSettings = false
     @State private var lightbox = Lightbox()
     @State private var activities = LiveActivities()
@@ -38,11 +39,10 @@ public struct PhoneRootView: View {
                 // the bottom, so the one under your thumb stays put. The list stays alive below, keeping its scroll.
                 ZStack {
                     NavigationStack {
-                        SessionSidebar(store: store, newSession: { newSession = NewSessionDraft(); showNewSession = true },
+                        SessionSidebar(store: store, newSession: { newSession = NewSessionDraft() },
                                        openSettings: { showSettings = true },
                                        start: { message, folder in
                                            newSession = NewSessionDraft(message: message, folder: folder)
-                                           showNewSession = true
                                        })
                             .toolbar(.hidden, for: .navigationBar)
                             .containerBackground(.clear, for: .navigation)
@@ -130,8 +130,8 @@ public struct PhoneRootView: View {
         .tint(Palette.accent)
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
-        .sheet(isPresented: $showNewSession) {
-            NewSessionSheet(store: store, initialMessage: newSession.message, initialFolder: newSession.folder)
+        .sheet(item: $newSession) { draft in
+            NewSessionSheet(store: store, initialMessage: draft.message, initialFolder: draft.folder)
         }
         .sheet(isPresented: $showSettings) { NavigationStack { EnvironmentSettings(store: store) } }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {

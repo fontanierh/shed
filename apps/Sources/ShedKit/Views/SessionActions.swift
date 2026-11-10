@@ -92,6 +92,76 @@ extension ModelInfo {
     /// The name shown within its group. Open Codex has no display names, so its ids stand in, less the group's part.
     var shortName: String { name == id ? String(id.dropFirst(Self.group(provider: provider, id: id).prefix.count)) : name }
 
+    /// The name in a few words, for a chip: "DeepSeek V4.1 Flash" for `mistral/deepseek-v4-1-flash-1017`. A display
+    /// name stays as it is. An id loses its provider and its build date, and gets its version and spelling back.
+    var compactName: String { name != id && name.contains(" ") ? name : Self.compact(name) }
+
+    /// The compact name's first words, for when even that is too long: the family, its version and one variant.
+    var essentialName: String { compactName.split(separator: " ").prefix(3).joined(separator: " ") }
+
+    /// The compact name, led by where the model comes from when another of `models` goes by the same name.
+    func chipName(among models: [ModelInfo]) -> String {
+        let mine = compactName
+        guard models.contains(where: { $0.key != key && $0.compactName == mine }) else { return mine }
+        let source = switch groupLabel {
+        case "ChatGPT subscription": "ChatGPT"
+        case "OpenAI API key", "Anthropic API key": "API"
+        default: groupLabel
+        }
+        return "\(source) · \(mine)"
+    }
+
+    /// Names that a capital letter alone gets wrong.
+    private static let spellings = [
+        "gpt": "GPT", "glm": "GLM", "oss": "OSS", "deepseek": "DeepSeek", "mimo": "MiMo", "qwq": "QwQ",
+        "chatgpt": "ChatGPT", "openai": "OpenAI", "xai": "xAI",
+    ]
+
+    static func compact(_ id: String) -> String {
+        var parts = (id as NSString).lastPathComponent.split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == ":" }).map(String.init)
+        // The build it was cut from says nothing to a reader: a date in one piece or three, a four-digit code, "latest".
+        if parts.count > 3, parts[parts.count - 3].wholeMatch(of: /20\d{2}/) != nil,
+           parts.suffix(2).allSatisfy({ $0.wholeMatch(of: /\d{2}/) != nil }) {
+            parts.removeLast(3)
+        } else if parts.count > 1, let last = parts.last, last == "latest" || last.wholeMatch(of: /\d{8}|\d{4}/) != nil {
+            parts.removeLast()
+        }
+        var words: [String] = []
+        var index = 0
+        while index < parts.count {
+            var part = parts[index].lowercased()
+            // Ids write "4.1" as two parts.
+            if part.wholeMatch(of: /v?\d{1,2}/) != nil, index + 1 < parts.count, parts[index + 1].wholeMatch(of: /\d{1,2}/) != nil {
+                part += "." + parts[index + 1]
+                index += 1
+            }
+            index += 1
+            if let spelling = spellings[part] {
+                words.append(spelling)
+            } else if part.wholeMatch(of: /\d+[bkm]/) != nil {
+                words.append(part.uppercased())  // 120B parameters, 32K tokens
+            } else if part.first?.isNumber == true || part.wholeMatch(of: /o\d/) != nil {
+                words.append(part)  // 4o, o3
+            } else {
+                words.append(part.prefix(1).uppercased() + part.dropFirst())
+            }
+        }
+        // GPT and GLM carry their version on a hyphen.
+        if words.count > 1, ["GPT", "GLM"].contains(words[0]), words[1].first?.isNumber == true {
+            words.replaceSubrange(0...1, with: ["\(words[0])-\(words[1])"])
+        }
+        return words.joined(separator: " ")
+    }
+
+    /// A reasoning effort as a word: "High", and "Max" for the top one where the model has nothing above it.
+    static func effortName(_ level: String?, among levels: [String] = []) -> String {
+        switch level {
+        case nil, "": "Default"
+        case "xhigh": levels.contains("max") ? "XHigh" : "Max"
+        case let level?: level.capitalized
+        }
+    }
+
     /// Subscriptions and API keys first, then the other providers alphabetically.
     static func groupOrder(_ a: String, _ b: String) -> Bool {
         let leading = ["ChatGPT subscription", "OpenAI API key", "Anthropic API key"]
@@ -141,20 +211,32 @@ extension ModelInfo {
 }
 
 #if os(iOS)
-/// The phone's model picker: a full sheet, newest models first, the current one ticked.
+/// The phone's model picker: a full sheet, newest models first, the current one ticked, and the session's
+/// reasoning effort above them.
 struct PhoneModelPicker: View {
     let store: SessionStore
     let current: ModelInfo?
+    /// The session whose reasoning effort is set here too.
+    var session: SessionSummary?
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     /// Provider groups shown open: the current model's at first. A search opens them all.
     @State private var open: Set<String> = []
+    /// The list has answered: an empty one then says so instead of spinning.
+    @State private var loaded = false
 
     var body: some View {
         NavigationStack {
             List {
                 if store.models.isEmpty {
-                    ProgressView().frame(maxWidth: .infinity).listRowBackground(Color.clear)
+                    Group {
+                        if loaded {
+                            Text("No models to switch to").font(.system(size: 14)).foregroundStyle(.secondary)
+                        } else {
+                            ProgressView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity).listRowBackground(Color.clear)
                 }
                 let groups = ModelInfo.byProvider(store.models, matching: query, first: current)
                 ForEach(groups, id: \.provider) { group in
@@ -182,8 +264,15 @@ struct PhoneModelPicker: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .background(Palette.sidebar.ignoresSafeArea())
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let session, !session.thinkingLevels.isEmpty {
+                    EffortRow(store: store, session: session)
+                        .padding(.horizontal, 16).padding(.top, 6).padding(.bottom, 10)
+                        .background(Palette.sidebar)
+                }
+            }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search models")
-            .navigationTitle("Model")
+            .navigationTitle(session?.thinkingLevels.isEmpty == false ? "Model and Effort" : "Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
@@ -191,7 +280,10 @@ struct PhoneModelPicker: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .task { await store.loadModels() }
+        .task {
+            await store.loadModels()
+            loaded = true
+        }
     }
 
     private func row(_ model: ModelInfo) -> some View {

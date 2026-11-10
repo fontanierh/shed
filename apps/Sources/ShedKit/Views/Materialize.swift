@@ -24,11 +24,6 @@ struct Materialize: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let cell: CGFloat = 2
-    /// Playing somewhere: work that can wait (laying out the conversation ahead of the reader) waits, so the rain
-    /// keeps every frame. Counted per effect, so one leaving can't clear another that has just started.
-    @MainActor private static var players: Set<UUID> = []
-    @MainActor static var active: Bool { !players.isEmpty }
-    @State private var player = UUID()
     @State private var arrival: Task<Void, Never>?
     /// How long the cover takes to lift when the conversation's layout couldn't be read.
     static let lift = 0.5
@@ -36,7 +31,6 @@ struct Materialize: View {
     var body: some View {
         ZStack {
             if playing && !reduceMotion {
-                #if os(iOS)
                 // The loading rain on Core Animation: it keeps falling while the conversation is laid out, which
                 // holds the app for a moment as it arrives. It thins out as the conversation starts printing.
                 WaitingRain(start: rainStart, stop: revealStart.map { $0.addingTimeInterval(0.35) })
@@ -45,18 +39,13 @@ struct Materialize: View {
                     .transition(.identity)
                 // The printing (and the mask it moves) needs the conversation's layout: drawn here, from its arrival.
                 if capturing || revealStart != nil { printing }
-                #else
-                printing
-                #endif
             }
         }
         .onChange(of: playing) { _, on in
-            if on { Self.players.insert(player) } else { Self.players.remove(player) }
             if !on { probe.unmask(); veiled = false }
         }
         .onDisappear {
             arrival?.cancel()
-            Self.players.remove(player)
             probe.unmask()
         }
         .background { ProbeView(probe: probe) }
@@ -110,8 +99,7 @@ struct Materialize: View {
         if revealStart == started { playing = false; revealStart = nil; layout = nil }
     }
 
-    /// The drops that build the conversation, and the mask that shows it cell by cell (on the Mac, the loading rain
-    /// too).
+    /// The drops that build the conversation, and the mask that shows it cell by cell.
     private var printing: some View {
         TimelineView(.animation) { timeline in
             Canvas { context, size in
@@ -156,13 +144,7 @@ struct Materialize: View {
         let cols = Int(size.width / Self.cell), rows = Int(size.height / Self.cell)
         guard cols > 20, rows > 20 else { return }
         var ink = Ink(dot: Self.cell - 1 / max(scale, 1))
-        let t = now.timeIntervalSince(rainStart)
         let r = revealStart.map { now.timeIntervalSince($0) }
-        // The loading rain carries on into the build-up for a moment, then lets its last drops fall out. (On the
-        // phone, `WaitingRain` falls instead.)
-        #if os(macOS)
-        rain(&ink, cols: cols, rows: rows, t: t, until: r.map { t - $0 + 0.35 })
-        #endif
         // The conversation is hidden by masking it, cell by cell, not by painting over it: the beam behind the page
         // keeps showing through, as it does once the conversation is in.
         if capturing {
@@ -188,28 +170,6 @@ struct Materialize: View {
         for k in 0..<7 where y - k >= 0 {
             guard k < 2 || hash(col, y - k, 29) < 1 - Double(k) / 8 else { continue }
             ink.dot(col, y - k, hue: k == 0 ? 0.13 : 0.3 + 0.1 * Double(k), alpha: a * (1 - Double(k) / 7))
-        }
-    }
-
-    /// The rain while the conversation loads: drops appearing softly anywhere in the upper page and falling a while
-    /// before they fade. No new ones start a moment after the conversation begins to land, so the rain thins out
-    /// into the build-up instead of stopping.
-    private func rain(_ ink: inout Ink, cols: Int, rows: Int, t: Double, until stop: Double?) {
-        let every = 1.0 / 130, longest = 240.0 / Self.speed
-        let first = max(0, Int(((t - longest) / every).rounded(.down)))
-        let last = Int((min(t, stop ?? t) / every).rounded(.down))
-        guard first <= last else { return }
-        for i in first...last {
-            let born = Double(i) * every
-            let fallen = (t - born) * Self.speed
-            let length = 70 + 170 * Self.hash(i, 3)
-            guard fallen > 0, fallen < length else { continue }
-            let col = Int(Self.hash(i, 2) * Double(cols))
-            let y = Int(Self.hash(i, 4) * Double(rows) * 0.75) - 20 + Int(fallen)
-            guard y >= 0, y < rows + 7 else { continue }
-            // In over its first cells, out over its last.
-            let envelope = min(1, fallen / 12) * min(1, (length - fallen) / 40)
-            Self.drop(&ink, col: col, head: y, alpha: 0.62 * envelope)
         }
     }
 
@@ -515,15 +475,158 @@ private struct ProbeView: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { probe.view = view }
 }
 #else
-final class Probe {
-    func read(cell: CGFloat) -> (content: [Double], cols: Int, rows: Int)? { nil }
-    @discardableResult func mask(_ reveal: Reveal, cell: CGFloat) -> Bool { true }
-    var contentHeight: CGFloat { 0 }
-    func unmask() {}
+import AppKit
+
+/// Finds the conversation in the window under the effect and reads which grid cells hold something.
+@MainActor final class Probe {
+    weak var view: NSView?
+    /// The conversation's list while it's masked.
+    private weak var masked: FeedScrollView?
+    /// The list last read.
+    private weak var chosen: FeedScrollView?
+    /// The mask, over the whole list: the grid's cells where the rain falls, and bands above and below it (under the
+    /// composer) that come in with the grid's first and last rows.
+    private let shape = CALayer()
+    private let grid = CALayer()
+    private let above = CALayer()
+    private let below = CALayer()
+
+    nonisolated init() {}
+
+    /// Hides the conversation, or the parts of it not yet printed. The mask sits on the list itself, so the page
+    /// around it, the beam included, is untouched.
+    @discardableResult
+    func mask(_ reveal: Reveal, cell: CGFloat) -> Bool {
+        // Until the conversation is printing, look again each time: it's the arriving one that must be hidden.
+        let found: FeedScrollView?
+        if case .hidden = reveal { found = find() } else { found = chosen ?? masked ?? find() }
+        guard let view, let scroll = found, let layer = scroll.layer else { return false }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        if masked !== scroll {
+            masked?.layer?.mask = nil
+            masked = scroll
+            if grid.superlayer == nil {
+                grid.magnificationFilter = .nearest
+                grid.contentsGravity = .resize
+                for band in [above, below] { band.backgroundColor = CGColor(gray: 0, alpha: 1) }
+                shape.addSublayer(grid); shape.addSublayer(above); shape.addSublayer(below)
+            }
+            layer.mask = shape
+        }
+        // A view's layer counts as the view does. The list counts from its top or its bottom as AppKit has it.
+        let bounds = scroll.bounds
+        shape.frame = bounds
+        let area = view.convert(view.bounds, to: scroll)
+        let over = CGRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: max(0, area.minY - bounds.minY))
+        let under = CGRect(x: bounds.minX, y: area.maxY, width: bounds.width, height: max(0, bounds.maxY - area.maxY))
+        above.frame = scroll.isFlipped ? over : under
+        below.frame = scroll.isFlipped ? under : over
+        switch reveal {
+        case .hidden:
+            grid.frame = area
+            grid.contents = nil; grid.backgroundColor = nil
+            above.opacity = 0; below.opacity = 0
+        case .faded(let amount):
+            grid.frame = area
+            grid.contents = nil; grid.backgroundColor = CGColor(gray: 0, alpha: amount)
+            above.opacity = Float(amount); below.opacity = Float(amount)
+        case .cells(let alpha, let cols, let rows, let top, let bottom):
+            grid.backgroundColor = nil
+            above.opacity = Float(top); below.opacity = Float(bottom)
+            // Whole cells only, from the top left of the area.
+            let height = CGFloat(rows) * cell
+            grid.frame = CGRect(x: area.minX, y: scroll.isFlipped ? area.minY : area.maxY - height, width: CGFloat(cols) * cell, height: height)
+            // Premultiplied RGBA, every channel the cell's alpha: only the alpha matters to a mask. The first row is
+            // the top of the page; where AppKit shows a layer's picture turned over, it is given turned over.
+            let turned = layer.contentsAreFlipped()
+            var rgba = [UInt8](repeating: 0, count: alpha.count * 4)
+            for row in 0..<rows {
+                let to = (turned ? rows - 1 - row : row) * cols
+                for col in 0..<cols {
+                    let a = alpha[row * cols + col]
+                    guard a > 0 else { continue }
+                    let i = (to + col) * 4
+                    rgba[i] = a; rgba[i + 1] = a; rgba[i + 2] = a; rgba[i + 3] = a
+                }
+            }
+            grid.contents = CGDataProvider(data: Data(rgba) as CFData).flatMap {
+                CGImage(width: cols, height: rows, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: cols * 4, space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue), provider: $0, decode: nil,
+                        shouldInterpolate: false, intent: .defaultIntent)
+            }
+        }
+        return true
+    }
+
+    /// How tall the conversation is laid out, to know when it has settled.
+    var contentHeight: CGFloat { find()?.documentView?.frame.height ?? 0 }
+
+    func unmask() {
+        masked?.layer?.mask = nil
+        masked = nil
+        chosen = nil
+    }
+
+    /// The conversation's list: of those filling most of this area, the one holding the most.
+    private func find() -> FeedScrollView? {
+        guard let view, let root = view.window?.contentView else { return nil }
+        let frame = view.convert(view.bounds, to: nil)
+        var best: FeedScrollView?
+        func walk(_ v: NSView) {
+            if let list = v as? FeedScrollView {
+                let shared = list.convert(list.bounds, to: nil).intersection(frame)
+                if shared.width * shared.height > frame.width * frame.height * 0.5,
+                   list.documentView?.frame.height ?? 0 >= best?.documentView?.frame.height ?? 0 { best = list }
+                return
+            }
+            for sub in v.subviews { walk(sub) }
+        }
+        walk(root)
+        return best
+    }
+
+    func read(cell: CGFloat) -> (content: [Double], cols: Int, rows: Int)? {
+        guard let view, let scroll = find() else { return nil }
+        chosen = scroll
+        let cols = Int(view.bounds.width / cell), rows = Int(view.bounds.height / cell)
+        guard cols > 0, rows > 0 else { return nil }
+        // Read without the mask that hides it meanwhile.
+        let mask = scroll.layer?.mask
+        scroll.layer?.mask = nil
+        defer { scroll.layer?.mask = mask }
+        // Whole cells, from the top left of the area, drawn one pixel a cell so the picture is taken small.
+        let area = view.convert(view.bounds, to: scroll)
+        let height = CGFloat(rows) * cell
+        let rect = CGRect(x: area.minX, y: scroll.isFlipped ? area.minY : area.maxY - height, width: CGFloat(cols) * cell, height: height)
+        guard let picture = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: cols, pixelsHigh: rows, bitsPerSample: 8, samplesPerPixel: 4,
+                                             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: cols * 4, bitsPerPixel: 32)
+        else { return nil }
+        picture.size = rect.size
+        scroll.cacheDisplay(in: rect, to: picture)
+        guard let pixels = picture.bitmapData else { return nil }
+        // Brightness as it shows on the dark page: the premultiplied colour, so a faint fill counts for little.
+        let content = (0..<(cols * rows)).map { i in
+            Double(max(pixels[i * 4], pixels[i * 4 + 1], pixels[i * 4 + 2])) / 255
+        }
+        return content.contains { $0 > 0.05 } ? (content, cols, rows) : nil
+    }
 }
 
-private struct ProbeView: View {
+private struct ProbeView: NSViewRepresentable {
     let probe: Probe
-    var body: some View { Color.clear }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = Passive()
+        probe.view = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) { probe.view = view }
+
+    private final class Passive: NSView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
 }
 #endif

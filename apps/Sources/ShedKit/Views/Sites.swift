@@ -115,7 +115,7 @@ struct AllSitesButton: View {
     }
 
     enum EmptyCopy {
-        static let all = "Servers the agents start appear here. Publishing them on the tailnet is off unless `sites.publish` is set in the bridge's config.json."
+        static let all = "Servers the agents start appear here, published on your tailnet so you can open them from any of your devices."
         static let none = "No sites running."
     }
 }
@@ -192,7 +192,7 @@ private struct SiteRow: View {
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     Text(site.host).font(.mono(11)).foregroundStyle(.secondary).lineLimit(1)
-                    if !site.published {
+                    if !site.published, site.reason == nil {
                         Text("this Mac only").font(.system(size: 11)).foregroundStyle(.tertiary)
                     }
                     if site.exposed {
@@ -201,6 +201,10 @@ private struct SiteRow: View {
                             .foregroundStyle(Palette.accent)
                             .help("The server listens on every interface, so devices on your local network can reach it, not just your tailnet.")
                     }
+                }
+                if !site.published, let reason = site.reason {
+                    // Why it can't be opened from here.
+                    Text(reason).font(.system(size: 11)).foregroundStyle(Palette.accent.opacity(0.85)).lineLimit(2)
                 }
                 Text(entry.session.isSubagent ? (entry.session.name ?? "subagent") : entry.session.title)
                     .font(.system(size: 11))

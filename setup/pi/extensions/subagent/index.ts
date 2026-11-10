@@ -331,8 +331,14 @@ async function runSingleAgent(
 	};
 
 	try {
-		if (agent.systemPrompt.trim()) {
-			const tmp = await writePromptToTempFile(agent.name, agent.systemPrompt);
+		// Shed's guide (how to show files and sites to the user), which the bridge gives the parent only.
+		let guide = "";
+		try {
+			if (process.env.AGENT_REMOTE_GUIDE) guide = fs.readFileSync(process.env.AGENT_REMOTE_GUIDE, "utf-8").trim();
+		} catch {}
+		const systemPrompt = [agent.systemPrompt.trim(), guide].filter(Boolean).join("\n\n");
+		if (systemPrompt) {
+			const tmp = await writePromptToTempFile(agent.name, systemPrompt);
 			tmpPromptDir = tmp.dir;
 			tmpPromptPath = tmp.filePath;
 			args.push("--append-system-prompt", tmpPromptPath);

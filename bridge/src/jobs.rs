@@ -31,6 +31,7 @@ const PROCESS: &str = "process:";
 /// `ps -axo pid=,ppid=,etime=,time=,command=`, by parent.
 pub struct ProcessTree {
     children: HashMap<u32, Vec<(u32, String)>>,
+    parents: HashMap<u32, u32>,
     /// Seconds each process has been running.
     elapsed: HashMap<u32, u64>,
     /// CPU seconds each process has used.
@@ -43,6 +44,7 @@ const PROMPT_AFTER_SECS: u64 = 30;
 impl ProcessTree {
     pub fn parse(ps: &str) -> Self {
         let mut children: HashMap<u32, Vec<(u32, String)>> = HashMap::new();
+        let mut parents = HashMap::new();
         let mut elapsed = HashMap::new();
         let mut cpu = HashMap::new();
         for line in ps.lines() {
@@ -59,6 +61,7 @@ impl ProcessTree {
             if let Some(seconds) = parse_cpu_time(time) {
                 cpu.insert(pid, seconds);
             }
+            parents.insert(pid, ppid);
             children
                 .entry(ppid)
                 .or_default()
@@ -66,6 +69,7 @@ impl ProcessTree {
         }
         Self {
             children,
+            parents,
             elapsed,
             cpu,
         }
@@ -167,6 +171,15 @@ impl ProcessTree {
             .iter()
             .find(|(_, cmd)| cmd.contains("rlm.repl"))
             .map(|(pid, _)| *pid)
+    }
+
+    pub fn parent(&self, pid: u32) -> Option<u32> {
+        self.parents.get(&pid).copied()
+    }
+
+    /// Seconds a process has been running.
+    pub fn elapsed(&self, pid: u32) -> Option<u64> {
+        self.elapsed.get(&pid).copied()
     }
 
     /// A process and everything under it, with each one's command.
