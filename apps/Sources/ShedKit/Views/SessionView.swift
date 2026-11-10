@@ -777,8 +777,8 @@ struct SessionHeader: View {
         .confirmRestartKernel($restartingKernel) { store.restartKernel() }
         .task(id: session.cwd) {
             guard let env = store.environment(of: session.id)?.id,
-                  let overview = try? await store.gitOverview(in: env, folders: [session.cwd]) else { return }
-            withAnimation(.easeOut(duration: 0.2)) { branch = overview.repo(containing: session.cwd)?.branch }
+                  let found = try? await store.gitBranch(in: env, of: session.cwd) else { return }
+            withAnimation(.easeOut(duration: 0.2)) { branch = found }
         }
         .padding(.leading, 20)
         .padding(.trailing, 12)

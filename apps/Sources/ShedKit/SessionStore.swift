@@ -775,14 +775,16 @@ public final class SessionStore {
         return try await client(env).call("list_dir", fields, as: DirListing.self)
     }
 
-    /// The git repositories an environment's sessions work in, read with that computer's `git`. `folders` adds more.
     /// The GitHub account signed in with `gh` on that computer: contributions and open pull requests.
     public func githubOverview(in env: String) async throws -> GitHubOverview {
         try await client(env).call("github_overview", [:], as: GitHubOverview.self)
     }
 
-    public func gitOverview(in env: String, folders: [String] = []) async throws -> GitOverview {
-        try await client(env).call("git_overview", ["paths": folders], as: GitOverview.self)
+    /// The branch of the repository `folder` is in on that computer, read with its `git`. Nil when it is detached or in
+    /// no repository.
+    public func gitBranch(in env: String, of folder: String) async throws -> String? {
+        struct Reply: Decodable { let branch: String? }
+        return try await client(env).call("git_branch", ["path": folder], as: Reply.self).branch
     }
 
     // MARK: Background commands

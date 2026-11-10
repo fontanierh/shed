@@ -43,3 +43,28 @@ public struct GitHubOverview: Decodable, Equatable, Sendable {
     /// Contributions over the last `weeks` weeks of the calendar.
     public func total(lastDays count: Int) -> Int { days.suffix(count).reduce(0) { $0 + $1.count } }
 }
+
+/// Weeks of days, Monday first, ending with the week of `today`: the calendar the activity grid draws.
+public enum CommitCalendar {
+    public static func weeks(endingAt today: String, count: Int) -> [[String?]] {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "yyyy-MM-dd"
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.firstWeekday = 2
+        guard let end = formatter.date(from: today) else { return [] }
+        // Monday of this week, then back `count - 1` weeks.
+        let weekday = (calendar.component(.weekday, from: end) + 5) % 7
+        guard let monday = calendar.date(byAdding: .day, value: -weekday, to: end),
+              let start = calendar.date(byAdding: .day, value: -7 * (count - 1), to: monday) else { return [] }
+        return (0..<count).map { week in
+            (0..<7).map { day in
+                guard let date = calendar.date(byAdding: .day, value: week * 7 + day, to: start), date <= end else { return nil }
+                return formatter.string(from: date)
+            }
+        }
+    }
+}

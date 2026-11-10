@@ -531,14 +531,8 @@ pub enum ClientOp {
         #[serde(default)]
         hidden: bool,
     },
-    /// The git repositories the sessions work in, read with the machine's `git`: branches, uncommitted changes,
-    /// recent commits and the user's commits per day. `paths` adds folders beyond the sessions'.
-    GitOverview {
-        #[serde(default)]
-        paths: Vec<String>,
-        #[serde(default = "default_days")]
-        days: u32,
-    },
+    /// The branch of the repository `path` is in, read with the machine's `git`.
+    GitBranch { path: String },
     /// The GitHub account `gh` is signed in to on this computer: contributions per day over the last year and open
     /// pull requests.
     GithubOverview,
@@ -550,10 +544,6 @@ fn is_zero(n: &usize) -> bool {
 
 fn default_lines() -> u32 {
     80
-}
-
-fn default_days() -> u32 {
-    182
 }
 
 #[derive(Debug, Deserialize)]
