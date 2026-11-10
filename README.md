@@ -111,6 +111,8 @@ setup/sync-remote.sh user@host            # build, sign, copy over, restart the 
 setup/sync-remote.sh user@host --watch    # and repeat every 5 minutes from launchd
 ```
 
+It keeps its copy of the source in `~/.agent-remote/sync` on that Mac, apart from any clone of the repository there.
+
 ### Folder access and stuck commands
 
 macOS asks before a program first reads Documents, Desktop or Downloads, and holds the read until someone answers on that Mac. Commands an agent runs count as the bridge's, so the prompt names `agent-remote`. Grant it once, in System Settings › Privacy & Security › Full Disk Access (add `~/.agent-remote/bin/agent-remote`), or answer each prompt as it comes.

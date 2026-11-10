@@ -2,7 +2,8 @@
 # Keep the bridge on another Mac in step with this checkout: build it here and sign it with this Mac's certificate
 # (setup/lib/sign-bridge.sh), copy it over SSH, and swap it in (restarting its launchd service) only when the code
 # changed. A Mac of another architecture builds it from the copied source instead, unsigned. The other Mac needs
-# setup/install.sh run once, and SSH from this Mac by key.
+# setup/install.sh run once, and SSH from this Mac by key. The copy is kept in ~/.agent-remote/sync there, the
+# bridge's own folder: files this checkout doesn't have are deleted from it, so it is never a clone of the repository.
 #
 #   setup/sync-remote.sh user@host [--watch | --unwatch]
 #
@@ -55,39 +56,41 @@ hash="$(cd "$ROOT" && find bridge/src bridge/dsh bridge/Cargo.toml bridge/Cargo.
 
 echo "$(date '+%F %T') syncing $TARGET"
 ssh=(ssh -o BatchMode=yes -o ConnectTimeout=10 "$TARGET")
-rsync -a --delete --exclude target -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$ROOT/bridge" "$ROOT/setup" "$TARGET:shed/"
+arch="$("${ssh[@]}" 'mkdir -p ~/.agent-remote/sync && uname -m')"
+rsync -a --delete --exclude target -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$ROOT/bridge" "$ROOT/setup" "$TARGET:.agent-remote/sync/"
 built=""
-if [ "$("${ssh[@]}" uname -m)" = "$(uname -m)" ]; then
+if [ "$arch" = "$(uname -m)" ]; then
   (cd "$ROOT/bridge" && cargo build --release --quiet)
   mkdir -p "$ROOT/bridge/target/remote"
   cp "$ROOT/bridge/target/release/agent-remote" "$ROOT/bridge/target/remote/agent-remote"
   # On its own line: a signing that fails stops here instead of shipping the build unsigned.
   identity="$("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/remote/agent-remote")"
   echo "  signed with $identity"
-  rsync -a -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$ROOT/bridge/target/remote/agent-remote" "$TARGET:shed/agent-remote"
+  rsync -a -e "ssh -o BatchMode=yes -o ConnectTimeout=10" "$ROOT/bridge/target/remote/agent-remote" "$TARGET:.agent-remote/sync/agent-remote"
   built=1
 fi
 "${ssh[@]}" bash -s -- "$built" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
-cd ~/shed/bridge
+src="$HOME/.agent-remote/sync"
+cd "$src/bridge"
 # ssh drops an empty argument, so "not built" arrives as no argument at all.
 if [ -n "${1:-}" ]; then
-  mkdir -p target/release && mv ~/shed/agent-remote target/release/agent-remote
+  mkdir -p target/release && mv "$src/agent-remote" target/release/agent-remote
 else
   cargo build --release --quiet
 fi
 for extension in subagent background-jobs; do
   rm -rf ~/.pi/agent/extensions/$extension
-  cp -R ~/shed/setup/pi/extensions/$extension ~/.pi/agent/extensions/$extension
+  cp -R "$src/setup/pi/extensions/$extension" ~/.pi/agent/extensions/$extension
 done
-cp ~/shed/setup/pi/agents/*.md ~/.pi/agent/agents/
-cp ~/shed/setup/pi/prompts/*.md ~/.pi/agent/prompts/
+cp "$src"/setup/pi/agents/*.md ~/.pi/agent/agents/
+cp "$src"/setup/pi/prompts/*.md ~/.pi/agent/prompts/
 # The Node on the PATH, or the one Pi brought, as install.sh finds it.
 node="$(command -v node || echo "$HOME/.local/share/pi-node/current/bin/node")"
-"$node" ~/shed/setup/lib/configure.mjs prime-models ~/shed/setup/prime/models.json ~/.prime/agent/models.json >/dev/null
-"$node" ~/shed/setup/lib/configure.mjs pi-models ~/shed/setup/pi/models.json ~/.pi/agent/models.json >/dev/null
-"$node" ~/shed/setup/lib/configure.mjs bridge-defaults ~/shed/setup/bridge-defaults.json ~/.agent-remote/config.json >/dev/null
+"$node" "$src/setup/lib/configure.mjs" prime-models "$src/setup/prime/models.json" ~/.prime/agent/models.json >/dev/null
+"$node" "$src/setup/lib/configure.mjs" pi-models "$src/setup/pi/models.json" ~/.pi/agent/models.json >/dev/null
+"$node" "$src/setup/lib/configure.mjs" bridge-defaults "$src/setup/bridge-defaults.json" ~/.agent-remote/config.json >/dev/null
 # The same code signed again differs only in its signing time: compare the code's hash.
 cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
 new="$(cdhash target/release/agent-remote)"
@@ -96,8 +99,16 @@ if [ -n "$new" ] && [ "$new" = "$(cdhash ~/.agent-remote/bin/agent-remote)" ]; t
 else
   install -m 755 target/release/agent-remote ~/.agent-remote/bin/agent-remote
   launchctl kickstart -k "gui/$(id -u)/dev.agentremote.bridge"
-  for _ in $(seq 20); do curl -fsS http://127.0.0.1:7878/health >/dev/null 2>&1 && break; sleep 0.5; done
-  curl -fsS http://127.0.0.1:7878/health >/dev/null && echo "  bridge updated and restarted"
+  # The port its service was registered with (install.sh's AGENT_REMOTE_PORT on that Mac).
+  port="$(plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/dev.agentremote.bridge.plist 2>/dev/null | sed -n 's/.*"--port","\([0-9]*\)".*/\1/p' || true)"
+  port="${port:-7878}"
+  for _ in $(seq 20); do curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break; sleep 0.5; done
+  if curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
+    echo "  bridge updated and restarted"
+  else
+    echo "  bridge updated, but it doesn't answer on port $port: see ~/.agent-remote/logs/bridge.log on that Mac" >&2
+    exit 1
+  fi
 fi
 REMOTE
 mkdir -p "$(dirname "$STATE")"
