@@ -631,7 +631,7 @@ impl crate::session::App {
         for session in self.sessions.read().await.clone() {
             let root = match session.backend {
                 crate::session::Backend::Pi => session.pid().await,
-                crate::session::Backend::Prime => session.state.lock().await.worker_pid,
+                crate::session::Backend::Prime => session.state.lock().await.worker_pid(),
                 // A Pi subagent runs inside its parent's process, so its ports are the parent's.
                 crate::session::Backend::PiSubagent => continue,
             };

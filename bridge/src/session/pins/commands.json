@@ -1,0 +1,862 @@
+{
+  "deepseek": {
+    "clear the goal": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have goals",
+      "refreshed": false
+    },
+    "compact": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with blank instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {
+            "customInstructions": "keep the plan"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "new session": {
+      "answers": {
+        "cancelled": false
+      },
+      "asked": [
+        {
+          "command": "new_session",
+          "fields": {}
+        },
+        {
+          "command": "get_messages",
+          "fields": {}
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "items": 1,
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "rename": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "set_session_name",
+          "fields": {
+            "name": "Plan the release"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "Plan the release"
+      },
+      "refreshed": true
+    },
+    "rename to nothing": {
+      "asked": [],
+      "changed": {},
+      "fails": "a session name can't be empty",
+      "refreshed": false
+    },
+    "restart the kernel": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have a Python kernel",
+      "refreshed": false
+    },
+    "send": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send while it works": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send, and the agent is already streaming": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "stop the tool": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    }
+  },
+  "pi": {
+    "clear the goal": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have goals",
+      "refreshed": false
+    },
+    "compact": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with blank instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {
+            "customInstructions": "keep the plan"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "new session": {
+      "answers": {
+        "cancelled": false
+      },
+      "asked": [
+        {
+          "command": "new_session",
+          "fields": {}
+        },
+        {
+          "command": "get_messages",
+          "fields": {}
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "items": 1,
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "rename": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "set_session_name",
+          "fields": {
+            "name": "Plan the release"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "Plan the release"
+      },
+      "refreshed": true
+    },
+    "rename to nothing": {
+      "asked": [],
+      "changed": {},
+      "fails": "a session name can't be empty",
+      "refreshed": false
+    },
+    "restart the kernel": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have a Python kernel",
+      "refreshed": false
+    },
+    "send": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send while it works": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send, and the agent is already streaming": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "stop the tool": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    }
+  },
+  "pi, stopped": {
+    "clear the goal": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have goals",
+      "refreshed": false
+    },
+    "compact": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "compact with blank instructions": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "compact with instructions": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {
+            "customInstructions": "keep the plan"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "new session": {
+      "asked": [
+        {
+          "command": "new_session",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "rename": {
+      "answers": null,
+      "asked": [],
+      "changed": {
+        "named": true,
+        "summary.title": "Plan the release"
+      },
+      "refreshed": false
+    },
+    "rename to nothing": {
+      "asked": [],
+      "changed": {},
+      "fails": "a session name can't be empty",
+      "refreshed": false
+    },
+    "restart the kernel": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have a Python kernel",
+      "refreshed": false
+    },
+    "send": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "send while it works": {
+      "asked": [
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "send, and the agent is already streaming": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "stop the tool": {
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    }
+  },
+  "prime": {
+    "clear the goal": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "/goal clear",
+            "streamingBehavior": "steer"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "/compact",
+            "streamingBehavior": "followUp"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with blank instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "/compact",
+            "streamingBehavior": "followUp"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "compact with instructions": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "/compact keep the plan",
+            "streamingBehavior": "followUp"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "new session": {
+      "answers": {
+        "cancelled": false
+      },
+      "asked": [
+        {
+          "command": "new_session",
+          "fields": {}
+        },
+        {
+          "command": "get_messages",
+          "fields": {}
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "items": 1,
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "rename": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "set_session_name",
+          "fields": {
+            "name": "Plan the release"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "Plan the release"
+      },
+      "refreshed": true
+    },
+    "rename to nothing": {
+      "asked": [],
+      "changed": {},
+      "fails": "a session name can't be empty",
+      "refreshed": false
+    },
+    "restart the kernel": {
+      "asked": [],
+      "changed": {},
+      "fails": "Prime hasn't reported this session's file yet",
+      "refreshed": false
+    },
+    "send": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on",
+            "queueIfBusy": true,
+            "streamingBehavior": "steer"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send while it works": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on",
+            "queueIfBusy": true,
+            "streamingBehavior": "steer"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
+    "send, and the agent is already streaming": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on",
+            "queueIfBusy": true,
+            "streamingBehavior": "steer"
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "fails": "Agent is already streaming",
+      "refreshed": true
+    },
+    "stop the tool": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort_and_send_queued",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    }
+  },
+  "subagent": {
+    "clear the goal": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have goals",
+      "refreshed": false
+    },
+    "compact": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "compact with blank instructions": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "compact with instructions": {
+      "asked": [
+        {
+          "command": "compact",
+          "fields": {
+            "customInstructions": "keep the plan"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "new session": {
+      "asked": [
+        {
+          "command": "new_session",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "rename": {
+      "asked": [
+        {
+          "command": "set_session_name",
+          "fields": {
+            "name": "Plan the release"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "rename to nothing": {
+      "asked": [],
+      "changed": {},
+      "fails": "a session name can't be empty",
+      "refreshed": false
+    },
+    "restart the kernel": {
+      "asked": [],
+      "changed": {},
+      "fails": "Only Prime sessions have a Python kernel",
+      "refreshed": false
+    },
+    "send": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "send while it works": {
+      "asked": [
+        {
+          "command": "steer",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "send, and the agent is already streaming": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "message": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "stop the tool": {
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    }
+  }
+}

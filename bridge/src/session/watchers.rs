@@ -60,7 +60,8 @@ fn tool_code(item: &crate::protocol::Item) -> String {
 /// id in a Pi session file's name (`<time>_<id>.jsonl`).
 fn agent_session_id(agent: AgentKind, st: &SessionState) -> Option<String> {
     if agent == AgentKind::Prime {
-        return st.prime_session.clone();
+        let conversation = st.prime().and_then(|prime| prime.conversation.as_ref());
+        return conversation.map(|conversation| conversation.as_str().to_string());
     }
     let file = st.session_file.as_deref()?;
     let name = std::path::Path::new(file).file_stem()?.to_str()?;
@@ -253,8 +254,9 @@ impl App {
                 }
                 let (jobs, waiting) = match session.backend {
                     Backend::Pi => crate::jobs::pi_running(&session.id, tree.as_ref()),
-                    _ => {
-                        let worker = session.state.lock().await.worker_pid;
+                    Backend::PiSubagent => continue,
+                    Backend::Prime => {
+                        let worker = session.state.lock().await.worker_pid();
                         let (Some(worker), Some(tree)) = (worker, &tree) else {
                             continue;
                         };
@@ -284,7 +286,8 @@ impl App {
     ) {
         use crate::stall::{Step, Target};
         let mut st = session.state.lock().await;
-        let tool = st.tools.zip(st.worker_pid.and_then(|w| tree.kernel_of(w)));
+        let tools = st.prime().and_then(|prime| prime.tools);
+        let tool = tools.zip(st.worker_pid().and_then(|w| tree.kernel_of(w)));
         let (target, age) = match (tool, waiting) {
             (Some(((calls, since), kernel)), _) => (
                 Some(Target {

@@ -8,7 +8,7 @@ use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 use super::{limit_key, App, Backend, Session, SessionState};
-use crate::agent_wire::{self, AgentState, AgentStats};
+use crate::agent_wire::{self, AgentState, AgentStats, ConversationId};
 use crate::protocol::{ModelInfo, SessionStatus};
 
 const ALL_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -41,7 +41,7 @@ impl App {
         let levels_for = {
             let mut st = session.state.lock().await;
             st.refresh_scheduled = false;
-            if session.backend == Backend::Pi && st.child.is_none() {
+            if st.stopped() {
                 return Ok(());
             }
             st.levels_for.clone()
@@ -98,11 +98,12 @@ impl App {
         }
         if let Some(stats) = stats {
             if let Some(own) = stats.cost {
-                st.summary.cost = if session.backend == Backend::Prime {
-                    let file = stats.session_file.or_else(|| st.session_file.clone());
-                    self.prime_cost(file.as_deref(), own, st.summary.cost)
-                } else {
-                    own
+                st.summary.cost = match session.backend {
+                    Backend::Prime => {
+                        let file = stats.session_file.or_else(|| st.session_file.clone());
+                        self.prime_cost(file.as_deref(), own, st.summary.cost)
+                    }
+                    Backend::Pi | Backend::PiSubagent => own,
                 }
                 .max(st.gateway_cost);
             }
@@ -174,13 +175,13 @@ impl App {
 
     /// A window chosen before the session's `sessionId` was known (or by a bridge that saved it under the
     /// `activeSessionId`) moves to it, so it survives the session reopening.
-    pub(super) fn rekey_limit(&self, id: &str, key: &str) {
+    pub(super) fn rekey_limit(&self, id: &str, key: &ConversationId) {
         let limits = {
             let mut limits = self.limits.lock().unwrap();
             let Some(limit) = limits.remove(id) else {
                 return;
             };
-            limits.entry(key.to_string()).or_insert(limit);
+            limits.entry(key.as_str().to_string()).or_insert(limit);
             limits.clone()
         };
         if let Err(e) = self.store.save_limits(&limits) {
@@ -226,12 +227,12 @@ impl App {
         self.store.save_limits(&limits)?;
         let mut st = session.state.lock().await;
         st.summary.context_limit = limit;
-        let running = !(session.backend == Backend::Pi && st.child.is_none());
-        if !running {
+        let stopped = st.stopped();
+        if stopped {
             self.publish_summary(&st);
         }
         drop(st);
-        if running {
+        if !stopped {
             self.refresh(session).await?;
         }
         Ok(())

@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
-
-use super::{first_line, new_summary, now_ms, App, Backend, Session, SessionState};
+use super::{first_line, new_summary, now_ms, App, Backend, BackendState, Session, SessionState};
 use crate::agent_wire::{DshSubagent, PiSubagentCall, PiSubagents};
 use crate::protocol::{ContextUsage, SessionKind, SessionStatus};
 use crate::rpc::AgentKind;
@@ -51,13 +49,13 @@ impl App {
                         new_summary(&id, AgentKind::Pi, SessionKind::Subagent, &parent.cwd);
                     summary.parent_id = Some(parent.id.clone());
                     summary.read_only = true;
-                    let session = Arc::new(Session {
-                        id: id.clone(),
-                        agent: AgentKind::Pi,
-                        backend: Backend::PiSubagent,
-                        cwd: parent.cwd.clone(),
-                        state: Mutex::new(SessionState::new(summary, None)),
-                    });
+                    let state = SessionState::new(summary, None, BackendState::subagent());
+                    let session = Arc::new(Session::new(
+                        id.clone(),
+                        AgentKind::Pi,
+                        parent.cwd.clone(),
+                        state,
+                    ));
                     self.sessions.write().await.push(session.clone());
                     session
                 }
@@ -95,9 +93,8 @@ impl App {
                 window,
                 percent: run.context_tokens.map(|t| t as f64 * 100.0 / window as f64),
             });
-            if run.messages.len() != st.sent_messages || done {
+            if st.note_sent(run.messages.len()) || done {
                 st.transcript.reset(&run.messages);
-                st.sent_messages = run.messages.len();
                 self.send_snapshot(&session.id, &mut st);
             }
             self.publish_summary(&st);
@@ -130,13 +127,13 @@ impl App {
                     new_summary(&id, AgentKind::Deepseek, SessionKind::Subagent, &root.cwd);
                 summary.parent_id = Some(parent_id);
                 summary.read_only = true;
-                let session = Arc::new(Session {
-                    id: id.clone(),
-                    agent: AgentKind::Deepseek,
-                    backend: Backend::PiSubagent,
-                    cwd: root.cwd.clone(),
-                    state: Mutex::new(SessionState::new(summary, None)),
-                });
+                let state = SessionState::new(summary, None, BackendState::subagent());
+                let session = Arc::new(Session::new(
+                    id.clone(),
+                    AgentKind::Deepseek,
+                    root.cwd.clone(),
+                    state,
+                ));
                 self.sessions.write().await.push(session.clone());
                 session
             }
@@ -156,9 +153,8 @@ impl App {
                 Some(model) => Some(model.info(root_model.as_ref().and_then(|m| m.context_window))),
                 None => root_model,
             };
-            if child.messages.len() != st.sent_messages || child.status != SessionStatus::Running {
+            if st.note_sent(child.messages.len()) || child.status != SessionStatus::Running {
                 st.transcript.reset(&child.messages);
-                st.sent_messages = child.messages.len();
                 self.send_snapshot(&session.id, &mut st);
             }
             self.publish_summary(&st);
