@@ -20,6 +20,7 @@ Shed lets you run coding agents on your Macs and drive them from anywhere. It wo
 - **Subagents and background commands.** Child sessions show under their parent and open like any other. Shell commands an agent leaves running are listed with live output and can be cancelled.
 - **Context and cost at a glance.** A gauge for the context window, and the session's spend so far, as Open Codex measures it.
 - **Runaway protection.** The bridge stops a reply that has degenerated into whitespace or the same few characters repeated, and tells the agent why.
+- **Web search and page reading.** Every agent can search the web and read any page as Markdown through the bridge's provider (Firecrawl), each in its own way.
 - **On the iPhone,** a Live Activity follows a running session from the Lock Screen and the Dynamic Island, with what it spends a minute.
 - **One set of models for every agent.** Every agent offers exactly the models Open Codex serves: API keys and a ChatGPT subscription set up once there show up as separate choices in all of them.
 
@@ -53,7 +54,7 @@ git clone https://github.com/fontanierh/shed.git && cd shed
 setup/install.sh
 ```
 
-Run in a terminal, it walks through each part and asks for what is missing. Keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`). The script:
+Run in a terminal, it walks through each part and asks for what is missing. Keys can also come from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, and `FIRECRAWL_API_KEY` for [web search](#web-search-and-page-reading)). The script:
 
 - **Open Codex.** Uses the one already on the Mac as it is, or installs the release Shed is tested with, and applies Shed's fixes that Open Codex hasn't released yet (`setup/opencodex/`). It runs as Open Codex's own login service. Each API key you give goes to Open Codex alone. Then it offers to sign in to a ChatGPT subscription (`ocx account login openai`) in the browser. The OpenAI key and the subscription show as separate models: `openai-apikey/…` is billed to the key, and bare ids such as `gpt-6.1-terra` go to the subscription. Claude comes from the Anthropic API key (`anthropic-apikey/…`) only: a Claude subscription is meant for Anthropic's own apps, so the bridge leaves out any Claude subscription signed in to Open Codex.
 - **Agents.** Installs or updates Pi, Prime Agent and DeepSeek Harness, makes GPT-6.1 Terra the default where none is set, and installs Pi's subagent and background-jobs extensions.
@@ -140,6 +141,22 @@ To keep sites on the Mac, turn publishing off in `~/.agent-remote/config.json`:
 ```
 
 A server an agent starts detached (`nohup`, a daemon) stays its session's site: the bridge remembers whose it was, and one it never saw start goes to the session working in the folder the server runs in.
+
+## Web search and page reading
+
+Pi, Prime and DeepSeek Harness have no web search of their own, so the bridge gives them one, through [Firecrawl](https://firecrawl.dev) for now. The key stays in the bridge's config; the agents never handle it:
+
+```json
+"web": { "provider": "firecrawl", "firecrawlApiKey": "fc-…" }
+```
+
+`install.sh` sets it from `FIRECRAWL_API_KEY`. Each agent reaches it the way that suits it, and the guide the bridge gives every session tells it how:
+
+- **Pi**, and any other agent: the `shed-web` command (`shed-web search "…"`, `shed-web fetch <url>`; `shed-web --help`). The bridge links it next to itself in `~/.agent-remote/bin` and puts that folder on its agents' `PATH`.
+- **Prime:** the `shed_web` Python module, for the code it writes (`from shed_web import search, fetch`). The bridge writes it to `~/.agent-remote/python`, on Prime's `PYTHONPATH`.
+- **DeepSeek Harness:** its own `web_search` and `web_fetch` tools, which Shed's dsh plugin points at the same provider.
+
+Pages come back as Markdown; any other Firecrawl format (HTML, links, a screenshot, a summary, structured extraction) can be asked for. A page over 20,000 characters is saved to a file and only its beginning shown, and HTML and screenshots always go to files. Each call is logged with the credits it used in `~/.agent-remote/logs/web.log`. It is a convenience: agents still fetch raw sources with plain requests and drive a local browser for real browsing.
 
 ## Uninstall
 

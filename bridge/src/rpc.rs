@@ -137,7 +137,10 @@ fn command_line(opts: &SpawnOptions) -> Result<(String, Vec<String>)> {
     if let Some(thinking) = &opts.thinking {
         args.extend(["--thinking".into(), thinking.clone()]);
     }
-    args.extend(["--append-system-prompt".into(), crate::media::GUIDE.into()]);
+    args.extend([
+        "--append-system-prompt".into(),
+        crate::guide::text(opts.agent),
+    ]);
     if let Some(resume) = &opts.resume {
         let flag = if opts.agent == AgentKind::Pi {
             "--session"
@@ -164,6 +167,14 @@ impl RpcChild {
                     .then_some(("DSH_PERMISSION_MODE", "danger-full-access")),
             )
             .env(crate::opencodex::KEY_ENV, crate::opencodex::KEY)
+            // `shed-web`, the web command the guide tells the agents about.
+            .env(
+                "PATH",
+                crate::web::prepend_path(
+                    &crate::web::bin_dir(),
+                    &std::env::var("PATH").unwrap_or_default(),
+                ),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

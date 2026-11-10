@@ -6,6 +6,7 @@
 //   bridge-defaults <vendored> <file>   set the bridge's per-model default context windows, keeping its token
 //   default-model <file> <provider> <id> <thinking>   set the default model only where none is set yet
 //   opencodex <file> on|off          whether the bridge gives every agent Open Codex's models (off: their own)
+//   web <file>                       the agents' web provider: FIRECRAWL_API_KEY from the environment
 import fs from "node:fs";
 import path from "node:path";
 
@@ -106,6 +107,22 @@ switch (step) {
       write(file, config);
     }
     console.log(state === "off" ? `  the agents keep their own providers (opencodex: false in ${file})` : `  the agents go through Open Codex`);
+    break;
+  }
+  case "web": {
+    // The agents' web search and page reading: FIRECRAWL_API_KEY from the environment, else what is set already.
+    const [file] = args;
+    const config = read(file);
+    const key = process.env.FIRECRAWL_API_KEY?.trim();
+    if (key && config.web?.firecrawlApiKey !== key) {
+      config.web = { ...config.web, provider: "firecrawl", firecrawlApiKey: key };
+      write(file, config);
+    }
+    console.log(
+      config.web?.firecrawlApiKey
+        ? "  web search and page reading: Firecrawl"
+        : "  web search and page reading: off (set FIRECRAWL_API_KEY and run this again to turn it on)",
+    );
     break;
   }
   default:

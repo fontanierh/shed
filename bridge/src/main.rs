@@ -5,6 +5,7 @@ mod dsh;
 mod files;
 mod git;
 mod github;
+mod guide;
 mod history;
 mod jobs;
 mod media;
@@ -19,6 +20,7 @@ mod sites;
 mod stall;
 mod store;
 mod transcript;
+mod web;
 
 use anyhow::{bail, Result};
 use axum::extract::DefaultBodyLimit;
@@ -35,6 +37,30 @@ fn usage() -> ! {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // `shed-web …` (this binary under that name) or `agent-remote web …`: the agents' web command.
+    let argv: Vec<String> = std::env::args().collect();
+    let called = argv
+        .first()
+        .and_then(|a| a.rsplit('/').next())
+        .unwrap_or_default();
+    if called == "shed-web" {
+        web::main(argv[1..].to_vec()).await;
+    }
+    if argv.get(1).map(String::as_str) == Some("web") {
+        web::main(argv[2..].to_vec()).await;
+    }
+    // What an agent is told about Shed, as its sessions here get it.
+    if argv.get(1).map(String::as_str) == Some("guide") {
+        let agent = match argv.get(2).map(String::as_str) {
+            Some("pi") => rpc::AgentKind::Pi,
+            Some("prime") => rpc::AgentKind::Prime,
+            Some("deepseek" | "dsh") => rpc::AgentKind::Deepseek,
+            _ => bail!("usage: agent-remote guide pi|prime|deepseek"),
+        };
+        println!("{}", guide::text(agent));
+        return Ok(());
+    }
+
     let mut host = "127.0.0.1".to_string();
     let mut port: u16 = 7878;
     let mut args = std::env::args().skip(1);
@@ -52,6 +78,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    web::install();
     let app = session::App::new(store::Store::open()?)?;
     let router = Router::new()
         .route("/ws", get(server::ws_handler))

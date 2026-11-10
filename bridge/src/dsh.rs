@@ -22,6 +22,8 @@ use crate::rpc::{ChildOutput, SpawnOptions};
 
 /// The plugin and the profile layer that loads it, kept with the bridge so both always match.
 const PLUGIN: &str = include_str!("../dsh/shed.mjs");
+/// dsh's web_search and web_fetch through Shed's web provider, loaded when one is set up here.
+const WEB_PLUGIN: &str = include_str!("../dsh/shed-web.mjs");
 pub const PROFILE: &str = "shed";
 
 type Pending = oneshot::Sender<Result<Value, String>>;
@@ -76,16 +78,31 @@ pub fn install_profile() -> Result<PathBuf> {
     let plugin = dir.join("shed.mjs");
     let persona = format!(
         "You are a coding agent powered by the {{{{model}}}} model.\n\n{}",
-        crate::media::GUIDE
+        crate::guide::text(crate::rpc::AgentKind::Deepseek)
     );
     let layer = format!(
         "- id: sdk-jsonrpc-server\n  disabled: true\n- id: system-prompt\n  config:\n    personaPrefix: {}\n- insert:\n    - id: tool-ask-user\n      name: '@deepseek-ai/dsh-tool-ask-user'\n      config:\n        mode: timed\n    - id: shed\n      name: {}\n      inject: [sdkAppStartup]\n",
         json!(persona),
         json!(plugin.to_string_lossy()),
     );
-    let layer = layer + &crate::opencodex::dsh_layer().unwrap_or_default();
+    let layer =
+        layer + &web_layer(&dir, &write)? + &crate::opencodex::dsh_layer().unwrap_or_default();
     write("shed.patch.yml", &layer)?;
     Ok(dir.join("shed.patch.yml"))
+}
+
+/// With a web provider set up here, the plugin that registers it in dsh's web service, and the service pinned to it
+/// for both search and fetch. Without one, dsh's own defaults stay.
+fn web_layer(dir: &std::path::Path, write: &impl Fn(&str, &str) -> Result<()>) -> Result<String> {
+    if !crate::web::configured() {
+        return Ok(String::new());
+    }
+    write("shed-web.mjs", WEB_PLUGIN)?;
+    Ok(format!(
+        "- id: web\n  config:\n    searchProvider: shed\n    fetchProvider: shed\n- insert:\n    - id: shed-web\n      name: {}\n      config:\n        command: {}\n",
+        json!(dir.join("shed-web.mjs").to_string_lossy()),
+        json!(crate::web::bin_dir().join("shed-web").to_string_lossy()),
+    ))
 }
 
 /// The models the `shed` profile has set up, as `[{provider, id, name}]`, for choosing one before a session starts:

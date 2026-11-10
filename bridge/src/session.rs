@@ -606,7 +606,7 @@ impl App {
         // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
         // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
         let guide = self.store.dir().join("guide.md");
-        let _ = std::fs::write(&guide, crate::media::GUIDE);
+        let _ = std::fs::write(&guide, crate::guide::text(crate::rpc::AgentKind::Pi));
         let env = vec![
             (
                 "AGENT_REMOTE_JOBS_DIR".to_string(),

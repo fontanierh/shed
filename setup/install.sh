@@ -7,7 +7,7 @@
 #   setup/install.sh [--no-opencodex] [--no-service] [--no-app] [--no-tailscale] [--no-iphone]
 #
 #   API keys are read from OPENAI_API_KEY, ANTHROPIC_API_KEY, MISTRAL_API_KEY, DEEPSEEK_API_KEY, GEMINI_API_KEY and
-#   OPENROUTER_API_KEY, or asked for when run in a terminal. SHED_TEAM_ID (and optionally SHED_BUNDLE_ID) builds
+#   OPENROUTER_API_KEY, or asked for when run in a terminal; FIRECRAWL_API_KEY turns on web search for the agents. SHED_TEAM_ID (and optionally SHED_BUNDLE_ID) builds
 #   the iPhone app onto a connected iPhone.
 #
 #   --no-opencodex  give Pi and Prime the keys directly instead of going through Open Codex: the OpenAI, Anthropic,
@@ -201,6 +201,8 @@ fi
 configure prime-models "$ROOT/setup/prime/models.json" "$HOME/.prime/agent/models.json"
 configure pi-models "$ROOT/setup/pi/models.json" "$HOME/.pi/agent/models.json"
 configure bridge-defaults "$ROOT/setup/bridge-defaults.json" "$HOME/.agent-remote/config.json"
+# Web search and page reading for every agent, through the bridge's shed-web command.
+configure web "$HOME/.agent-remote/config.json"
 # Pi's subagent extension (from Pi's examples) and its agents, which inherit the parent's model, plus background
 # commands like Prime's. Both load in Pi's own TUI too.
 mkdir -p "$HOME/.pi/agent/extensions" "$HOME/.pi/agent/agents" "$HOME/.pi/agent/prompts"
