@@ -5,10 +5,6 @@ struct SessionView: View {
     let store: SessionStore
     let session: SessionSummary
     @State private var renaming: SessionSummary?
-    @State private var showingJobs = false
-    @State private var restartingKernel = false
-    @State private var showingSubagents = false
-    @State private var showingSites = false
 
     /// Where the session stands once idle, so a quiet session is never a mystery: the commands and subagents that
     /// will wake it, each opening its list, or plainly that nothing will.
@@ -59,8 +55,6 @@ struct SessionView: View {
         return ReaderAction { store.restartKernel() }
     }
 
-    private var hasJobs: Bool { session.hasBackgroundCommands }
-
     /// Connected and waiting for the conversation: the dither rain plays.
     private var raining: Bool { rains && !reduceMotion && store.connection == .connected && !store.transcriptLoaded && !ended }
     /// The conversation opens out of the rain: on the phone's stage, and on the Mac.
@@ -88,6 +82,11 @@ struct SessionView: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.beamStage) private var beamStage
+    // The phone's sheets, and its question before restarting the kernel. The Mac has these in its header.
+    @State private var showingJobs = false
+    @State private var showingSubagents = false
+    @State private var showingSites = false
+    @State private var restartingKernel = false
     #else
     private let beamStage = false
     /// The details open beside the conversation.
@@ -169,6 +168,22 @@ struct SessionView: View {
             .environment(\.subagents, SubagentLinks(store: store, parent: session.id))
     }
 
+    /// The conversation, out of sight while it materialises.
+    private var transcript: some View {
+        TranscriptView(
+            items: store.transcript,
+            session: session,
+            // The rain says it is loading; the line stays for a connection that isn't there.
+            pending: raining ? "" : pendingTranscript,
+            idle: idleLines,
+            openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
+            earlier: store.earlier,
+            loadingEarlier: store.loadingEarlier,
+            loadEarlier: { await store.loadEarlier() }
+        )
+        .opacity(veiled ? 0 : 1)
+    }
+
     private var column: some View {
         VStack(spacing: 0) {
             #if os(macOS)
@@ -178,33 +193,12 @@ struct SessionView: View {
             // changing identity as it arrives doesn't start the effect over.
             reading(ZStack {
             #if os(iOS)
-            TranscriptView(
-                items: store.transcript,
-                session: session,
-                pending: raining ? "" : pendingTranscript,
-                idle: idleLines,
-                openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
-                earlier: store.earlier,
-                loadingEarlier: store.loadingEarlier,
-                loadEarlier: { await store.loadEarlier() }
-            )
-            .opacity(veiled ? 0 : 1)
+            transcript
             .id(session.id + (store.transcriptLoaded ? "" : " waiting"))
             .transition(beamStage ? .identity : .opacity)
             .animation(beamStage ? nil : .easeOut(duration: 0.35), value: store.transcriptLoaded)
             #else
-            TranscriptView(
-                items: store.transcript,
-                session: session,
-                // The rain says it is loading; the line stays for a connection that isn't there.
-                pending: raining ? "" : pendingTranscript,
-                idle: idleLines,
-                openParent: session.parentId.map { id in { @MainActor in store.select(id) } },
-                earlier: store.earlier,
-                loadingEarlier: store.loadingEarlier,
-                loadEarlier: { await store.loadEarlier() }
-            )
-            .opacity(veiled ? 0 : 1)
+            transcript
             .environment(\.openSheet, SheetOpener { show($0) })
             .environment(\.detailSelection, detail)
             // Each session opens at its end, following new output. The rain brings the conversation in; a fade as well
@@ -244,8 +238,8 @@ struct SessionView: View {
             // Under the session's header: inside a session, a dropped connection otherwise just looks like an agent
             // that stopped answering.
             .safeAreaInset(edge: .top, spacing: 0) { ConnectionBar(store: store, sessionId: session.id) }
-            #endif
             .confirmRestartKernel($restartingKernel) { store.restartKernel() }
+            #endif
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 8) {
                     if let stuck = session.stuck {
@@ -308,7 +302,7 @@ struct SessionView: View {
     /// The phone opens the lists from the idle lines; the Mac has both in its header.
     private var openJobs: (() -> Void)? {
         #if os(iOS)
-        hasJobs ? { showingJobs = true } : nil
+        session.hasBackgroundCommands ? { showingJobs = true } : nil
         #else
         nil
         #endif
