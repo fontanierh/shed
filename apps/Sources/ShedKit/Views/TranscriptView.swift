@@ -548,6 +548,8 @@ struct StepNode: View {
         switch item.status {
         case .error: return Palette.danger
         case .done: return Palette.ice
+        // A state the app has no name for is not shown as running.
+        case .unknown: return Palette.moon.opacity(0.5)
         default: return Palette.accent
         }
     }
@@ -559,6 +561,7 @@ struct StepNode: View {
             switch item.status {
             case .error: Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).transition(.scale)
             case .done: Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).transition(.scale)
+            case .unknown: Image(systemName: "questionmark").font(.system(size: 9, weight: .bold)).transition(.scale)
             default: Ember(size: 6)
             }
         }
