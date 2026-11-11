@@ -16,9 +16,9 @@ extension SessionStore {
         errorMessage = error.localizedDescription
     }
 
-    /// Asks a computer's bridge for `op`. Every request goes this way but two: `send`, which looks at the transcript
-    /// to tell whether a message arrived, and the `detach` of a session being left, which sent late could detach a
-    /// session opened again since. Cut off by a dropped connection, an operation that changes something is sent
+    /// Asks a computer's bridge for `op`. Every request goes this way but two: a message, which goes through
+    /// `deliver` and is sent again under its id, and the `detach` of a session being left, which sent late could
+    /// detach a session opened again since. Cut off by a dropped connection, an operation that changes something is sent
     /// again once the connection is back, when it can't have arrived or when doing it twice is harmless. If it
     /// can't be, or is cut off again, it throws `Unconfirmed` unless the operation is one to repeat. A read is never
     /// sent again: whoever asked gets the `ConnectionLost`.
@@ -96,7 +96,30 @@ extension SessionStore {
         sessions[summary.id] = summary
         select(summary.id)
         if let firstMessage, !firstMessage.isEmpty {
-            do { try await call(env, .send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString)) } catch { report(error) }
+            do {
+                try await deliver(.send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString), to: env)
+            } catch is ConnectionLost {
+                report(Unconfirmed())
+            } catch {
+                report(error)
+            }
+        }
+    }
+
+    /// Sends a message, the composer's or the first of a new session. Cut off by a dropped connection, it goes again
+    /// once the connection is back. A bridge that takes a message once per id is simply sent it again. An older one
+    /// would run it twice if it had arrived, so there `landed` says whether it did, and with nothing to tell by the
+    /// message is not sent again.
+    private func deliver(_ message: ClientOp, to env: String, landed: (() async -> Bool)? = nil) async throws {
+        do {
+            try await client(env).call(message)
+        } catch let lost as ConnectionLost {
+            guard await reconnected(env) else { throw lost }
+            if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
+                guard let landed else { throw lost }
+                if await landed() { return }
+            }
+            try await client(env).call(message)
         }
     }
 
@@ -110,21 +133,12 @@ extension SessionStore {
         let message = ClientOp.send(sessionId: raw, text: text, sendId: UUID().uuidString)
         Task {
             do {
-                do {
-                    try await client(env).call(message)
-                } catch let lost as ConnectionLost {
-                    // Cut off by a dropped connection: send it again once back. A bridge that takes a message once per
-                    // id is simply sent it again. An older one would run it twice, so there the session's transcript,
-                    // sent afresh on reconnecting, says whether it arrived after all.
-                    guard await reconnected(env) else { throw lost }
-                    if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
-                        try? await Task.sleep(for: .seconds(2))
-                        let queued = sessions[id]?.queue
-                        let landed = busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
-                                          : sending[id]?.contains { $0.id == local.id } != true
-                        if landed { return }
-                    }
-                    try await client(env).call(message)
+                try await deliver(message, to: env) { [self] in
+                    // The session's transcript, sent afresh on reconnecting, says whether it arrived after all.
+                    try? await Task.sleep(for: .seconds(2))
+                    let queued = sessions[id]?.queue
+                    return busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
+                                : sending[id]?.contains { $0.id == local.id } != true
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
                 try? await Task.sleep(for: .seconds(60))

@@ -86,7 +86,21 @@ final class CutOffRequestTests: XCTestCase {
         XCTAssertEqual(bridge.sent, [.createSession])
     }
 
-    @MainActor func testAFirstMessageThatMayHaveArrivedIsReported() async throws {
+    /// The bridge tells a repeat by its id, so the first message of a new session goes again like any other.
+    @MainActor func testAFirstMessageThatMayHaveArrivedIsSentAgainUnderItsIdToABridgeThatTakesIds() async throws {
+        let bridge = ScriptedBridge([.createSession: [.reply(try created("new"))], .send: [.lost(maybeDelivered: true)]])
+        let store = store(bridge)
+        store.apply(.sessions([summary("s")], bridge: 2), from: "one")
+        try await store.createSession(in: "one", agent: .pi, cwd: "/tmp", model: nil, thinking: nil, firstMessage: "Hello")
+        XCTAssertNil(store.errorMessage)
+        XCTAssertEqual(bridge.count(.send), 2)
+        let ids = sendIds(bridge)
+        XCTAssertNotNil(ids[0])
+        XCTAssertEqual(ids[0], ids[1])
+    }
+
+    /// An older bridge would run it twice, and a session this new has no transcript to tell whether it arrived.
+    @MainActor func testAFirstMessageThatMayHaveArrivedIsReportedOnAnOlderBridge() async throws {
         let bridge = ScriptedBridge([.createSession: [.reply(try created("new"))], .send: [.lost(maybeDelivered: true)]])
         let store = store(bridge)
         try await store.createSession(in: "one", agent: .pi, cwd: "/tmp", model: nil, thinking: nil, firstMessage: "Hello")
