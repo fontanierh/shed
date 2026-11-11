@@ -36,18 +36,6 @@ pub enum DaemonEvent {
     Disconnected(String),
 }
 
-/// The daemon answered a command and said no, as opposed to not being reachable.
-#[derive(Debug)]
-pub struct Refused(pub String);
-
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Refused {}
-
 pub struct PrimeDaemon {
     client_id: String,
     writer: tokio::sync::Mutex<Option<OwnedWriteHalf>>,
@@ -314,7 +302,7 @@ impl PrimeDaemon {
         }
         match asked.answer(QUICK).await {
             Ok(Ok(data)) => Ok(data),
-            Ok(Err(e)) => Err(anyhow::Error::new(Refused(e))),
+            Ok(Err(e)) => Err(anyhow::Error::new(crate::agent::Refused(e))),
             Err(Unanswered::Gone) => Err(anyhow!("Prime daemon disconnected")),
             Err(Unanswered::Late(after)) => Err(crate::rpc::unanswered(kind, after)),
         }
@@ -427,8 +415,8 @@ impl PrimeDaemon {
     }
 
     pub async fn attach(&self, active_session_id: &str) -> Result<Value> {
-        let fields = json!({ "capabilities": ["attach_snapshot", "event_sequence"] });
-        self.session(active_session_id, "attach", fields).await
+        let (kind, fields) = crate::ask::Ask::Attach.wire();
+        self.session(active_session_id, kind, fields).await
     }
 }
 

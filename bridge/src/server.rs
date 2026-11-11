@@ -14,8 +14,8 @@ use tokio::sync::{broadcast::error::RecvError, mpsc};
 
 use crate::ask::Ask;
 use crate::channel::Offer;
-use crate::protocol::{ClientMessage, ClientOp, ServerMessage};
-use crate::session::{attach_snapshot, App};
+use crate::protocol::{ClientMessage, ClientOp, Failure, ServerMessage};
+use crate::session::{attach_snapshot, App, Session};
 
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
@@ -58,12 +58,14 @@ fn reply(id: Option<String>, result: Result<Value>) -> Arc<str> {
             ok: true,
             data: Some(data),
             error: None,
+            code: None,
         },
         Err(e) => ServerMessage::Reply {
             id,
             ok: false,
             data: None,
             error: Some(e.to_string()),
+            code: e.downcast_ref::<Failure>().map(|failure| failure.code),
         },
     })
 }
@@ -82,10 +84,42 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
             }
         }
     });
+    // One message at a time, as `serve` takes them: a client that sends faster than they are taken waits.
+    let (texts, incoming) = mpsc::channel::<String>(1);
+    let reader = tokio::spawn(async move {
+        loop {
+            match stream.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if texts.send(text.as_str().to_string()).await.is_err() {
+                        break;
+                    }
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            }
+        }
+    });
+    serve(app, incoming, out).await;
+    reader.abort();
+    writer.abort();
+}
 
+/// An attach whose wait on the agent is over: who asked, for which session, and how it went.
+type Attached = (Option<String>, String, Result<Arc<Session>>);
+
+/// One client: what it sends arrives on `incoming`, and what it is sent leaves on `out`. It ends when `incoming`
+/// does.
+pub(crate) async fn serve(
+    app: Arc<App>,
+    mut incoming: mpsc::Receiver<String>,
+    out: mpsc::UnboundedSender<Arc<str>>,
+) {
     let mut hub = app.hub.subscribe();
     // Session id -> sequence number of the snapshot this client received.
     let mut attached: HashMap<String, u64> = HashMap::new();
+    // Attaches still waiting on their agent, by session: how many, so a detach meanwhile calls them all off.
+    let mut attaching: HashMap<String, usize> = HashMap::new();
+    let (attach_done, mut attaches) = mpsc::unbounded_channel::<Attached>();
     out.offer(encode(&ServerMessage::Sessions {
         sessions: app.summaries().await,
         bridge: crate::protocol::BRIDGE,
@@ -93,10 +127,34 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
 
     loop {
         tokio::select! {
-            incoming = stream.next() => match incoming {
-                Some(Ok(Message::Text(text))) => handle_text(&app, &out, &mut attached, text.as_str()).await,
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => {}
+            text = incoming.recv() => match text {
+                Some(text) => handle_text(&app, &out, &mut attached, &mut attaching, &attach_done, &text),
+                None => break,
+            },
+            Some((id, session_id, result)) = attaches.recv() => {
+                // The snapshot is taken here, on the loop that forwards events, so its sequence number and the
+                // events after it stay in order.
+                let wanted = match attaching.get_mut(&session_id) {
+                    Some(count) => {
+                        *count -= 1;
+                        if *count == 0 {
+                            attaching.remove(&session_id);
+                        }
+                        true
+                    }
+                    // Detached while it waited: answered, and not attached.
+                    None => false,
+                };
+                let result = match result {
+                    Ok(session) => {
+                        if wanted {
+                            send_snapshot(&out, &mut attached, &session).await;
+                        }
+                        Ok(Value::Null)
+                    }
+                    Err(e) => Err(e),
+                };
+                out.offer(reply(id, result));
             },
             envelope = hub.recv() => match envelope {
                 Ok(env) => match &env.session_id {
@@ -124,13 +182,12 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
             },
         }
     }
-    writer.abort();
 }
 
 async fn send_snapshot(
     out: &mpsc::UnboundedSender<Arc<str>>,
     attached: &mut HashMap<String, u64>,
-    session: &crate::session::Session,
+    session: &Session,
 ) {
     let (seq, summary, snapshot) = attach_snapshot(session).await;
     out.offer(encode(&ServerMessage::Session {
@@ -140,10 +197,12 @@ async fn send_snapshot(
     attached.insert(session.id.clone(), seq);
 }
 
-async fn handle_text(
+fn handle_text(
     app: &Arc<App>,
     out: &mpsc::UnboundedSender<Arc<str>>,
     attached: &mut HashMap<String, u64>,
+    attaching: &mut HashMap<String, usize>,
+    attach_done: &mpsc::UnboundedSender<Attached>,
     text: &str,
 ) {
     let message: ClientMessage = match serde_json::from_str(text) {
@@ -157,23 +216,23 @@ async fn handle_text(
         }
     };
     let id = message.id;
-    // Attach and detach run inline so the snapshot sequence stays ordered with forwarded events.
     match message.op {
+        // The wait on the agent (Prime's daemon may take its time) runs apart, so this client's other requests and
+        // its events go on meanwhile. `serve` takes the snapshot when the wait is over.
         ClientOp::Attach { session_id } => {
-            let result = match app.find(&session_id).await {
-                Ok(session) => match app.ensure_attached(&session).await {
-                    Ok(()) => {
-                        send_snapshot(out, attached, &session).await;
-                        Ok(Value::Null)
-                    }
+            *attaching.entry(session_id.clone()).or_default() += 1;
+            let (app, done) = (app.clone(), attach_done.clone());
+            tokio::spawn(async move {
+                let result = match app.find(&session_id).await {
+                    Ok(session) => app.ensure_attached(&session).await.map(|()| session),
                     Err(e) => Err(e),
-                },
-                Err(e) => Err(e),
-            };
-            out.offer(reply(id, result));
+                };
+                done.offer((id, session_id, result));
+            });
         }
         ClientOp::Detach { session_id } => {
             attached.remove(&session_id);
+            attaching.remove(&session_id);
             out.offer(reply(id, Ok(Value::Null)));
         }
         op => {

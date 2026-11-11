@@ -523,6 +523,43 @@ pub struct ClientMessage {
     pub op: ClientOp,
 }
 
+/// The failures an app acts on rather than only shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    /// The session is over and gone from the list: a subagent its agent has let go of.
+    SessionEnded,
+    /// The folder a session was to start in is not there.
+    NoSuchDirectory,
+}
+
+/// What an app from before the codes compares the sentence with. It can never be reworded.
+pub const SESSION_ENDED: &str = "session ended";
+
+/// A failure with a code, answered as that code and its sentence.
+#[derive(Debug)]
+pub struct Failure {
+    pub code: ErrorCode,
+    message: String,
+}
+
+impl Failure {
+    pub fn error(code: ErrorCode, message: impl Into<String>) -> anyhow::Error {
+        anyhow::Error::new(Failure {
+            code,
+            message: message.into(),
+        })
+    }
+}
+
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Failure {}
+
 /// What the bridge understands, sent with the list of sessions. It goes up when the bridge learns something an app
 /// has to know before relying on it. A bridge that sends none is 1.
 /// 2: a `send` with a `sendId` is taken once, however often it is sent.
@@ -540,6 +577,9 @@ pub enum ServerMessage {
         data: Option<Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        /// Which failure it is, where an app does something about it. `error` stays the sentence to show.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<ErrorCode>,
     },
     Sessions {
         sessions: Vec<SessionSummary>,
@@ -740,12 +780,21 @@ mod tests {
                 ok: true,
                 data: Some(json!({ "branch": "main" })),
                 error: None,
+                code: None,
             },
             ServerMessage::Reply {
                 id: Some("c2".into()),
                 ok: false,
                 data: None,
                 error: Some("no such session".into()),
+                code: None,
+            },
+            ServerMessage::Reply {
+                id: Some("c3".into()),
+                ok: false,
+                data: None,
+                error: Some(SESSION_ENDED.into()),
+                code: Some(ErrorCode::SessionEnded),
             },
             ServerMessage::Sessions {
                 sessions: vec![bare_summary(), full_summary()],

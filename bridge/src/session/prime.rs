@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
@@ -13,9 +13,12 @@ use super::{
     SessionState,
 };
 use crate::agent_wire::{self, Attached, InactiveRow, PrimeRow};
+use crate::ask::Ask;
 use crate::history;
 use crate::prime::DaemonEvent;
-use crate::protocol::{ItemKind, ModelInfo, SessionKind, SessionStatus};
+use crate::protocol::{
+    ErrorCode, Failure, ItemKind, ModelInfo, SessionKind, SessionStatus, SESSION_ENDED,
+};
 use crate::rpc::AgentKind;
 
 impl App {
@@ -245,15 +248,15 @@ impl App {
             self.load_history(session, &messages).await;
             return Ok(());
         }
-        let data = match self.prime.attach(&session.id).await {
+        let data = match self.command(session, Ask::Attach).await {
             Ok(data) => data,
             Err(error) => {
                 // The daemon no longer has this subagent: it ended. Off the list, so nobody is sent to it again.
                 let subagent = session.state.lock().await.summary.kind == SessionKind::Subagent;
-                if subagent && error.downcast_ref::<crate::prime::Refused>().is_some() {
+                if subagent && error.downcast_ref::<crate::agent::Refused>().is_some() {
                     eprintln!("Prime subagent {} is gone: {error}", session.id);
                     self.remove(&session.id).await;
-                    bail!("session ended");
+                    return Err(Failure::error(ErrorCode::SessionEnded, SESSION_ENDED));
                 }
                 return Err(error);
             }

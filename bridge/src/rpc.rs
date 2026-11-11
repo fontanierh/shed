@@ -289,7 +289,7 @@ impl RpcChild {
         }
         match asked.answer(limit).await {
             Ok(Ok(data)) => Ok(data),
-            Ok(Err(e)) => Err(anyhow!(e)),
+            Ok(Err(e)) => Err(anyhow::Error::new(crate::agent::Refused(e))),
             Err(Unanswered::Gone) => Err(anyhow!("agent exited")),
             Err(Unanswered::Late(after)) => Err(unanswered(kind, after)),
         }

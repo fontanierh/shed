@@ -18,7 +18,8 @@ use crate::channel::Offer;
 use crate::history::{self, History};
 use crate::prime::PrimeDaemon;
 use crate::protocol::{
-    Item, ItemKind, Queue, ServerMessage, SessionKind, SessionStatus, SessionSummary,
+    ErrorCode, Failure, Item, ItemKind, Queue, ServerMessage, SessionKind, SessionStatus,
+    SessionSummary,
 };
 use crate::rpc::{AgentKind, ChildOutput, SpawnOptions};
 use crate::store::{SessionRecord, Store};
@@ -46,7 +47,6 @@ pub struct App {
     pub token: String,
     pub sessions: RwLock<Vec<Arc<Session>>>,
     pub hub: broadcast::Sender<Arc<Envelope>>,
-    prime: Arc<PrimeDaemon>,
     pub(crate) store: Store,
     /// Registry saves run one at a time, each from the list as it is then, so an older save can't land last.
     saving: Mutex<()>,
@@ -419,7 +419,7 @@ impl App {
             }
         }
         let agents = Agents::installed(prime.clone(), store.clone());
-        let app = App::assemble(store, prime, limits, agents)?;
+        let app = App::assemble(store, limits, agents)?;
         tokio::spawn(app.clone().run_prime(prime_events));
         tokio::spawn(app.clone().watch_background_jobs());
         tokio::spawn(app.clone().watch_spend());
@@ -428,12 +428,7 @@ impl App {
     }
 
     /// The saved sessions, stopped, with nothing running yet: no daemon connection, no watchers.
-    fn assemble(
-        store: Store,
-        prime: Arc<PrimeDaemon>,
-        limits: HashMap<String, u64>,
-        agents: Agents,
-    ) -> Result<Arc<App>> {
+    fn assemble(store: Store, limits: HashMap<String, u64>, agents: Agents) -> Result<Arc<App>> {
         let token = store.token()?;
         let (hub, _) = broadcast::channel(4096);
         let sessions = store
@@ -467,7 +462,6 @@ impl App {
             token,
             sessions: RwLock::new(sessions),
             hub,
-            prime,
             store,
             saving: Mutex::new(()),
             limits,
@@ -1173,7 +1167,13 @@ pub fn expand_dir(path: &str) -> Result<String> {
         Some(rest) => format!("{}{}", crate::host::home_text(), rest),
         None => path.to_string(),
     };
-    let canonical = std::fs::canonicalize(&path).map_err(|e| anyhow!("{path}: {e}"))?;
+    // The sentence is the system's ("No such file or directory"), which apps from before the codes look for.
+    let canonical = std::fs::canonicalize(&path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => {
+            Failure::error(ErrorCode::NoSuchDirectory, format!("{path}: {e}"))
+        }
+        _ => anyhow!("{path}: {e}"),
+    })?;
     if !canonical.is_dir() {
         bail!("{path} is not a directory");
     }

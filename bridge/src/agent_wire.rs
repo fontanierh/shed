@@ -529,6 +529,12 @@ pub fn compaction_summary(messages: &[Value]) -> Option<&str> {
         .and_then(|m| m["summary"].as_str())
 }
 
+/// Whether an agent turned a prompt down because a turn is running. Pi says so in a sentence about streaming and
+/// gives no code, so its words are all there is to go by.
+pub fn refused_as_busy(error: &anyhow::Error) -> bool {
+    error.to_string().to_lowercase().contains("stream")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
