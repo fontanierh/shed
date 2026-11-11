@@ -87,6 +87,7 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     let mut attached: HashMap<String, u64> = HashMap::new();
     out.offer(encode(&ServerMessage::Sessions {
         sessions: app.summaries().await,
+        bridge: crate::protocol::BRIDGE,
     }));
 
     loop {
@@ -113,7 +114,10 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
                             send_snapshot(&out, &mut attached, &session).await;
                         }
                     }
-                    out.offer(encode(&ServerMessage::Sessions { sessions: app.summaries().await }));
+                    out.offer(encode(&ServerMessage::Sessions {
+                        sessions: app.summaries().await,
+                        bridge: crate::protocol::BRIDGE,
+                    }));
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -194,9 +198,13 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             model,
             thinking,
         } => serde_json::to_value(app.create_session(agent, cwd, model, thinking).await?)?,
-        ClientOp::Send { session_id, text } => {
+        ClientOp::Send {
+            session_id,
+            text,
+            send_id,
+        } => {
             let session = app.find(&session_id).await?;
-            app.send_text(&session, text).await?
+            app.send_text(&session, text, send_id).await?
         }
         ClientOp::FollowUp { session_id, text } => {
             let session = app.find(&session_id).await?;

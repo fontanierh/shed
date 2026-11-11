@@ -5,7 +5,8 @@ import Foundation
 extension SessionStore {
     func apply(_ message: ServerMessage, from env: String) {
         switch message {
-        case .sessions(let list):
+        case .sessions(let list, let bridge):
+            bridgeLevel[env] = bridge
             var all = sessions.filter { Self.split($0.key)?.env != env }
             for summary in list.map({ replayed(tagged($0, env)) }) { all[summary.id] = summary }
             if let selectedId, sessions[selectedId]?.status != all[selectedId]?.status { flush() }

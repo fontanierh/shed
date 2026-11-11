@@ -368,7 +368,8 @@ public struct EarlierItems: Decodable, Sendable {
 
 /// Messages pushed by the bridge (replies are handled by `BridgeClient`).
 public enum ServerMessage: Sendable {
-    case sessions([SessionSummary])
+    /// `bridge` is what the bridge says it understands (`BRIDGE` in the bridge's protocol.rs). One that says nothing is 1.
+    case sessions([SessionSummary], bridge: Int = 1)
     case session(SessionSummary)
     case sessionRemoved(String)
     /// `earlier`: older items left out, to fetch with `load_earlier`.
@@ -401,13 +402,15 @@ struct Readable<Value: Decodable>: Decodable {
 
 extension ServerMessage: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case type, sessions, session, sessionId, items, earlier, item, itemId, set, append
+        case type, sessions, bridge, session, sessionId, items, earlier, item, itemId, set, append
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
-        case "sessions": self = .sessions(try c.decode(Readable<SessionSummary>.self, forKey: .sessions).values)
+        case "sessions":
+            self = .sessions(try c.decode(Readable<SessionSummary>.self, forKey: .sessions).values,
+                             bridge: (try? c.decode(Int.self, forKey: .bridge)) ?? 1)
         case "session": self = .session(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(try c.decode(String.self, forKey: .sessionId))
         case "snapshot":

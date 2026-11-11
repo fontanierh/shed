@@ -374,6 +374,10 @@ pub enum ClientOp {
         #[serde(rename = "sessionId")]
         session_id: String,
         text: String,
+        /// Names this message, so that sending it again after a lost reply does not send it twice. An app that
+        /// sends none is taken at its word each time.
+        #[serde(rename = "sendId", default, skip_serializing_if = "Option::is_none")]
+        send_id: Option<String>,
     },
     FollowUp {
         #[serde(rename = "sessionId")]
@@ -519,6 +523,11 @@ pub struct ClientMessage {
     pub op: ClientOp,
 }
 
+/// What the bridge understands, sent with the list of sessions. It goes up when the bridge learns something an app
+/// has to know before relying on it. A bridge that sends none is 1.
+/// 2: a `send` with a `sendId` is taken once, however often it is sent.
+pub const BRIDGE: u32 = 2;
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(strum::VariantNames), strum(serialize_all = "snake_case"))]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -534,6 +543,8 @@ pub enum ServerMessage {
     },
     Sessions {
         sessions: Vec<SessionSummary>,
+        /// What this bridge understands, so an app can tell an older one: `BRIDGE`.
+        bridge: u32,
     },
     Session {
         session: Box<SessionSummary>,
@@ -738,6 +749,7 @@ mod tests {
             },
             ServerMessage::Sessions {
                 sessions: vec![bare_summary(), full_summary()],
+                bridge: BRIDGE,
             },
             ServerMessage::Session {
                 session: Box::new(full_summary()),

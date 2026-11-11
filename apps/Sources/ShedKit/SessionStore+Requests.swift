@@ -96,7 +96,7 @@ extension SessionStore {
         sessions[summary.id] = summary
         select(summary.id)
         if let firstMessage, !firstMessage.isEmpty {
-            do { try await call(env, .send(sessionId: created.id, text: firstMessage)) } catch { report(error) }
+            do { try await call(env, .send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString)) } catch { report(error) }
         }
     }
 
@@ -107,22 +107,24 @@ extension SessionStore {
         let busy = sessions[id]?.status.isBusy ?? false
         let local = Item(id: "sending-\(UUID().uuidString)", kind: .user, text: text, status: .pending, at: Date.now.timeIntervalSince1970 * 1000)
         if !busy { sending[id, default: []].append(local) }
+        let message = ClientOp.send(sessionId: raw, text: text, sendId: UUID().uuidString)
         Task {
             do {
                 do {
-                    try await client(env).call(.send(sessionId: raw, text: text))
+                    try await client(env).call(message)
                 } catch let lost as ConnectionLost {
-                    // Cut off by a dropped connection: send it again once back, unless the session's transcript, sent
-                    // afresh on reconnecting, shows it arrived after all.
+                    // Cut off by a dropped connection: send it again once back. A bridge that takes a message once per
+                    // id is simply sent it again. An older one would run it twice, so there the session's transcript,
+                    // sent afresh on reconnecting, says whether it arrived after all.
                     guard await reconnected(env) else { throw lost }
-                    if lost.maybeDelivered {
+                    if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
                         try? await Task.sleep(for: .seconds(2))
                         let queued = sessions[id]?.queue
                         let landed = busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
                                           : sending[id]?.contains { $0.id == local.id } != true
                         if landed { return }
                     }
-                    try await client(env).call(.send(sessionId: raw, text: text))
+                    try await client(env).call(message)
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
                 try? await Task.sleep(for: .seconds(60))

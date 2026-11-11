@@ -64,6 +64,8 @@ public final class SessionStore {
     @ObservationIgnored var standIns: [String: any BridgeCalling] = [:]
     /// How long a request cut off waits for its connection to come back.
     @ObservationIgnored var reconnectWait = Duration.seconds(60)
+    /// What each computer's bridge says it understands. From 2 on it takes a message once per id.
+    @ObservationIgnored var bridgeLevel: [String: Int] = [:]
     @ObservationIgnored var itemIndex: [String: Int] = [:]
     /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
     @ObservationIgnored var patched: [Int: Item] = [:]

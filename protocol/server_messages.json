@@ -51,6 +51,7 @@
       "type": "reply"
     },
     {
+      "bridge": 2,
       "sessions": [
         {
           "agent": "pi",

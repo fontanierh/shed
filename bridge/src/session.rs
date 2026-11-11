@@ -140,6 +140,8 @@ pub struct SessionState {
     own: BackendState,
     session_file: Option<String>,
     named: bool,
+    /// The ids of the last messages taken from the apps, so one sent again is not sent to the agent twice.
+    sent: std::collections::VecDeque<String>,
     /// Its agent is being started: a second start must not begin.
     starting: bool,
     stopping: bool,
@@ -280,6 +282,7 @@ impl SessionState {
             own,
             session_file,
             named: false,
+            sent: Default::default(),
             starting: false,
             stopping: false,
             removed: false,
@@ -288,6 +291,24 @@ impl SessionState {
             gateway_cost: 0.0,
             stall: Default::default(),
         }
+    }
+
+    /// Takes a message's id, and says whether it is new. The last 64 are remembered: an app sends one again within
+    /// seconds, when the reply to the first was lost.
+    fn take_send(&mut self, id: &str) -> bool {
+        if self.sent.iter().any(|sent| sent == id) {
+            return false;
+        }
+        if self.sent.len() == 64 {
+            self.sent.pop_front();
+        }
+        self.sent.push_back(id.to_string());
+        true
+    }
+
+    /// The message did not go after all, so its id may be sent again.
+    fn forget_send(&mut self, id: &str) {
+        self.sent.retain(|sent| sent != id);
     }
 
     /// A `Pi` session with no process: one that was closed, or whose agent exited.

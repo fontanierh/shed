@@ -33,6 +33,8 @@ final class ScriptedBridge: BridgeCalling {
     /// What each call of an operation gets, in order. An operation with nothing left succeeds with an empty reply.
     var script: [ClientOp.Name: [Outcome]]
     private(set) var sent: [ClientOp.Name] = []
+    /// Each operation as it went on the wire.
+    private(set) var messages: [[String: Any]] = []
 
     init(_ script: [ClientOp.Name: [Outcome]] = [:]) { self.script = script }
 
@@ -40,6 +42,7 @@ final class ScriptedBridge: BridgeCalling {
 
     func call(_ op: ClientOp) async throws -> Data {
         sent.append(op.name)
+        messages.append((try? JSONSerialization.jsonObject(with: Data(op.message(id: "c").utf8)) as? [String: Any]) ?? [:])
         let outcome = script[op.name]?.isEmpty == false ? script[op.name]!.removeFirst() : .reply(NSNull())
         switch outcome {
         case .reply(let data): return try JSONSerialization.data(withJSONObject: ["type": "reply", "ok": true, "data": data])

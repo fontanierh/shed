@@ -1265,7 +1265,7 @@ async fn commands() {
                 "restart the kernel" => app.restart_kernel(session).await,
                 "stop the tool" => app.stop_tool(session).await,
                 "new session" => app.new_session(session).await,
-                _ => app.send_text(session, "Carry on".into()).await,
+                _ => app.send_text(session, "Carry on".into(), None).await,
             };
             // The refresh a command leaves for later.
             tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1386,5 +1386,61 @@ async fn a_new_session_that_fails_halfway_is_not_kept() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(rig.app.sessions.read().await.len(), 1);
     assert!(rig.saved("sessions.json").to_string().contains(&made.id));
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A message sent again under the same id, as an app does when the reply to the first was lost, reaches the agent
+/// once. One the agent refused can be sent again, and messages with no id, or with different ones, all go.
+#[tokio::test(start_paused = true)]
+async fn a_message_sent_again_under_its_id_goes_once() {
+    let rig = &Rig::new("send-once", &[]);
+    rig.script("prompt", json!({}));
+    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Pi, true));
+    let session = &Arc::new(Session::new(
+        "s1".into(),
+        AgentKind::Pi,
+        "/work/project".into(),
+        state,
+    ));
+    let app = &rig.app;
+    let prompts = || rig.agents.asked.lock().unwrap().len();
+    let id = |id: &str| Some(id.to_string());
+
+    app.send_text(session, "Carry on".into(), id("a"))
+        .await
+        .unwrap();
+    app.send_text(session, "Carry on".into(), id("a"))
+        .await
+        .unwrap();
+    assert_eq!(prompts(), 1);
+
+    app.send_text(session, "Carry on".into(), id("b"))
+        .await
+        .unwrap();
+    assert_eq!(prompts(), 2);
+    app.send_text(session, "Carry on".into(), None)
+        .await
+        .unwrap();
+    app.send_text(session, "Carry on".into(), None)
+        .await
+        .unwrap();
+    assert_eq!(prompts(), 4);
+
+    // The agent refuses one: nothing was sent, so the same id may try again.
+    rig.agents
+        .refusals
+        .lock()
+        .unwrap()
+        .insert("prompt".into(), "no model is set".into());
+    assert!(app
+        .send_text(session, "Carry on".into(), id("c"))
+        .await
+        .is_err());
+    rig.agents.refusals.lock().unwrap().clear();
+    app.send_text(session, "Carry on".into(), id("c"))
+        .await
+        .unwrap();
+    assert_eq!(prompts(), 6);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

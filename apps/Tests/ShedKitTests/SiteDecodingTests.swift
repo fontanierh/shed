@@ -20,7 +20,7 @@ final class SiteDecodingTests: XCTestCase {
     func testAListKeepsTheSessionsItCanRead() throws {
         let broken = summary("").replacingOccurrences(of: #""status":"idle""#, with: #""status":7"#)
         let list = #"{"type":"sessions","sessions":[\#(summary("")),\#(broken),\#(summary(""))]}"#
-        guard case .sessions(let sessions) = try JSONDecoder().decode(ServerMessage.self, from: Data(list.utf8)) else {
+        guard case .sessions(let sessions, _) = try JSONDecoder().decode(ServerMessage.self, from: Data(list.utf8)) else {
             return XCTFail("not a list of sessions")
         }
         XCTAssertEqual(sessions.count, 2)

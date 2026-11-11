@@ -42,7 +42,14 @@ impl App {
         self: &Arc<Self>,
         session: &Arc<Session>,
         text: String,
+        send_id: Option<String>,
     ) -> Result<Value> {
+        // Sent again after a lost reply: it was taken the first time, and that is the answer.
+        if let Some(id) = &send_id {
+            if !session.state.lock().await.take_send(id) {
+                return Ok(json!({}));
+            }
+        }
         let result = match session.backend {
             Backend::Prime => {
                 let fields =
@@ -72,6 +79,9 @@ impl App {
             }
         };
         let mut st = session.state.lock().await;
+        if let (Err(_), Some(id)) = (&result, &send_id) {
+            st.forget_send(id);
+        }
         self.schedule_refresh(session, &mut st);
         result
     }
