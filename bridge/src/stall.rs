@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
-use tokio::io::AsyncWriteExt;
 
 use crate::protocol::{Stuck, StuckKind};
 
@@ -213,6 +212,10 @@ pub struct Verdict {
 
 /// Asks the model how likely the command is stuck, and on what: a verdict when it is likely enough.
 pub async fn ask(judge: &Judge, question: &Question) -> Result<Option<Verdict>> {
+    ask_at(judge, question, "https://api.openai.com/v1/decisions").await
+}
+
+async fn ask_at(judge: &Judge, question: &Question, url: &str) -> Result<Option<Verdict>> {
     let evidence = json!({
         "kind": if question.kind == StuckKind::Tool { "tool" } else { "background command" },
         "language": if question.kind == StuckKind::Tool { "python" } else { "shell" },
@@ -241,37 +244,15 @@ pub async fn ask(judge: &Judge, question: &Question) -> Result<Option<Verdict>> 
               "choices": choices },
         ],
     });
-    // The key goes in on stdin, never in the arguments, where `ps` would show it.
-    let config = format!(
-        "header = \"Authorization: Bearer {}\"\nheader = \"Content-Type: application/json\"\ndata = \"{}\"\n",
-        judge.key,
-        body.to_string().replace('\\', "\\\\").replace('"', "\\\"")
-    );
-    let mut child = tokio::process::Command::new("/usr/bin/curl")
-        .args([
-            "-sS",
-            "--max-time",
-            "30",
-            "-K",
-            "-",
-            "https://api.openai.com/v1/decisions",
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
-    stdin.write_all(config.as_bytes()).await?;
-    drop(stdin);
-    let out = child.wait_with_output().await?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "curl: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    verdict(&serde_json::from_slice(&out.stdout)?, judge.threshold)
+    let response = crate::host::http()
+        .post(url)
+        .bearer_auth(&judge.key)
+        .json(&body)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?;
+    let bytes = response.bytes().await?;
+    verdict(&serde_json::from_slice(&bytes)?, judge.threshold)
 }
 
 /// The verdict in a Decisions API reply: stuck at least as likely as `threshold`.
@@ -508,5 +489,58 @@ mod tests {
             println!("{name}: {:.2} {}", verdict.probability, verdict.reason);
             assert_eq!(verdict.probability >= DEFAULT_THRESHOLD, stuck, "{name}");
         }
+    }
+
+    #[tokio::test]
+    async fn posts_evidence_with_bearer_auth_and_applies_threshold_against_mock_server() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap();
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let body = json!({
+                "answers": [
+                    { "name": "stuck", "probability": 0.91 },
+                    { "name": "cause", "choice": "input" },
+                ]
+            })
+            .to_string();
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            sock.write_all(resp.as_bytes()).await.unwrap();
+            req
+        });
+
+        let judge = Judge {
+            key: "sk-test-token".into(),
+            model: DEFAULT_MODEL.into(),
+            threshold: 0.8,
+        };
+        let question = Question {
+            kind: StuckKind::Command,
+            command: "sudo make install".into(),
+            running_secs: 95,
+            cwd: "/work".into(),
+            processes: vec![],
+            output: "Password:".into(),
+            said: Some("Installing".into()),
+        };
+        let got = ask_at(&judge, &question, &format!("http://{addr}/v1/decisions"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!((got.probability - 0.91).abs() < 1e-6);
+        assert!(got.reason.contains("password"));
+        let req_text = server.await.unwrap();
+        assert!(req_text
+            .to_ascii_lowercase()
+            .contains("authorization: bearer sk-test-token"));
     }
 }

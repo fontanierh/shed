@@ -12,7 +12,7 @@ use super::{
     default_title, first_line, limit_key, new_summary, now_ms, App, Backend, BackendState, Session,
     SessionState,
 };
-use crate::agent_wire::{self, Attached, InactiveRow, PrimeRow};
+use crate::agent_wire::{self, Attached, InactiveRow, KeptRow};
 use crate::ask::Ask;
 use crate::history;
 use crate::prime::DaemonEvent;
@@ -30,7 +30,7 @@ impl App {
                     last_error = None;
                     let mut live = Vec::new();
                     for row in rows {
-                        live.push(self.apply_prime_row(row).await.id.clone());
+                        live.push(self.apply_kept_row(AgentKind::Prime, row).await.id.clone());
                     }
                     // Drop sessions that ended while disconnected, and re-attach the rest.
                     let prime: Vec<Arc<Session>> = self
@@ -62,7 +62,7 @@ impl App {
                 }
                 DaemonEvent::RosterUpdate(rows) => {
                     for row in rows {
-                        self.apply_prime_row(row).await;
+                        self.apply_kept_row(AgentKind::Prime, row).await;
                     }
                 }
                 DaemonEvent::SessionEvent {
@@ -138,27 +138,26 @@ impl App {
         session
     }
 
-    /// Mirror one Prime roster row into a session, creating it on first sight.
-    pub(super) async fn apply_prime_row(self: &Arc<Self>, row: PrimeRow) -> Arc<Session> {
+    /// Mirror one kept-session roster row into a session, creating it on first sight.
+    pub(super) async fn apply_kept_row(
+        self: &Arc<Self>,
+        agent: AgentKind,
+        row: KeptRow,
+    ) -> Arc<Session> {
         let session = match self.find(&row.id).await {
             Ok(s) => s,
             Err(_) => {
                 let mut summary = new_summary(
                     &self.agents,
                     &row.id,
-                    AgentKind::Prime,
+                    agent,
                     SessionKind::Root,
                     false,
                     &row.cwd,
                 );
                 summary.created_at = row.created_at.unwrap_or_else(now_ms);
                 let state = SessionState::new(summary, None, BackendState::prime());
-                let session = Arc::new(Session::new(
-                    row.id.clone(),
-                    AgentKind::Prime,
-                    row.cwd,
-                    state,
-                ));
+                let session = Arc::new(Session::new(row.id.clone(), agent, row.cwd, state));
                 self.insert_once(session).await
             }
         };

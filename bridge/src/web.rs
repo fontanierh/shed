@@ -476,7 +476,7 @@ async fn firecrawl(key: &str, url: &str, body: &Map<String, Value>) -> Result<Va
         .and_then(Value::as_u64)
         .unwrap_or(60_000)
         .saturating_add(30_000);
-    let response = reqwest::Client::new()
+    let response = crate::host::http()
         .post(url)
         .bearer_auth(key)
         .json(body)

@@ -153,7 +153,7 @@ impl App {
                 let own = |r: &(Arc<Session>, Option<String>, bool, Option<String>, bool)| {
                     r.3.as_deref()
                         .and_then(|id| tallies.get(&crate::opencodex::conversation(id)))
-                        .copied()
+                        .cloned()
                         .unwrap_or_default()
                 };
                 let (cost, tokens, priced) = members
@@ -230,7 +230,7 @@ impl App {
                 .await
                 .iter()
                 .filter(|s| matches!(s.backend, Backend::Started | Backend::Prime))
-                .filter(|s| self.agent(s.agent).jobs() != JobsFrom::Agent)
+                .filter(|s| !matches!(self.agent(s.agent).jobs(), JobsFrom::Agent | JobsFrom::None))
                 .cloned()
                 .collect();
             if sessions.is_empty() {
@@ -251,7 +251,7 @@ impl App {
                             break;
                         }
                     }
-                    JobsFrom::Agent => {}
+                    JobsFrom::Agent | JobsFrom::None => {}
                 }
             }
             if !needs_tree {
@@ -262,7 +262,7 @@ impl App {
             for session in sessions {
                 let (jobs, waiting) = match (session.backend, self.agent(session.agent).jobs()) {
                     // Reported by the agent as events.
-                    (_, JobsFrom::Agent) | (Backend::Subagent, _) => continue,
+                    (_, JobsFrom::Agent | JobsFrom::None) | (Backend::Subagent, _) => continue,
                     (_, JobsFrom::Files) => {
                         crate::jobs::pi_running(&self.store, &session.id, tree.as_ref())
                     }

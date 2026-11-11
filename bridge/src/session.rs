@@ -631,7 +631,7 @@ impl App {
                 return Ok(models.clone());
             }
         }
-        let models = crate::rpc::list_models(&self.agents, agent, &self.store).await?;
+        let models = crate::agent::list_models(&self.agents, agent, &self.store).await?;
         self.models
             .lock()
             .unwrap()
@@ -672,7 +672,7 @@ impl App {
             let row = keeps
                 .create(cwd.clone(), model.clone(), thinking.clone())
                 .await?;
-            let session = self.apply_prime_row(row).await;
+            let session = self.apply_kept_row(agent, row).await;
             // It exists now, so that is the answer: an error here would have the user make a second one.
             if let Err(e) = self.refresh(&session).await {
                 eprintln!("a new {agent:?} session's state can't be read yet: {e:#}");

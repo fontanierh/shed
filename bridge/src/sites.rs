@@ -238,15 +238,10 @@ fn page_title(html: &str) -> Option<String> {
 
 /// The Tailscale CLI: on PATH, or inside the app as the App Store and the cask install it (as `setup/install.sh` finds it).
 fn tailscale() -> tokio::process::Command {
-    const APP: &str = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
-    let on_path = std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join("tailscale").is_file())
-    });
-    let program = if !on_path && std::path::Path::new(APP).is_file() {
-        APP
-    } else {
-        "tailscale"
-    };
+    let program = crate::host::find_binary(
+        "tailscale",
+        &["/Applications/Tailscale.app/Contents/MacOS/Tailscale"],
+    );
     tokio::process::Command::new(program)
 }
 

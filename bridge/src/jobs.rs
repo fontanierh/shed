@@ -321,9 +321,9 @@ fn wrapped_command(wrapper: &str) -> String {
 impl App {
     /// Where the session's background commands are found. A subagent has none of its own.
     fn jobs_from(&self, session: &Session) -> Option<JobsFrom> {
-        match session.backend {
-            Backend::Started | Backend::Prime => Some(self.agent(session.agent).jobs()),
-            Backend::Subagent => None,
+        match (session.backend, self.agent(session.agent).jobs()) {
+            (Backend::Subagent, _) | (_, JobsFrom::None) => None,
+            (Backend::Started | Backend::Prime, from) => Some(from),
         }
     }
 
@@ -376,7 +376,7 @@ impl App {
                 mark_permission_prompts(&mut jobs, ProcessTree::snapshot().await.as_ref());
                 jobs
             }
-            None => Vec::new(),
+            None | Some(JobsFrom::None) => Vec::new(),
         };
         jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
         Ok(jobs)
@@ -443,7 +443,7 @@ impl App {
                 let all: Vec<&str> = text.lines().collect();
                 Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"))
             }
-            None => bail!("Subagents have no background commands"),
+            None | Some(JobsFrom::None) => bail!("This session has no background commands"),
         }
     }
 
@@ -535,7 +535,7 @@ impl App {
                 });
                 Ok(status.success())
             }
-            None => bail!("Subagents have no background commands"),
+            None | Some(JobsFrom::None) => bail!("This session has no background commands"),
         }
     }
 }
@@ -706,6 +706,77 @@ fn alive(pid: u32) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Prime offers no remote command to restart its Python kernel, so kill the session's `python -m rlm.repl` process
+/// (identified by `RLM_SESSION_ID=<stem>` in its environment) along with all descendant processes under it.
+pub async fn kill_prime_kernel(session_file: Option<String>) -> Result<Value> {
+    use anyhow::Context;
+
+    let file = session_file.context("Prime hasn't reported this session's file yet")?;
+    let rlm_session = std::path::Path::new(&file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let output = tokio::process::Command::new("/bin/ps")
+        .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    if !output.status.success() {
+        bail!("the processes on this computer can't be listed");
+    }
+    let table = String::from_utf8_lossy(&output.stdout);
+    let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+    let marker = format!("RLM_SESSION_ID={rlm_session}");
+    let mut kernels = Vec::new();
+    for line in table.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(Ok(pid)), Some(Ok(ppid))) = (
+            parts.next().map(str::parse::<u32>),
+            parts.next().map(str::parse::<u32>),
+        ) else {
+            continue;
+        };
+        if pid != ppid {
+            children_map.entry(ppid).or_default().push(pid);
+        }
+        if line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker) {
+            kernels.push(pid);
+        }
+    }
+    if kernels.is_empty() {
+        bail!("No Python kernel is running for this session");
+    }
+    let mut doomed = kernels;
+    let mut seen: HashSet<u32> = doomed.iter().copied().collect();
+    let mut i = 0;
+    while i < doomed.len() {
+        let parent = doomed[i];
+        if let Some(kids) = children_map.get(&parent) {
+            for &kid in kids {
+                if seen.insert(kid) {
+                    doomed.push(kid);
+                }
+            }
+        }
+        i += 1;
+    }
+    let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
+    let killed = tokio::process::Command::new("/bin/kill")
+        .arg("-9")
+        .args(&pids)
+        .output()
+        .await?;
+    if !killed.status.success() {
+        eprintln!(
+            "restarting the kernel of {rlm_session}: kill said {}",
+            String::from_utf8_lossy(&killed.stderr).trim()
+        );
+    }
+    Ok(json!({ "killed": doomed.len() }))
 }
 
 /// Job ids name files; keep them to the extension's alphabet.
