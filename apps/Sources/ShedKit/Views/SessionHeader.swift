@@ -83,7 +83,9 @@ struct SessionHeader: View {
                         Button("Restart Python Kernel…") { restartingKernel = true }
                     }
                     Divider()
-                    Button("New Session (same agent)") { store.newSession() }
+                    if session.startsNewSessionInPlace {
+                        Button("New Session (same agent)") { store.newSession() }
+                    }
                     Button("Copy Path") { Clipboard.copy(session.cwd) }
                     Divider()
                     Button("Stop Session", role: .destructive) { store.close() }

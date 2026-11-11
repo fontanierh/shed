@@ -33,6 +33,8 @@ pub struct Script {
     start_gate: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// How long an answer takes, once it is decided.
     slow_answer: std::sync::Mutex<Duration>,
+    /// Held, a close waits here until the test lets it go: an agent slow to exit.
+    close_gate: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
 /// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
@@ -173,6 +175,10 @@ impl Live for ScriptedSession {
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {
             self.script.closes.fetch_add(1, Ordering::SeqCst);
+            let gate = self.script.close_gate.lock().unwrap().take();
+            if let Some(gate) = gate {
+                let _ = gate.await;
+            }
         })
     }
 }
@@ -1715,6 +1721,78 @@ async fn a_closed_session_is_stopped_and_resumes() {
     assert_eq!(pi.state.lock().await.summary.status, SessionStatus::Stopped);
     rig.app.resume_session(&pi).await.unwrap();
     assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A second close while the first still waits for its agent leaves the session stopping, so a resume cannot start
+/// a second agent on the same session file.
+#[tokio::test]
+async fn a_second_close_does_not_stop_the_session_before_its_agent_is_gone() {
+    let rig = Rig::new("close-twice", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let pi = rig.app.find("pi1").await.unwrap();
+    rig.app.resume_session(&pi).await.unwrap();
+    let (release, gate) = tokio::sync::oneshot::channel();
+    *rig.agents.close_gate.lock().unwrap() = Some(gate);
+    let first = {
+        let (app, pi) = (rig.app.clone(), pi.clone());
+        tokio::spawn(async move { app.close_session(&pi).await.map_err(|e| e.to_string()) })
+    };
+    while rig.agents.closes.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    rig.app.close_session(&pi).await.unwrap();
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    assert_ne!(pi.state.lock().await.summary.status, SessionStatus::Stopped);
+    assert!(rig.app.resume_session(&pi).await.is_err());
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 1);
+    release.send(()).unwrap();
+    first.await.unwrap().unwrap();
+    assert_eq!(pi.state.lock().await.summary.status, SessionStatus::Stopped);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A stopped session shows nothing of its last run at work: no queue, no subagents running.
+#[tokio::test]
+async fn a_closed_session_keeps_nothing_of_its_agent_at_work() {
+    let rig = Rig::new("close-forgets", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let pi = rig.app.find("pi1").await.unwrap();
+    rig.app.resume_session(&pi).await.unwrap();
+    let running =
+        json!({ "agent": "reviewer", "task": "Review the change", "exitCode": -1, "messages": [] });
+    for event in [
+        json!({ "type": "queue_update", "steering": ["and then this"], "followUp": [] }),
+        json!({ "type": "tool_execution_start", "toolCallId": "call_sub-agents.2", "toolName": "subagent", "args": {} }),
+        json!({ "type": "tool_execution_update", "toolCallId": "call_sub-agents.2", "toolName": "subagent",
+            "partialResult": { "details": subagent_results(false, running) } }),
+    ] {
+        rig.app.handle_event(&pi, &event).await;
+    }
+    let children = || async {
+        let mut busy = 0;
+        for s in rig.app.sessions.read().await.iter() {
+            if s.id.starts_with("pi1.")
+                && s.state.lock().await.summary.status == SessionStatus::Running
+            {
+                busy += 1;
+            }
+        }
+        busy
+    };
+    {
+        let st = pi.state.lock().await;
+        assert!(st.summary.running_subagents);
+        assert!(!st.summary.queue.steering.is_empty());
+    }
+    assert!(children().await > 0);
+    rig.app.close_session(&pi).await.unwrap();
+    {
+        let st = pi.state.lock().await;
+        assert!(!st.summary.running_subagents);
+        assert!(st.summary.queue.steering.is_empty());
+    }
+    assert_eq!(children().await, 0);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 

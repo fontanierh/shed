@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
-use crate::agent::{Agents, Live, Sessions};
+use crate::agent::{Agents, JobsFrom, Live, Sessions};
 use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
 use crate::channel::Offer;
 use crate::history::{self, History};
@@ -811,11 +811,16 @@ impl App {
                 let child = {
                     let mut st = session.state.lock().await;
                     match std::mem::replace(&mut st.own, BackendState::started()) {
-                        BackendState::Started(
-                            Process::Running(child) | Process::Stopping(child),
-                        ) => {
+                        BackendState::Started(Process::Running(child)) => {
                             st.own = BackendState::Started(Process::Stopping(child.clone()));
                             Some(child)
+                        }
+                        // The close in flight waits for the agent and then marks the session stopped. A second
+                        // close of its own would not wait, and a resume after it could run a second agent on the
+                        // same session file.
+                        BackendState::Started(Process::Stopping(child)) => {
+                            st.own = BackendState::Started(Process::Stopping(child));
+                            None
                         }
                         // The start closes the agent it is making.
                         BackendState::Started(Process::Starting { .. }) => {
@@ -834,10 +839,12 @@ impl App {
                 let mut st = session.state.lock().await;
                 if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
                     st.own = BackendState::started();
-                    st.summary.question = None;
+                    self.forget_the_process(session, &mut st);
                     st.summary.status = SessionStatus::Stopped;
                     st.summary.error = None;
                     self.publish_summary(&st);
+                    drop(st);
+                    self.end_running_subagents(session).await;
                 }
                 Ok(())
             }
@@ -849,6 +856,38 @@ impl App {
                 ),
             },
             Backend::Subagent => bail!("Subagents end with their tool call"),
+        }
+    }
+
+    /// What only a running agent has: its question, its queue, its subagents at work and, when the agent itself
+    /// reports them, its background commands. None of it outlives the process.
+    fn forget_the_process(&self, session: &Session, st: &mut SessionState) {
+        st.summary.question = None;
+        st.summary.queue = Queue::default();
+        st.summary.running_subagents = false;
+        if matches!(self.agent(session.agent).jobs(), JobsFrom::Agent) {
+            st.summary.background_jobs = 0;
+        }
+    }
+
+    /// The subagents of a session whose agent is gone: none of them is at work any more, and nothing is left to
+    /// say they have finished.
+    async fn end_running_subagents(&self, session: &Session) {
+        let prefix = format!("{}.", session.id);
+        let all = self.sessions.read().await.clone();
+        for s in all
+            .iter()
+            .filter(|s| s.backend == Backend::Subagent && s.id.starts_with(&prefix))
+        {
+            let mut st = s.state.lock().await;
+            if matches!(
+                st.summary.status,
+                SessionStatus::Running | SessionStatus::Compacting
+            ) {
+                st.summary.status = SessionStatus::Stopped;
+                st.status_moves += 1;
+                self.publish_summary(&st);
+            }
         }
     }
 
@@ -940,7 +979,7 @@ impl App {
                         _ => break,
                     };
                     st.own = BackendState::started();
-                    st.summary.question = None;
+                    self.forget_the_process(&session, &mut st);
                     if stopping {
                         st.summary.status = SessionStatus::Stopped;
                     } else {
@@ -948,6 +987,8 @@ impl App {
                         st.summary.error = Some(reason);
                     }
                     self.publish_summary(&st);
+                    drop(st);
+                    self.end_running_subagents(&session).await;
                     break;
                 }
             }
