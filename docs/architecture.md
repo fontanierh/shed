@@ -76,6 +76,7 @@ The bridge, in `bridge/src`:
 | `main.rs` | Starts the bridge, and the `agent-remote web` command the agents call. |
 | `protocol.rs` | The messages the apps and the bridge exchange. |
 | `server.rs` | The WebSocket endpoint: one connection per app, and the sessions it is attached to. |
+| `agent.rs` | What the bridge asks of an agent: the `Agent` trait (start a session, list models), the `Live` trait (a running session: send a command, close) and the list of agents the bridge has. The tests run the session code against a scripted agent that implements the same two traits. |
 | `rpc.rs`, `dsh.rs`, `prime.rs` | One driver per agent: a Pi process, a DeepSeek Harness process made to speak Pi's protocol, and the connection to Prime's daemon. |
 | `agent_wire.rs` | Everything an agent tells the bridge about a session, read into the bridge's own types. |
 | `transcript.rs` | Turns an agent's messages and streaming events into the flat list of transcript items. |

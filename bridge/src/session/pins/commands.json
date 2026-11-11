@@ -738,60 +738,31 @@
       "refreshed": false
     },
     "compact": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "compact with blank instructions": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "compact with instructions": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {
-            "customInstructions": "keep the plan"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "new session": {
-      "asked": [
-        {
-          "command": "new_session",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "rename": {
-      "asked": [
-        {
-          "command": "set_session_name",
-          "fields": {
-            "name": "Plan the release"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
@@ -809,51 +780,25 @@
       "refreshed": false
     },
     "send": {
-      "asked": [
-        {
-          "command": "prompt",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "send while it works": {
-      "asked": [
-        {
-          "command": "steer",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "send, and the agent is already streaming": {
-      "asked": [
-        {
-          "command": "prompt",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "stop the tool": {
-      "asked": [
-        {
-          "command": "abort",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "Pi subagents are read-only; steer the parent session instead",
       "refreshed": false

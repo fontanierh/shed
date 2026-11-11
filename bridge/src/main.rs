@@ -3,6 +3,7 @@
 // Tests may drop the result of clearing a scratch folder. Everything else may not.
 #![cfg_attr(test, allow(clippy::let_underscore_must_use))]
 
+mod agent;
 mod agent_wire;
 mod channel;
 mod cost;
