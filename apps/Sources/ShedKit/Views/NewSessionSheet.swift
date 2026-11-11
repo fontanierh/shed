@@ -37,11 +37,6 @@ struct NewSessionSheet: View {
 
     private var recents: [String] { folders(recentFolders).filter { $0.env == env }.map(\.path) }
 
-    /// Whether the bridge refused a folder because it is gone.
-    private static func isMissing(_ error: Error) -> Bool {
-        error.localizedDescription.contains("No such file or directory")
-    }
-
     /// Takes a folder that no longer exists out of the recent and last-used ones on this computer.
     private func forget(_ path: String, in env: String) {
         func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
@@ -53,7 +48,7 @@ struct NewSessionSheet: View {
     private func pruneFolders() async {
         let env = env
         for path in Set(recents + [cwd]) where !path.isEmpty {
-            do { _ = try await store.listDir(in: env, path) } catch let error where Self.isMissing(error) {
+            do { _ = try await store.listDir(in: env, path) } catch let error where error.isMissingFolder {
                 forget(path, in: env)
                 if cwd == path { cwd = "" }
             } catch {}
@@ -404,7 +399,7 @@ struct NewSessionSheet: View {
                 dismiss()
             } catch {
                 creating = false
-                if Self.isMissing(error) {
+                if error.isMissingFolder {
                     forget(folder, in: env)
                     startError = "\(Format.path(folder)) no longer exists on this computer. Choose another folder."
                 } else {

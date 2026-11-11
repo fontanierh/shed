@@ -56,6 +56,15 @@ final class ProtocolFixtureTests: XCTestCase {
         }
     }
 
+    /// A reply's code is read by `BridgeClient`, off the socket; the names are what the two sides share.
+    func testTheAppKnowsEveryCodeTheBridgeAnswersWith() throws {
+        let messages = try XCTUnwrap(try fixture()["messages"] as? [[String: Any]])
+        for reply in messages where reply["type"] as? String == "reply" {
+            guard let code = reply["code"] as? String else { continue }
+            XCTAssertNotNil(BridgeError.Code(rawValue: code), code)
+        }
+    }
+
     func testTheAppKnowsEveryValueTheBridgeSends() throws {
         let enums = try XCTUnwrap(try fixture()["enums"] as? [String: [String]])
         let known: [String: (String) -> Bool] = [

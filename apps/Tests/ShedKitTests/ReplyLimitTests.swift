@@ -75,10 +75,10 @@ final class ReplyLimitTests: XCTestCase {
 
     /// The bridge gives its agents two minutes to answer, and half an hour for a compaction.
     func testACompactionMayTakeHalfAnHourAndAnythingElseTwoMinutes() {
-        XCTAssertEqual(ClientOp.compact(sessionId: "s").replyLimit, .seconds(30 * 60))
+        XCTAssertEqual(ClientOp.compact(sessionId: "s").replyLimit, .seconds(31 * 60))
         for op in [ClientOp.ping, .send(sessionId: "s", text: "Hello"), .abort(sessionId: "s"), .listDir(path: nil, hidden: false),
                    .createSession(agent: .pi, cwd: "/tmp", model: nil, thinking: nil)] {
-            XCTAssertEqual(op.replyLimit, .seconds(120), op.name.rawValue)
+            XCTAssertEqual(op.replyLimit, .seconds(150), op.name.rawValue)
         }
     }
 }

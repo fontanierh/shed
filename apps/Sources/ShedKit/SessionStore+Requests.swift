@@ -89,7 +89,7 @@ extension SessionStore {
         // A subagent its agent has let go of, which is the one thing the bridge answers with these words. It may
         // list it a while longer, but there is nothing to open: no alert, its screen says so for a moment, then
         // gives way to its parent. Any other failure (a bridge out of reach) says nothing about the subagent.
-        if (error as? BridgeError)?.message == "session ended", let parent = sessions[id]?.parentId {
+        if error.isSessionEnded, let parent = sessions[id]?.parentId {
             ended.insert(id)
             await pause(.milliseconds(1400))
             if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
