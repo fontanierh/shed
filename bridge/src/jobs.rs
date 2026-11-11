@@ -317,7 +317,8 @@ fn wrapped_command(wrapper: &str) -> String {
 impl App {
     /// Whether the session's agent is asked for its background commands, rather than the bridge reading them.
     fn agent_lists_jobs(&self, session: &Session) -> bool {
-        session.backend == Backend::Pi && self.agent(session.agent).lists_own_jobs()
+        session.backend == Backend::Started
+            && self.agent(session.agent).jobs() == crate::agent::JobsFrom::Agent
     }
 
     /// Newest first.
@@ -366,12 +367,12 @@ impl App {
                 mark_permission_prompts(&mut jobs, tree.as_ref());
                 jobs
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let mut jobs = pi_jobs(&session.id);
                 mark_permission_prompts(&mut jobs, ProcessTree::snapshot().await.as_ref());
                 jobs
             }
-            Backend::PiSubagent => Vec::new(),
+            Backend::Subagent => Vec::new(),
         };
         jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
         Ok(jobs)
@@ -421,7 +422,7 @@ impl App {
                     .unwrap_or_default()
                     .to_string())
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let log =
                     std::fs::read(pi_dir(&session.id).join(format!("{}.log", safe_id(job_id)?)))
                         .map_err(|_| anyhow!("This command is no longer available."))?;
@@ -431,7 +432,7 @@ impl App {
                 let all: Vec<&str> = text.lines().collect();
                 Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"))
             }
-            Backend::PiSubagent => bail!("Pi subagents have no background commands"),
+            Backend::Subagent => bail!("Pi subagents have no background commands"),
         }
     }
 
@@ -479,7 +480,7 @@ impl App {
                 };
                 Ok(data["killed"].as_bool().unwrap_or(true))
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let job = pi_jobs(&session.id)
                     .into_iter()
                     .find(|job| job.id == job_id)
@@ -508,7 +509,7 @@ impl App {
                 });
                 Ok(status.success())
             }
-            Backend::PiSubagent => bail!("Pi subagents have no background commands"),
+            Backend::Subagent => bail!("Pi subagents have no background commands"),
         }
     }
 }

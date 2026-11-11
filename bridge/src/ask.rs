@@ -48,7 +48,7 @@ pub enum Ask {
         instructions: Option<String>,
     },
     NewSession,
-    /// The background commands of an agent that lists its own (`Agent::lists_own_jobs`).
+    /// The background commands of an agent that lists its own (`JobsFrom::Agent`).
     Jobs,
     JobOutput(String),
     KillJob(String),

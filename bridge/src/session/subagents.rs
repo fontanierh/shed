@@ -6,7 +6,6 @@ use std::sync::Arc;
 use super::{first_line, new_summary, App, Backend, BackendState, Session, SessionState};
 use crate::agent_wire::{DshSubagent, PiSubagentCall, PiSubagents};
 use crate::protocol::{ContextUsage, SessionKind, SessionStatus};
-use crate::rpc::AgentKind;
 
 impl App {
     /// Mirror the children of a Pi `subagent` tool call as read-only sessions.
@@ -47,13 +46,13 @@ impl App {
                 Ok(s) => s,
                 Err(_) => {
                     let mut summary =
-                        new_summary(&id, AgentKind::Pi, SessionKind::Subagent, &parent.cwd);
+                        new_summary(&id, parent.agent, SessionKind::Subagent, &parent.cwd);
                     summary.parent_id = Some(parent.id.clone());
                     summary.read_only = true;
                     let state = SessionState::new(summary, None, BackendState::subagent());
                     let session = Arc::new(Session::new(
                         id.clone(),
-                        AgentKind::Pi,
+                        parent.agent,
                         parent.cwd.clone(),
                         state,
                     ));
@@ -124,14 +123,13 @@ impl App {
         let session = match self.find(&id).await {
             Ok(s) => s,
             Err(_) => {
-                let mut summary =
-                    new_summary(&id, AgentKind::Deepseek, SessionKind::Subagent, &root.cwd);
+                let mut summary = new_summary(&id, root.agent, SessionKind::Subagent, &root.cwd);
                 summary.parent_id = Some(parent_id);
                 summary.read_only = true;
                 let state = SessionState::new(summary, None, BackendState::subagent());
                 let session = Arc::new(Session::new(
                     id.clone(),
-                    AgentKind::Deepseek,
+                    root.agent,
                     root.cwd.clone(),
                     state,
                 ));
@@ -165,7 +163,7 @@ impl App {
         let mut running = false;
         let all = self.sessions.read().await.clone();
         for s in all.iter().filter(|s| s.id.starts_with(&prefix)) {
-            if s.backend == Backend::PiSubagent
+            if s.backend == Backend::Subagent
                 && s.state.lock().await.summary.status == SessionStatus::Running
             {
                 running = true;

@@ -11,7 +11,7 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 
 use super::*;
-use crate::agent::{Agent, Started};
+use crate::agent::{Agent, Keeps, Sessions, Started, Starts};
 use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
 use crate::prime::DaemonEvent;
 use crate::protocol::{Goal, ModelInfo};
@@ -50,7 +50,7 @@ struct ScriptedSession {
     absent: &'static str,
 }
 
-impl Agent for Scripted {
+impl Starts for Scripted {
     fn start(&self, _opts: &SpawnOptions) -> Result<Started> {
         self.script.starts.fetch_add(1, Ordering::SeqCst);
         if let Some(gate) = self.script.start_gate.lock().unwrap().take() {
@@ -59,17 +59,19 @@ impl Agent for Scripted {
         let (_events, output) = mpsc::unbounded_channel();
         Ok((self.live("started"), output))
     }
+}
 
-    fn session(&self, id: &str) -> Option<Arc<dyn Live>> {
-        // Only where the agent it stands for has one: a stopped session of an agent the bridge starts has nobody
-        // to ask.
-        let rest = self.real.session(id)?;
-        Some(Arc::new(ScriptedSession {
+impl Keeps for Scripted {
+    fn session(&self, id: &str) -> Arc<dyn Live> {
+        let Sessions::Kept(real) = self.real.sessions() else {
+            unreachable!("asked only of an agent that keeps its sessions")
+        };
+        Arc::new(ScriptedSession {
             script: self.script.clone(),
             id: id.to_string(),
-            rest: Some(rest),
+            rest: Some(real.session(id)),
             absent: "session is not running",
-        }))
+        })
     }
 
     fn create(
@@ -77,11 +79,26 @@ impl Agent for Scripted {
         cwd: String,
         model: Option<String>,
         thinking: Option<String>,
-    ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
+    ) -> BoxFuture<'_, Result<PrimeRow>> {
         let made = self.script.made.lock().unwrap().clone();
         match made.as_ref().and_then(PrimeRow::read) {
-            Some(row) => Some(Box::pin(async move { Ok(row) })),
-            None => self.real.create(cwd, model, thinking),
+            Some(row) => Box::pin(async move { Ok(row) }),
+            None => Box::pin(async move {
+                let Sessions::Kept(real) = self.real.sessions() else {
+                    unreachable!("asked only of an agent that keeps its sessions")
+                };
+                real.create(cwd, model, thinking).await
+            }),
+        }
+    }
+}
+
+impl Agent for Scripted {
+    /// As the agent it stands for: a stopped session of an agent the bridge starts has nobody to ask.
+    fn sessions(&self) -> Sessions<'_> {
+        match self.real.sessions() {
+            Sessions::Started(_) => Sessions::Started(self),
+            Sessions::Kept(_) => Sessions::Kept(self),
         }
     }
 
@@ -89,8 +106,8 @@ impl Agent for Scripted {
         Box::pin(async { Ok(json!([])) })
     }
 
-    fn lists_own_jobs(&self) -> bool {
-        self.real.lists_own_jobs()
+    fn jobs(&self) -> crate::agent::JobsFrom {
+        self.real.jobs()
     }
 
     fn gateway_session(&self, file_name: &str) -> String {
@@ -535,7 +552,7 @@ async fn pi_events() {
         ] }),
     );
     // Reading the conversation again asks the agent, so for this step the session has one, as a resumed one does.
-    pi.state.lock().await.own = own(&rig, "pi1", Backend::Pi, true);
+    pi.state.lock().await.own = own(&rig, "pi1", Backend::Started, true);
     rig.events(
         &pi,
         &[
@@ -546,7 +563,7 @@ async fn pi_events() {
     .await;
     rig.settle("a compaction succeeds: the conversation is read again, subagents included")
         .await;
-    pi.state.lock().await.own = BackendState::pi();
+    pi.state.lock().await.own = BackendState::started();
 
     rig.events(
         &pi,
@@ -1011,7 +1028,7 @@ async fn malformed_state_and_stats() {
     });
     for (pin, agent, backend) in [
         ("answers-malformed-prime", AgentKind::Prime, Backend::Prime),
-        ("answers-malformed-pi", AgentKind::Pi, Backend::Pi),
+        ("answers-malformed-pi", AgentKind::Pi, Backend::Started),
     ] {
         leniency(pin, base.clone(), |answers| async move {
             *rig.agents.answers.lock().unwrap() =
@@ -1034,7 +1051,7 @@ async fn malformed_state_and_stats() {
             let mut state = SessionState::new(
                 summary,
                 file,
-                own(rig, "s1", backend, backend == Backend::Pi),
+                own(rig, "s1", backend, backend == Backend::Started),
             );
             state.levels_for = Some("example/model-0".into());
             let session = Arc::new(Session::new(
@@ -1062,18 +1079,20 @@ async fn malformed_state_and_stats() {
 /// Prime's daemon attached.
 fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
     match backend {
-        Backend::Pi if live => BackendState::Pi(Process::Running(Arc::new(ScriptedSession {
-            script: rig.agents.clone(),
-            id: id.to_string(),
-            rest: None,
-            absent: "agent is not running",
-        }))),
-        Backend::Pi => BackendState::pi(),
+        Backend::Started if live => {
+            BackendState::Started(Process::Running(Arc::new(ScriptedSession {
+                script: rig.agents.clone(),
+                id: id.to_string(),
+                rest: None,
+                absent: "agent is not running",
+            })))
+        }
+        Backend::Started => BackendState::started(),
         Backend::Prime => BackendState::Prime(PrimeState {
             attached: live,
             ..Default::default()
         }),
-        Backend::PiSubagent => BackendState::subagent(),
+        Backend::Subagent => BackendState::subagent(),
     }
 }
 
@@ -1081,14 +1100,14 @@ fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
 async fn subagents(rig: &Rig) -> serde_json::Map<String, Value> {
     let mut seen = serde_json::Map::new();
     let all = rig.app.sessions.read().await.clone();
-    for session in all.iter().filter(|s| s.backend == Backend::PiSubagent) {
+    for session in all.iter().filter(|s| s.backend == Backend::Subagent) {
         seen.insert(session.id.clone(), kept(rig, session).await);
     }
     rig.app
         .sessions
         .write()
         .await
-        .retain(|s| s.backend != Backend::PiSubagent);
+        .retain(|s| s.backend != Backend::Subagent);
     seen
 }
 
@@ -1188,7 +1207,7 @@ async fn malformed_events() {
             summary.queue.steering = vec!["earlier".into()];
             summary.background_jobs = 1;
             summary.question = Some(json!({ "text": "Earlier?" }));
-            let mut state = SessionState::new(summary, None, BackendState::pi());
+            let mut state = SessionState::new(summary, None, BackendState::started());
             state.named = true;
             let session = Arc::new(Session::new(
                 "s1".into(),
@@ -1233,11 +1252,11 @@ async fn commands() {
     });
     // Whether the agent is there to answer. A stopped session has no agent, and a subagent takes no commands.
     let kinds = [
-        ("pi", AgentKind::Pi, Backend::Pi, true),
-        ("deepseek", AgentKind::Deepseek, Backend::Pi, true),
+        ("pi", AgentKind::Pi, Backend::Started, true),
+        ("deepseek", AgentKind::Deepseek, Backend::Started, true),
         ("prime", AgentKind::Prime, Backend::Prime, true),
-        ("pi, stopped", AgentKind::Pi, Backend::Pi, false),
-        ("subagent", AgentKind::Pi, Backend::PiSubagent, false),
+        ("pi, stopped", AgentKind::Pi, Backend::Started, false),
+        ("subagent", AgentKind::Pi, Backend::Subagent, false),
     ];
     let cases = [
         "rename",
@@ -1433,7 +1452,7 @@ async fn a_message_sent_again_under_its_id_goes_once() {
     let rig = &Rig::new("send-once", &[]);
     rig.script("prompt", json!({}));
     let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
-    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Pi, true));
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
     let session = &Arc::new(Session::new(
         "s1".into(),
         AgentKind::Pi,
@@ -1489,7 +1508,7 @@ async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
     let rig = &Rig::new("send-again-early", &[]);
     rig.script("prompt", json!({}));
     let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
-    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Pi, true));
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
     let session = Arc::new(Session::new(
         "s1".into(),
         AgentKind::Pi,
@@ -1628,5 +1647,19 @@ async fn a_closed_session_is_stopped_and_resumes() {
     assert_eq!(pi.state.lock().await.summary.status, SessionStatus::Stopped);
     rig.app.resume_session(&pi).await.unwrap();
     assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A saved session of an agent that keeps its own is not one the bridge can start: taking it in would show a
+/// session whose every command goes to whatever that agent has under the same id.
+#[tokio::test]
+async fn a_saved_session_of_an_agent_that_keeps_its_own_is_left_out() {
+    let saved = r#"[
+      { "id": "pi1", "agent": "pi", "cwd": "/work/project", "title": "project", "createdAt": 1700000000000, "sessionFile": null },
+      { "id": "p1", "agent": "prime", "cwd": "/work/project", "title": "kept", "createdAt": 1700000001000, "sessionFile": null }
+    ]"#;
+    let rig = Rig::new("saved-kept", &[("sessions.json", saved)]);
+    assert!(rig.app.find("pi1").await.is_ok());
+    assert!(rig.app.find("p1").await.is_err());
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

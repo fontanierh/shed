@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
-use crate::agent::{Agents, Live};
+use crate::agent::{Agents, Live, Sessions};
 use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
 use crate::channel::Offer;
 use crate::history::{self, History};
@@ -35,11 +35,11 @@ pub struct Envelope {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Backend {
     /// An agent process the bridge starts and owns: `pi --mode rpc`, or DeepSeek Harness through Shed's plugin.
-    Pi,
+    Started,
     /// A session in Prime's daemon, addressed by its active-session id.
     Prime,
     /// One child of a Pi `subagent` tool call, or one subagent of a DeepSeek Harness session.
-    PiSubagent,
+    Subagent,
 }
 
 pub struct App {
@@ -106,17 +106,17 @@ enum Process {
 
 /// What the bridge keeps for one kind of session only.
 enum BackendState {
-    Pi(Process),
+    Started(Process),
     Prime(PrimeState),
-    PiSubagent {
+    Subagent {
         /// Transcript length last sent, to avoid resending unchanged snapshots.
         sent_messages: usize,
     },
 }
 
 impl BackendState {
-    fn pi() -> BackendState {
-        BackendState::Pi(Process::Stopped)
+    fn started() -> BackendState {
+        BackendState::Started(Process::Stopped)
     }
 
     fn prime() -> BackendState {
@@ -124,16 +124,16 @@ impl BackendState {
     }
 
     fn subagent() -> BackendState {
-        BackendState::PiSubagent {
+        BackendState::Subagent {
             sent_messages: usize::MAX,
         }
     }
 
     fn backend(&self) -> Backend {
         match self {
-            BackendState::Pi(_) => Backend::Pi,
+            BackendState::Started(_) => Backend::Started,
             BackendState::Prime(_) => Backend::Prime,
-            BackendState::PiSubagent { .. } => Backend::PiSubagent,
+            BackendState::Subagent { .. } => Backend::Subagent,
         }
     }
 }
@@ -322,39 +322,41 @@ impl SessionState {
 
     /// A `Pi` session with no process: one that was closed, or whose agent exited.
     fn stopped(&self) -> bool {
-        matches!(&self.own, BackendState::Pi(Process::Stopped))
+        matches!(&self.own, BackendState::Started(Process::Stopped))
     }
 
     /// The agent process of a running `Pi` session.
     fn child(&self) -> Option<&Arc<dyn Live>> {
         match &self.own {
-            BackendState::Pi(Process::Running(child) | Process::Stopping(child)) => Some(child),
-            BackendState::Pi(Process::Stopped | Process::Starting { .. }) => None,
-            BackendState::Prime(_) | BackendState::PiSubagent { .. } => None,
+            BackendState::Started(Process::Running(child) | Process::Stopping(child)) => {
+                Some(child)
+            }
+            BackendState::Started(Process::Stopped | Process::Starting { .. }) => None,
+            BackendState::Prime(_) | BackendState::Subagent { .. } => None,
         }
     }
 
     fn prime(&self) -> Option<&PrimeState> {
         match &self.own {
             BackendState::Prime(prime) => Some(prime),
-            BackendState::Pi(_) | BackendState::PiSubagent { .. } => None,
+            BackendState::Started(_) | BackendState::Subagent { .. } => None,
         }
     }
 
     fn prime_mut(&mut self) -> Option<&mut PrimeState> {
         match &mut self.own {
             BackendState::Prime(prime) => Some(prime),
-            BackendState::Pi(_) | BackendState::PiSubagent { .. } => None,
+            BackendState::Started(_) | BackendState::Subagent { .. } => None,
         }
     }
 
     /// Records how long a subagent's transcript is now, and says whether that differs from what was last sent.
     fn note_sent(&mut self, messages: usize) -> bool {
         match &mut self.own {
-            BackendState::PiSubagent { sent_messages } => {
+            BackendState::Subagent { sent_messages } => {
                 std::mem::replace(sent_messages, messages) != messages
             }
-            BackendState::Pi(_) | BackendState::Prime(_) => true,
+            BackendState::Started(_) | BackendState::Prime(_) => true,
         }
     }
 
@@ -437,13 +439,25 @@ impl App {
         let sessions = store
             .load_sessions()
             .into_iter()
+            // Only sessions the bridge starts are saved here. One of an agent that keeps its own can't be started
+            // from this file, and asking it anything would reach some other session of that agent's.
+            .filter(|r| match agents.get(r.agent).sessions() {
+                Sessions::Started(_) => true,
+                Sessions::Kept(_) => {
+                    eprintln!(
+                        "sessions.json lists {} as a {:?} session, which the bridge does not start: left out",
+                        r.id, r.agent
+                    );
+                    false
+                }
+            })
             .map(|r| {
                 let mut summary = new_summary(&r.id, r.agent, SessionKind::Root, &r.cwd);
                 summary.context_limit = limits.get(&r.id).copied();
                 summary.title = r.title.clone();
                 summary.status = SessionStatus::Stopped;
                 summary.created_at = r.created_at;
-                let mut state = SessionState::new(summary, r.session_file, BackendState::pi());
+                let mut state = SessionState::new(summary, r.session_file, BackendState::started());
                 state.named = r.title != default_title(&r.cwd);
                 Arc::new(Session::new(r.id, r.agent, r.cwd, state))
             })
@@ -575,7 +589,7 @@ impl App {
         let _saving = self.saving.lock().await;
         let sessions = self.sessions.read().await.clone();
         let mut records = Vec::new();
-        for s in sessions.iter().filter(|s| s.backend == Backend::Pi) {
+        for s in sessions.iter().filter(|s| s.backend == Backend::Started) {
             let st = s.state.lock().await;
             if st.removed {
                 continue;
@@ -616,13 +630,16 @@ impl App {
     /// Run an agent command against a session: by the process the bridge runs for it, or else by the agent itself
     /// when it keeps its own sessions.
     pub async fn command(&self, session: &Session, ask: Ask) -> Result<Value> {
-        if session.backend == Backend::PiSubagent {
+        if session.backend == Backend::Subagent {
             bail!("Pi subagents are read-only; steer the parent session instead")
         }
         let child = session.state.lock().await.child().cloned();
         let live = match child {
             Some(child) => Some(child),
-            None => self.agents.get(session.agent).session(&session.id),
+            None => match self.agents.get(session.agent).sessions() {
+                Sessions::Kept(agent) => Some(agent.session(&session.id)),
+                Sessions::Started(_) => None,
+            },
         };
         let live = live.ok_or_else(|| anyhow!("session is not running"))?;
         live.send(ask).await
@@ -639,12 +656,10 @@ impl App {
     ) -> Result<SessionSummary> {
         let cwd = expand_dir(&cwd)?;
         // An agent that keeps its own sessions makes it, and it is taken in as its roster would announce it.
-        let kept = self
-            .agents
-            .get(agent)
-            .create(cwd.clone(), model.clone(), thinking.clone());
-        if let Some(made) = kept {
-            let row = made.await?;
+        if let Sessions::Kept(keeps) = self.agents.get(agent).sessions() {
+            let row = keeps
+                .create(cwd.clone(), model.clone(), thinking.clone())
+                .await?;
             let session = self.apply_prime_row(row).await;
             // It exists now, so that is the answer: an error here would have the user make a second one.
             if let Err(e) = self.refresh(&session).await {
@@ -656,7 +671,7 @@ impl App {
         let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         let summary = new_summary(&id, agent, SessionKind::Root, &cwd);
         // Starting from its first moment in the list, so nothing else starts it too.
-        let starting = BackendState::Pi(Process::Starting { closed: false });
+        let starting = BackendState::Started(Process::Starting { closed: false });
         let state = SessionState::new(summary, None, starting);
         let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
@@ -675,8 +690,8 @@ impl App {
         session: &Arc<Session>,
     ) -> Result<SessionSummary> {
         match session.backend {
-            Backend::Pi => {}
-            Backend::Prime | Backend::PiSubagent => {
+            Backend::Started => {}
+            Backend::Prime | Backend::Subagent => {
                 bail!("only Pi sessions can be resumed; Prime sessions stay live in its daemon")
             }
         }
@@ -684,14 +699,14 @@ impl App {
             let mut st = session.state.lock().await;
             match &st.own {
                 // Resuming twice does no harm: a session that runs, or is about to, is the answer.
-                BackendState::Pi(Process::Running(_) | Process::Starting { .. }) => {
+                BackendState::Started(Process::Running(_) | Process::Starting { .. }) => {
                     return Ok(st.summary.clone())
                 }
-                BackendState::Pi(Process::Stopping(_)) => {
+                BackendState::Started(Process::Stopping(_)) => {
                     bail!("the session is still stopping; resume it in a moment")
                 }
-                BackendState::Pi(Process::Stopped) => {}
-                BackendState::Prime(_) | BackendState::PiSubagent { .. } => {
+                BackendState::Started(Process::Stopped) => {}
+                BackendState::Prime(_) | BackendState::Subagent { .. } => {
                     unreachable!("checked above: only a started session gets here")
                 }
             }
@@ -699,7 +714,7 @@ impl App {
                 .session_file
                 .clone()
                 .ok_or_else(|| anyhow!("session has no saved transcript to resume"))?;
-            st.own = BackendState::Pi(Process::Starting { closed: false });
+            st.own = BackendState::Started(Process::Starting { closed: false });
             resume
         };
         self.start_pi(session, Some(resume), None, None).await?;
@@ -746,15 +761,24 @@ impl App {
             resume,
             env,
         };
-        let spawned = self.agents.get(session.agent).start(&opts);
+        let spawned = match self.agents.get(session.agent).sessions() {
+            Sessions::Started(agent) => agent.start(&opts),
+            Sessions::Kept(_) => Err(anyhow!(
+                "{:?} keeps its own sessions: the bridge does not start them",
+                session.agent
+            )),
+        };
         let (child, rx) = {
             let mut st = session.state.lock().await;
             let closed = st.removed
-                || matches!(st.own, BackendState::Pi(Process::Starting { closed: true }));
+                || matches!(
+                    st.own,
+                    BackendState::Started(Process::Starting { closed: true })
+                );
             match spawned {
                 Ok(pair) if closed => {
                     // Closed or deleted while its agent started: the agent goes, and the session is stopped.
-                    st.own = BackendState::pi();
+                    st.own = BackendState::started();
                     st.summary.status = SessionStatus::Stopped;
                     st.summary.error = None;
                     self.publish_summary(&st);
@@ -763,14 +787,14 @@ impl App {
                     bail!("{CLOSED_WHILE_STARTING}");
                 }
                 Ok(pair) => {
-                    st.own = BackendState::Pi(Process::Running(pair.0.clone()));
+                    st.own = BackendState::Started(Process::Running(pair.0.clone()));
                     st.summary.status = SessionStatus::Starting;
                     st.summary.error = None;
                     self.publish_summary(&st);
                     pair
                 }
                 Err(e) => {
-                    st.own = BackendState::pi();
+                    st.own = BackendState::started();
                     st.summary.status = SessionStatus::Error;
                     st.summary.error = Some(e.to_string());
                     self.publish_summary(&st);
@@ -790,10 +814,10 @@ impl App {
         let mut st = session.state.lock().await;
         let ours = |c: &Arc<dyn Live>| Arc::ptr_eq(c, &child);
         match (&st.own, started) {
-            (BackendState::Pi(Process::Running(c)), Ok(())) if ours(c) => Ok(()),
-            (BackendState::Pi(Process::Running(c)), Err(e)) if ours(c) => {
+            (BackendState::Started(Process::Running(c)), Ok(())) if ours(c) => Ok(()),
+            (BackendState::Started(Process::Running(c)), Err(e)) if ours(c) => {
                 // An agent that started and cannot be read is not left running behind a session marked as failed.
-                st.own = BackendState::pi();
+                st.own = BackendState::started();
                 st.summary.status = SessionStatus::Error;
                 st.summary.error = Some(e.to_string());
                 self.publish_summary(&st);
@@ -808,17 +832,19 @@ impl App {
 
     pub async fn close_session(&self, session: &Session) -> Result<()> {
         match session.backend {
-            Backend::Pi => {
+            Backend::Started => {
                 let child = {
                     let mut st = session.state.lock().await;
-                    match std::mem::replace(&mut st.own, BackendState::pi()) {
-                        BackendState::Pi(Process::Running(child) | Process::Stopping(child)) => {
-                            st.own = BackendState::Pi(Process::Stopping(child.clone()));
+                    match std::mem::replace(&mut st.own, BackendState::started()) {
+                        BackendState::Started(
+                            Process::Running(child) | Process::Stopping(child),
+                        ) => {
+                            st.own = BackendState::Started(Process::Stopping(child.clone()));
                             Some(child)
                         }
                         // The start closes the agent it is making.
-                        BackendState::Pi(Process::Starting { .. }) => {
-                            st.own = BackendState::Pi(Process::Starting { closed: true });
+                        BackendState::Started(Process::Starting { .. }) => {
+                            st.own = BackendState::Started(Process::Starting { closed: true });
                             None
                         }
                         other => {
@@ -832,7 +858,7 @@ impl App {
                 // It is gone now, whether or not its last word has been read yet.
                 let mut st = session.state.lock().await;
                 if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
-                    st.own = BackendState::pi();
+                    st.own = BackendState::started();
                     st.summary.question = None;
                     st.summary.status = SessionStatus::Stopped;
                     st.summary.error = None;
@@ -852,14 +878,14 @@ impl App {
                 }
                 Ok(())
             }
-            Backend::PiSubagent => bail!("Pi subagents end with their tool call"),
+            Backend::Subagent => bail!("Pi subagents end with their tool call"),
         }
     }
 
     pub async fn delete_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
         let key = limit_key(session, &*session.state.lock().await).to_string();
         // What is kept for the session is forgotten once it is closed: a close that fails leaves it as it was.
-        if session.backend != Backend::PiSubagent {
+        if session.backend != Backend::Subagent {
             self.close_session(session).await?;
         }
         self.forget_limit(&key);
@@ -873,7 +899,7 @@ impl App {
         // Its subagents and theirs: dsh nests them.
         let mut subagents = Vec::new();
         let all = self.sessions.read().await.clone();
-        for s in all.iter().filter(|s| s.backend == Backend::PiSubagent) {
+        for s in all.iter().filter(|s| s.backend == Backend::Subagent) {
             subagents.push((s.id.clone(), s.state.lock().await.summary.parent_id.clone()));
         }
         let mut family = vec![session.id.clone()];
@@ -899,7 +925,7 @@ impl App {
 
     pub async fn shutdown(&self) {
         let sessions = self.sessions.read().await.clone();
-        for s in sessions.iter().filter(|s| s.backend == Backend::Pi) {
+        for s in sessions.iter().filter(|s| s.backend == Backend::Started) {
             if let Err(e) = self.close_session(s).await {
                 eprintln!("closing {} failed: {e}", s.id);
             }
@@ -930,11 +956,15 @@ impl App {
                 ChildOutput::Exited(reason) => {
                     let mut st = session.state.lock().await;
                     let stopping = match &st.own {
-                        BackendState::Pi(Process::Running(c)) if Arc::ptr_eq(c, &child) => false,
-                        BackendState::Pi(Process::Stopping(c)) if Arc::ptr_eq(c, &child) => true,
+                        BackendState::Started(Process::Running(c)) if Arc::ptr_eq(c, &child) => {
+                            false
+                        }
+                        BackendState::Started(Process::Stopping(c)) if Arc::ptr_eq(c, &child) => {
+                            true
+                        }
                         _ => break,
                     };
-                    st.own = BackendState::pi();
+                    st.own = BackendState::started();
                     st.summary.question = None;
                     if stopping {
                         st.summary.status = SessionStatus::Stopped;
@@ -995,7 +1025,7 @@ impl App {
                 summary_changed = true;
             }
             SessionEvent::DshSubagent(child) => dsh_subagent = Some(child),
-            SessionEvent::PiSubagentCall(call) if session.backend == Backend::Pi => {
+            SessionEvent::PiSubagentCall(call) if session.backend == Backend::Started => {
                 st.summary.running_subagents = !call.finished;
                 summary_changed = true;
                 pi_subagents = Some(call);
@@ -1007,7 +1037,7 @@ impl App {
         self.flush_changes(&session.id, &mut st);
         // Titled once, from the first message: after a compaction the transcript starts at a later one.
         if !st.named
-            && session.backend == Backend::Pi
+            && session.backend == Backend::Started
             && st.summary.title == default_title(&session.cwd)
         {
             if let Some(first) = st.transcript.first_user_text() {
@@ -1080,7 +1110,7 @@ impl App {
                     self.command(session, Ask::AbortAndSendQueued).await,
                 ]
             }
-            Backend::Pi | Backend::PiSubagent => [
+            Backend::Started | Backend::Subagent => [
                 self.command(session, Ask::Abort).await,
                 self.command(
                     session,
@@ -1122,7 +1152,7 @@ impl App {
             self.send_snapshot(&session.id, &mut st);
         }
         // Rebuild Pi subagents from completed subagent tool results (e.g. after a resume).
-        if session.backend == Backend::Pi {
+        if session.backend == Backend::Started {
             for call in PiSubagentCall::finished_in(&messages) {
                 self.update_pi_subagents(session, call).await;
             }

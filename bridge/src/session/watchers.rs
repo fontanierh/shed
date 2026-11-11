@@ -239,7 +239,7 @@ impl App {
                 .read()
                 .await
                 .iter()
-                .filter(|s| matches!(s.backend, Backend::Pi | Backend::Prime))
+                .filter(|s| matches!(s.backend, Backend::Started | Backend::Prime))
                 .cloned()
                 .collect();
             if sessions.is_empty() {
@@ -249,12 +249,12 @@ impl App {
             let tree = crate::jobs::ProcessTree::snapshot().await;
             for session in sessions {
                 // An agent that lists its own background commands reports them as events.
-                if self.agent(session.agent).lists_own_jobs() {
+                if self.agent(session.agent).jobs() == crate::agent::JobsFrom::Agent {
                     continue;
                 }
                 let (jobs, waiting) = match session.backend {
-                    Backend::Pi => crate::jobs::pi_running(&session.id, tree.as_ref()),
-                    Backend::PiSubagent => continue,
+                    Backend::Started => crate::jobs::pi_running(&session.id, tree.as_ref()),
+                    Backend::Subagent => continue,
                     Backend::Prime => {
                         let worker = session.state.lock().await.worker_pid();
                         let (Some(worker), Some(tree)) = (worker, &tree) else {

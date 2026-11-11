@@ -24,7 +24,7 @@ impl App {
         session: &Arc<Session>,
         st: &mut SessionState,
     ) {
-        if st.refresh_scheduled || session.backend == Backend::PiSubagent {
+        if st.refresh_scheduled || session.backend == Backend::Subagent {
             return;
         }
         st.refresh_scheduled = true;
@@ -111,7 +111,7 @@ impl App {
                         let file = stats.session_file.or_else(|| st.session_file.clone());
                         self.prime_cost(file.as_deref(), own, st.summary.cost)
                     }
-                    Backend::Pi | Backend::PiSubagent => own,
+                    Backend::Started | Backend::Subagent => own,
                 }
                 .max(st.gateway_cost);
             }
@@ -149,7 +149,7 @@ impl App {
         }
         self.publish_summary(&st);
         drop(st);
-        if file_changed && session.backend == Backend::Pi {
+        if file_changed && session.backend == Backend::Started {
             tokio::spawn(self.clone().save_registry());
         }
         if compact {
@@ -255,7 +255,7 @@ impl App {
         if !model.reasoning {
             return vec!["off".to_string()];
         }
-        if session.backend == Backend::Pi {
+        if session.backend == Backend::Started {
             if let Ok(data) = self.command(session, Ask::ThinkingLevels).await {
                 if let Some(levels) = agent_wire::thinking_levels(&data) {
                     return levels;
