@@ -322,8 +322,7 @@ public struct WaitingOn: Codable, Equatable, Sendable {
 /// A tool call or background command that stood still long enough to look stuck, and why: macOS's permission
 /// prompt, or the verdict of the model the bridge asks when it has an OpenAI key for it.
 public struct Stuck: Codable, Equatable, Sendable {
-    /// "tool": the agent's current tool call. "command": a background command.
-    public let kind: String
+    public let kind: StuckKind
     public let command: String
     /// One sentence: "macOS is probably asking for permission to read Documents…".
     public let reason: String
@@ -334,7 +333,35 @@ public struct Stuck: Codable, Equatable, Sendable {
     /// Epoch milliseconds.
     public let startedAt: Double?
 
-    public var isToolCall: Bool { kind == "tool" }
+    public var isToolCall: Bool { kind == .tool }
+}
+
+/// What a session is stuck on: the agent's current tool call, or a background command.
+public enum StuckKind: String, Codable, Sendable {
+    case tool, command
+    /// A kind this version of the app has no name for. The bridge never sends this word.
+    case unknown
+}
+
+extension StuckKind {
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+    }
+}
+
+/// Where a background command is. An agent may add a status of its own, which the bridge passes on: it reads as
+/// `unknown`, and the command is still listed.
+public enum JobStatus: String, Decodable, Hashable, Sendable {
+    case running, finished
+    /// The agent stopped without recording the exit.
+    case lost
+    case unknown
+}
+
+extension JobStatus {
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+    }
 }
 
 /// A shell command an agent left running in the background, as its own TUI lists it.
@@ -345,8 +372,7 @@ public struct BackgroundJob: Decodable, Identifiable, Hashable, Sendable {
     /// Epoch milliseconds.
     public let startedAt: Double?
     public let durationMs: Double?
-    /// running, finished, or lost (the agent stopped without recording the exit).
-    public let status: String
+    public let status: JobStatus
     /// Negative for a signal: -15 is a cancelled command.
     public let exitCode: Int?
     /// Prime's persistent shells.
@@ -354,7 +380,7 @@ public struct BackgroundJob: Decodable, Identifiable, Hashable, Sendable {
     /// Why it looks stuck, when it does.
     public let stuck: String?
 
-    public var isRunning: Bool { status == "running" }
+    public var isRunning: Bool { status == .running }
     public var started: Date? { startedAt.map { Date(timeIntervalSince1970: $0 / 1000) } }
 }
 

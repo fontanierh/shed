@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Before anything that runs node: the runner's own may be older than the one the files are written for.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Shell scripts parse
         run: git ls-files -z '*.sh' | xargs -0 -n1 bash -n
       - name: Shell scripts have no certain error
@@ -31,9 +35,6 @@ jobs:
         run: git ls-files -z '*.mjs' | xargs -0 -n1 node --check
       - name: Python files parse
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
       - name: TypeScript files parse
         run: git ls-files -z '*.ts' | xargs -0 node --no-warnings .github/scripts/ts-syntax.mjs
       - name: The installer's JSON files parse

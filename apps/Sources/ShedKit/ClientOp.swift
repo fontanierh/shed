@@ -80,7 +80,10 @@ enum ClientOp: Sendable {
         case .attach, .abort, .stopTool, .setThinking, .setAutoCompaction, .setContextLimit, .setModel, .resumeSession, .closeSession,
              .clearGoal:
             true
-        default:
+        // Each named, so a new operation has to be put on one side or the other.
+        case .ping, .detach, .send, .compact, .createSession, .followUp, .newSession, .listModels, .renameSession,
+             .restartKernel, .deleteSession, .listJobs, .jobOutput, .killJob, .answerQuestion, .loadEarlier,
+             .listAgentModels, .listDir, .gitBranch, .githubOverview:
             false
         }
     }
@@ -89,7 +92,10 @@ enum ClientOp: Sendable {
     var reads: Bool {
         switch name {
         case .ping, .listModels, .listJobs, .jobOutput, .loadEarlier, .listAgentModels, .listDir, .gitBranch, .githubOverview: true
-        default: false
+        case .attach, .detach, .send, .abort, .compact, .createSession, .followUp, .stopTool, .newSession, .setModel,
+             .setThinking, .setAutoCompaction, .resumeSession, .renameSession, .setContextLimit, .clearGoal,
+             .restartKernel, .closeSession, .deleteSession, .killJob, .answerQuestion:
+            false
         }
     }
 

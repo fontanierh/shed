@@ -208,7 +208,7 @@ struct JobStatusIcon: View {
         if job.isRunning {
             Spinner().frame(width: 14, height: 14)
         } else {
-            let (symbol, tint) = Self.look(exitCode: job.exitCode, lost: job.status == "lost")
+            let (symbol, tint) = Self.look(exitCode: job.exitCode, lost: job.status == .lost)
             Image(systemName: symbol).foregroundStyle(tint).frame(width: 14, height: 14)
         }
     }
@@ -257,7 +257,7 @@ private struct JobDetail: View {
     @State private var cancelling = false
 
     static func outcome(_ job: BackgroundJob) -> String {
-        if job.status == "lost" { return "Lost" }
+        if job.status == .lost { return "Lost" }
         if let signal = JobStatusIcon.signal(job.exitCode) { return JobStatusIcon.cancelled(signal) ? "Cancelled" : "Signal \(signal)" }
         return job.exitCode.map { "Exit \($0)" } ?? "Finished"
     }
