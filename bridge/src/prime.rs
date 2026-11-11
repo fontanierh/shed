@@ -115,10 +115,14 @@ impl Keeps for Prime {
     fn stop(&self, id: &str) -> BoxFuture<'_, Result<()>> {
         let id = id.to_string();
         Box::pin(async move {
-            let out = tokio::process::Command::new("prime-agent")
+            let run = tokio::process::Command::new("prime-agent")
                 .args(["stop", &id])
-                .output()
-                .await?;
+                .stdin(Stdio::null())
+                .kill_on_drop(true)
+                .output();
+            let out = tokio::time::timeout(QUICK, run)
+                .await
+                .map_err(|_| anyhow!("prime-agent stop timed out"))??;
             let stderr = String::from_utf8_lossy(&out.stderr);
             // An empty draft (e.g. right after new_session) has no worker to stop.
             if !out.status.success() && !stderr.contains("Unknown active session") {
@@ -265,12 +269,17 @@ pub fn socket_paths() -> Vec<String> {
     if let Ok(path) = std::env::var("PRIME_AGENT_DAEMON_SOCKET") {
         return vec![path];
     }
-    let tmp = std::process::Command::new("getconf")
-        .arg("DARWIN_USER_TEMP_DIR")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
+    static USER_TMP: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let darwin_tmp = USER_TMP.get_or_init(|| {
+        std::process::Command::new("getconf")
+            .arg("DARWIN_USER_TEMP_DIR")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    });
+    let tmp = darwin_tmp
+        .clone()
         .or_else(|| std::env::var("TMPDIR").ok())
         .unwrap_or_else(|| "/tmp/".into());
     let uid = unsafe { libc_getuid() };
@@ -643,8 +652,7 @@ impl PrimeDaemon {
 
 /// Start the supervisor detached from the bridge so it outlives it (a running one makes this a no-op).
 fn start_daemon() -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    std::process::Command::new("prime-agent")
+    let mut child = tokio::process::Command::new("prime-agent")
         .args(["--mode", "daemon"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -652,6 +660,12 @@ fn start_daemon() -> Result<()> {
         .process_group(0)
         .spawn()
         .map_err(|e| anyhow!("failed to start prime-agent daemon: {e}"))?;
+    // Reap the launcher if it exits (for instance when another client started the daemon first) so no zombie stays.
+    tokio::spawn(async move {
+        if let Err(e) = child.wait().await {
+            eprintln!("prime-agent daemon starter: {e}");
+        }
+    });
     Ok(())
 }
 

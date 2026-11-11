@@ -89,7 +89,7 @@ pub async fn list_models(
     // listed as the agent sees it.
     let gateway = crate::opencodex::gateway(store);
     if let Some(gateway) = &gateway {
-        if let Err(e) = crate::opencodex::sync(gateway).await {
+        if let Err(e) = crate::opencodex::sync(store, gateway).await {
             eprintln!("Open Codex catalog: {e}");
         }
     }

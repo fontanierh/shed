@@ -18,10 +18,6 @@ pub enum Change {
     },
 }
 
-fn clip(text: String) -> String {
-    clip_to(text, MAX_FIELD)
-}
-
 pub fn clip_to(text: String, max: usize) -> String {
     if text.len() <= max {
         return text;
@@ -92,6 +88,8 @@ pub struct Transcript {
     looping: Option<(&'static str, crate::runaway::LoopSample)>,
     /// The block streaming now was already found looping: its stop is on its way, so it isn't reported again.
     stopped: bool,
+    /// Per-field clip limit (`0` uses `MAX_FIELD`).
+    max_field: usize,
 }
 
 impl Transcript {
@@ -114,11 +112,26 @@ impl Transcript {
         }
     }
 
+    fn clip_field(&self, text: String) -> String {
+        clip_to(
+            text,
+            if self.max_field == 0 {
+                MAX_FIELD
+            } else {
+                self.max_field
+            },
+        )
+    }
+
     pub fn reset(&mut self, messages: &[Value]) {
         self.items.clear();
         self.index.clear();
         self.tools.clear();
         self.stream.clear();
+        self.user_started = false;
+        self.runaway = Default::default();
+        self.looping = None;
+        self.stopped = false;
         self.silent = true;
         for message in messages {
             // Epoch ms, except Prime's custom messages (bash-done, agent messages), which carry ISO 8601.
@@ -136,12 +149,14 @@ impl Transcript {
 
     /// The items for `messages`, read from history rather than streamed, with tool arguments and output clipped to `max`.
     pub fn rebuild(messages: &[Value], max: usize) -> Vec<Item> {
-        let mut transcript = Transcript::default();
+        let mut transcript = Transcript {
+            max_field: max,
+            ..Default::default()
+        };
         transcript.reset(messages);
         let mut items = std::mem::take(&mut transcript.items);
         for item in &mut items {
             item.args = item.args.take().map(|a| clip_to(a, max));
-            item.output = item.output.take().map(|o| clip_to(o, max));
         }
         items
     }
@@ -182,7 +197,7 @@ impl Transcript {
             }
             "tool_execution_update" => {
                 let set = ItemSet {
-                    output: Some(clip(result_text(&event["partialResult"]))),
+                    output: Some(self.clip_field(result_text(&event["partialResult"]))),
                     ..Default::default()
                 };
                 self.upsert_tool(event, set);
@@ -195,7 +210,7 @@ impl Transcript {
                     } else {
                         ToolStatus::Done
                     }),
-                    output: Some(clip(result_text(&event["result"]))),
+                    output: Some(self.clip_field(result_text(&event["result"]))),
                     duration_ms: event["durationMs"].as_f64().map(|d| d as u64),
                     ..Default::default()
                 };
@@ -273,15 +288,17 @@ impl Transcript {
 
     fn upsert_tool(&mut self, event: &Value, mut set: ItemSet) {
         let call_id = str_field(event, "toolCallId").unwrap_or_default();
-        if let Some(existing) = self.tools.get(&call_id).cloned() {
-            // Keep the streamed arguments if execution reports none.
-            if set.args.as_deref() == Some("") {
-                set.args = None;
+        if !call_id.is_empty() {
+            if let Some(existing) = self.tools.get(&call_id).cloned() {
+                // Keep the streamed arguments if execution reports none.
+                if set.args.as_deref() == Some("") {
+                    set.args = None;
+                }
+                if !set.is_empty() {
+                    self.set(&existing, set);
+                }
+                return;
             }
-            if !set.is_empty() {
-                self.set(&existing, set);
-            }
-            return;
         }
         let mut item = Item::new(ItemKind::Tool, "");
         item.tool_name = Some(str_field(event, "toolName").unwrap_or("tool".into()));
@@ -289,7 +306,9 @@ impl Transcript {
         item.status = Some(ToolStatus::Pending);
         set.apply(&mut item);
         let id = self.add(item);
-        self.tools.insert(call_id, id);
+        if !call_id.is_empty() {
+            self.tools.insert(call_id, id);
+        }
     }
 
     fn handle_delta(&mut self, delta: &Value, partial: &Value) {
@@ -532,7 +551,7 @@ impl Transcript {
                     } else {
                         ToolStatus::Done
                     }),
-                    output: Some(clip(text_of(&message["content"]))),
+                    output: Some(self.clip_field(text_of(&message["content"]))),
                     duration_ms: self
                         .clock
                         .zip(started)
@@ -545,7 +564,8 @@ impl Transcript {
                 let mut item = Item::new(ItemKind::Tool, "");
                 item.tool_name = Some("user bash".into());
                 item.args = str_field(message, "command");
-                item.output = Some(clip(str_field(message, "output").unwrap_or_default()));
+                item.output =
+                    Some(self.clip_field(str_field(message, "output").unwrap_or_default()));
                 item.status = Some(if message["exitCode"] == 0 {
                     ToolStatus::Done
                 } else {
@@ -700,5 +720,41 @@ mod reload {
         assert_eq!(tool.tool_name.as_deref(), Some("bash"));
         assert_eq!(tool.status, Some(ToolStatus::Done));
         assert_eq!(tool.output.as_deref(), Some("a.txt"));
+    }
+
+    #[test]
+    fn reset_clears_streaming_flags_and_rebuild_clips_once() {
+        let mut t = Transcript::default();
+        t.handle_event(&json!({
+            "type": "message_start",
+            "message": { "role": "user", "content": "in-flight" }
+        }));
+        t.reset(&[]);
+        t.handle_event(&json!({
+            "type": "message_end",
+            "message": { "role": "user", "content": "after-reset" }
+        }));
+        assert_eq!(t.items.len(), 1);
+        assert_eq!(t.items[0].text, "after-reset");
+
+        let big = "x".repeat(50_000);
+        let built = Transcript::rebuild(
+            &[json!({
+                "role": "bashExecution",
+                "command": "cat big",
+                "output": big,
+                "exitCode": 0,
+            })],
+            4_000,
+        );
+        assert!(
+            built[0]
+                .output
+                .as_deref()
+                .unwrap()
+                .ends_with("… (46000 more bytes)"),
+            "{:?}",
+            built[0].output
+        );
     }
 }

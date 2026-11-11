@@ -475,7 +475,7 @@ async fn firecrawl(key: &str, url: &str, body: &Map<String, Value>) -> Result<Va
         .get("timeout")
         .and_then(Value::as_u64)
         .unwrap_or(60_000)
-        + 30_000;
+        .saturating_add(30_000);
     let response = reqwest::Client::new()
         .post(url)
         .bearer_auth(key)
@@ -485,7 +485,10 @@ async fn firecrawl(key: &str, url: &str, body: &Map<String, Value>) -> Result<Va
         .await
         .map_err(|e| anyhow!("can't reach Firecrawl: {e}"))?;
     let status = response.status();
-    let text = response.text().await.unwrap_or_default();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| anyhow!("reading Firecrawl's reply failed: {e}"))?;
     answer(status, &text)
 }
 

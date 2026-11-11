@@ -74,13 +74,17 @@ impl Starts for Pi {
         if let Some(resume) = &opts.resume {
             args.extend(["--session".into(), resume.clone()]);
         }
-        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
+        // The guide as a file, for the subagents Pi starts: written atomically only when changed so a subagent
+        // reading it concurrently never sees a truncated file.
         let guide = self.0.dir().join("guide.md");
-        if let Err(e) = std::fs::write(&guide, crate::guide::text(AgentKind::Pi, &self.0)) {
-            eprintln!(
-                "can't write the guide for Pi's subagents to {}: {e}",
-                guide.display()
-            );
+        let guide_text = crate::guide::text(AgentKind::Pi, &self.0);
+        if std::fs::read_to_string(&guide).ok().as_deref() != Some(guide_text.as_str()) {
+            if let Err(e) = crate::store::write_private(&guide, guide_text.as_bytes()) {
+                eprintln!(
+                    "can't write the guide for Pi's subagents to {}: {e}",
+                    guide.display()
+                );
+            }
         }
         let env = vec![
             // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.

@@ -60,11 +60,13 @@ impl ProcessTree {
             if let Some(seconds) = parse_cpu_time(time) {
                 cpu.insert(pid, seconds);
             }
-            parents.insert(pid, ppid);
-            children
-                .entry(ppid)
-                .or_default()
-                .push((pid, command.trim().to_string()));
+            if pid != ppid {
+                parents.insert(pid, ppid);
+                children
+                    .entry(ppid)
+                    .or_default()
+                    .push((pid, command.trim().to_string()));
+            }
         }
         Self {
             children,
@@ -186,11 +188,14 @@ impl ProcessTree {
     /// A process and everything under it, with each one's command.
     pub fn subtree(&self, root: u32) -> Vec<(u32, &str)> {
         let mut out = Vec::new();
+        let mut seen = HashSet::from([root]);
         let mut stack = vec![root];
         while let Some(pid) = stack.pop() {
             for (child, command) in self.children.get(&pid).into_iter().flatten() {
-                out.push((*child, command.as_str()));
-                stack.push(*child);
+                if seen.insert(*child) {
+                    out.push((*child, command.as_str()));
+                    stack.push(*child);
+                }
             }
         }
         out
@@ -422,13 +427,19 @@ impl App {
                     .to_string())
             }
             Some(JobsFrom::Files) => {
-                let log = std::fs::read(
+                use std::io::{Read, Seek, SeekFrom};
+                let mut file = std::fs::File::open(
                     pi_dir(&self.store, &session.id).join(format!("{}.log", safe_id(job_id)?)),
                 )
                 .map_err(|_| anyhow!("This command is no longer available."))?;
-                // At most 16 KiB, like Prime's tail.
-                let text = String::from_utf8_lossy(&log[log.len().saturating_sub(16 * 1024)..])
-                    .into_owned();
+                let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+                file.seek(SeekFrom::Start(len.saturating_sub(16 * 1024)))
+                    .map_err(|_| anyhow!("This command is no longer available."))?;
+                let mut tail_bytes = Vec::new();
+                file.take(16 * 1024)
+                    .read_to_end(&mut tail_bytes)
+                    .map_err(|_| anyhow!("This command is no longer available."))?;
+                let text = String::from_utf8_lossy(&tail_bytes).into_owned();
                 let all: Vec<&str> = text.lines().collect();
                 Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"))
             }
@@ -498,10 +509,21 @@ impl App {
                     .args(["-TERM", "--", &group])
                     .status()
                     .await?;
-                // Like the extension's job_kill: SIGKILL after 5 seconds for commands that ignore SIGTERM.
+                // Like the extension's job_kill: SIGKILL after 5 seconds for commands that ignore SIGTERM, checking
+                // first that the job record is still running under the same pid so a recycled pid isn't signalled.
+                let store = self.store.clone();
+                let session_id = session.id.clone();
+                let target_id = job_id.to_string();
+                let started_at = job.started_at;
                 tokio::spawn(async move {
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    if alive(pid) {
+                    let still_same = pi_jobs(&store, &session_id).into_iter().any(|j| {
+                        j.id == target_id
+                            && j.status == JobStatus::Running
+                            && j.pid == Some(pid)
+                            && j.started_at == started_at
+                    });
+                    if still_same && alive(pid) {
                         let killed = tokio::process::Command::new("/bin/kill")
                             .args(["-KILL", "--", &group])
                             .status()
@@ -576,7 +598,7 @@ fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
     Some(BackgroundJob {
         id: format!("{prefix}{id}"),
         command: a["command"].as_str().unwrap_or_default().to_string(),
-        pid: a["pid"].as_u64().map(|p| p as u32),
+        pid: valid_pid(a["pid"].as_u64()),
         started_at: a["startedAt"].as_str().and_then(parse_iso_ms),
         duration_ms: a["durationMs"].as_u64(),
         status: JobStatus::read(a["status"].as_str().unwrap_or("running")),
@@ -602,7 +624,7 @@ fn pi_jobs(store: &crate::store::Store, session_id: &str) -> Vec<BackgroundJob> 
             ))
         })
         .filter_map(|(j, path)| {
-            let pid = j["pid"].as_u64().map(|p| p as u32);
+            let pid = valid_pid(j["pid"].as_u64());
             let mut status = JobStatus::read(j["status"].as_str().unwrap_or("finished"));
             // Only Pi rewrites the record, so a job it left behind says "running" for good. Once seen gone, that is
             // noted beside it: the pid can be given to another process later, and that one isn't this job.
@@ -670,7 +692,15 @@ pub fn pi_running(
     (running.len() as u32, waiting)
 }
 
+fn valid_pid(raw: Option<u64>) -> Option<u32> {
+    let pid = u32::try_from(raw?).ok()?;
+    (pid > 1 && pid != std::process::id()).then_some(pid)
+}
+
 fn alive(pid: u32) -> bool {
+    if pid <= 1 || pid == std::process::id() {
+        return false;
+    }
     std::process::Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
         .stderr(std::process::Stdio::null())
@@ -765,5 +795,19 @@ mod tests {
         assert_eq!(parse_etime("10:13"), Some(613));
         assert_eq!(parse_etime("02:00:01"), Some(7201));
         assert_eq!(parse_etime("1-00:00:00"), Some(86_400));
+    }
+
+    #[test]
+    fn rejects_dangerous_pids_and_handles_self_parented_processes() {
+        assert_eq!(valid_pid(Some(0)), None);
+        assert_eq!(valid_pid(Some(1)), None);
+        assert_eq!(valid_pid(Some(u64::from(std::process::id()))), None);
+        assert_eq!(valid_pid(Some(u64::from(u32::MAX) + 1)), None);
+        assert!(!alive(0));
+        assert!(!alive(1));
+
+        let ps = "   0     0 10:00 0:00.00 kernel_task\n  10     0 05:00 0:01.00 launchd\n";
+        let tree = ProcessTree::parse(ps);
+        assert_eq!(tree.subtree(0), vec![(10, "launchd")]);
     }
 }

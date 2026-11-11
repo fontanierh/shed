@@ -230,9 +230,31 @@ impl App {
                 .await
                 .iter()
                 .filter(|s| matches!(s.backend, Backend::Started | Backend::Prime))
+                .filter(|s| self.agent(s.agent).jobs() != JobsFrom::Agent)
                 .cloned()
                 .collect();
             if sessions.is_empty() {
+                continue;
+            }
+            let mut needs_tree = false;
+            for s in &sessions {
+                match self.agent(s.agent).jobs() {
+                    JobsFrom::Kernel => {
+                        if s.state.lock().await.worker_pid().is_some() {
+                            needs_tree = true;
+                            break;
+                        }
+                    }
+                    JobsFrom::Files => {
+                        if crate::jobs::pi_dir(&self.store, &s.id).is_dir() {
+                            needs_tree = true;
+                            break;
+                        }
+                    }
+                    JobsFrom::Agent => {}
+                }
+            }
+            if !needs_tree {
                 continue;
             }
             // Also tells a command stuck on macOS's permission prompt, Pi's included.

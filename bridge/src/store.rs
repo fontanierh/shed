@@ -292,8 +292,11 @@ impl Store {
         // An invalid file stops the bridge here, at its start. Read later, it keeps the settings of this read.
         let mut config = document(&path)?.unwrap_or_else(|| json!({}));
         self.keep(Ok(Config::read(&config)?));
-        if let Some(token) = config["token"].as_str() {
-            return Ok(token.to_string());
+        match &config["token"] {
+            Value::Null => {}
+            Value::String(token) if !token.trim().is_empty() => return Ok(token.clone()),
+            Value::String(_) => {}
+            _ => return Err(mistyped("token", "non-empty text")),
         }
         let token = format!(
             "{}{}",
@@ -313,7 +316,10 @@ impl Store {
     pub fn client_id(&self) -> Result<String> {
         let path = self.dir.join("client-id");
         if let Ok(id) = std::fs::read_to_string(&path) {
-            return Ok(id.trim().to_string());
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
         }
         let id = format!("agent-remote:{}", uuid::Uuid::new_v4().simple());
         write_private(&path, id.as_bytes())?;
@@ -496,11 +502,18 @@ pub fn adopt_stray_limits(limits: &mut HashMap<String, u64>, workers: &std::path
     !strays.is_empty()
 }
 
-fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    // Unique per write: concurrent saves must not rename each other's temp file away.
+pub(crate) fn write_private(path: &PathBuf, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    // Unique per write, created 0600 from the first moment so secrets are never world-readable.
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-    std::fs::write(&tmp, bytes)?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(bytes)?;
+    drop(file);
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
     std::fs::rename(&tmp, path)?;
     Ok(())
@@ -925,6 +938,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(saved, initial);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn empty_token_is_replaced_and_mistyped_token_is_rejected() {
+        let store = store("bad-token");
+        let path = store.dir.join("config.json");
+        std::fs::write(&path, r#"{"token": "   "}"#).unwrap();
+        let generated = store.token().unwrap();
+        assert_eq!(generated.len(), 64);
+
+        std::fs::write(&path, r#"{"token": 12345}"#).unwrap();
+        assert!(store.token().is_err());
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 }

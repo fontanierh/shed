@@ -50,13 +50,57 @@ pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
     }))
 }
 
-/// The checked-out branch of a repository, from `.git/HEAD` (a short hash when detached). None outside a repository;
-/// worktrees, whose `.git` is a file, report no branch.
+/// The checked-out branch of a repository or worktree, from `HEAD` (a short hash when detached).
 fn branch(dir: &std::path::Path) -> Option<String> {
-    let head = std::fs::read_to_string(dir.join(".git/HEAD")).ok()?;
+    let dot_git = dir.join(".git");
+    let git_dir = if dot_git.is_file() {
+        let pointer = std::fs::read_to_string(&dot_git).ok()?;
+        let target = pointer.trim().strip_prefix("gitdir:")?.trim();
+        let path = std::path::PathBuf::from(target);
+        if path.is_absolute() {
+            path
+        } else {
+            dir.join(path)
+        }
+    } else {
+        dot_git
+    };
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
     let head = head.trim();
     Some(match head.strip_prefix("ref: refs/heads/") {
         Some(name) => name.to_string(),
         None => head.chars().take(7).collect(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lists_folders_hides_dotfiles_and_reads_repo_and_worktree_branches() {
+        let root = std::env::temp_dir().join(format!("shed-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::create_dir_all(root.join("alpha/.git")).unwrap();
+        std::fs::write(root.join("alpha/.git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(root.join("wt-gitdir")).unwrap();
+        std::fs::write(root.join("wt-gitdir/HEAD"), "ref: refs/heads/feature/x\n").unwrap();
+        std::fs::create_dir_all(root.join("beta")).unwrap();
+        std::fs::write(root.join("beta/.git"), "gitdir: ../wt-gitdir\n").unwrap();
+        std::fs::write(root.join("plain.txt"), "ignored").unwrap();
+
+        let visible = list_dir(root.to_str(), false).unwrap();
+        let entries = visible["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0]["name"], "alpha");
+        assert_eq!(entries[0]["branch"], "main");
+        assert_eq!(entries[1]["name"], "beta");
+        assert_eq!(entries[1]["git"], true);
+        assert_eq!(entries[1]["branch"], "feature/x");
+
+        let with_hidden = list_dir(root.to_str(), true).unwrap();
+        assert_eq!(with_hidden["entries"].as_array().unwrap().len(), 4);
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }
