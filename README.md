@@ -166,7 +166,7 @@ Pages come back as Markdown; any other Firecrawl format (HTML, links, a screensh
 setup/uninstall.sh
 ```
 
-This removes the login service, the Tailscale publication, the routes of the sites the bridge published, every `setup/sync-remote.sh --watch` agent and the Mac app. Left in place: Pi, Prime Agent and DeepSeek Harness with their settings and sessions, Open Codex and its login service, and `~/.agent-remote`.
+This removes the login service, the Tailscale publication, the routes of the sites the bridge published, every `setup/sync-remote.sh --watch` agent and the Mac app. Left in place: Pi, Prime Agent and DeepSeek Harness with their settings and sessions, and what the installer added to them (Pi's two extensions, its agents and prompts, the model lists); Open Codex, its login service and the fixes the installer patched into it; and `~/.agent-remote`.
 
 ## Development
 

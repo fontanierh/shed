@@ -56,8 +56,7 @@ impl App {
                         parent.cwd.clone(),
                         state,
                     ));
-                    self.sessions.write().await.push(session.clone());
-                    session
+                    self.insert_once(session).await
                 }
             };
             let done = finished || run.settled() || (chain && index + 1 < count);
@@ -133,8 +132,7 @@ impl App {
                     root.cwd.clone(),
                     state,
                 ));
-                self.sessions.write().await.push(session.clone());
-                session
+                self.insert_once(session).await
             }
         };
         let root_model = root.state.lock().await.summary.model.clone();

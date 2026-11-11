@@ -116,8 +116,11 @@ export default function (pi: ExtensionAPI) {
 				fs.mkdirSync(DIR, { recursive: true });
 				const id = Math.random().toString(36).slice(2, 8);
 				const cwd = params.cwd ? path.resolve(ctx.cwd, params.cwd) : ctx.cwd;
+				// A folder that is gone makes the spawn fail with an `error` event, which, unheard, would end Pi itself.
+				if (!fs.existsSync(cwd)) throw new Error(`No such folder: ${cwd}`);
 				const out = fs.openSync(logPath(id), "a");
 				const child = spawn("bash", ["-lc", params.command], { cwd, detached: true, stdio: ["ignore", out, out] });
+				child.once("error", (error) => console.error(`background job ${id}: ${error.message}`));
 				fs.closeSync(out);
 				if (child.pid === undefined) throw new Error(`Could not start: ${params.command}`);
 				const job: Job = {

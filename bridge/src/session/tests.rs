@@ -958,6 +958,13 @@ where
 }
 
 /// A session's summary and the rest of what the bridge keeps from the agent's messages.
+///
+/// Four of these never leave the bridge: `named`, `levelsFor`, `toolCalls`, `rosterMark`. They are pinned on
+/// purpose. Each is the only place a field of the agent's message shows at once (a roster row's activity and
+/// message count, its running tools, the model the levels were read for); what they later cause (a refresh, a
+/// stall notice, a title left alone) comes steps or minutes after. Without them a malformed value in those fields
+/// reads the same as a good one in every pin. The cost is that renaming or reshaping this bookkeeping changes the
+/// pins though nothing an app sees does: such a diff must touch these four keys and nothing else.
 async fn kept(rig: &Rig, session: &Session) -> Value {
     let st = session.state.lock().await;
     let mut kept = json!({
@@ -1439,9 +1446,16 @@ async fn a_new_session_that_fails_halfway_is_not_kept() {
         .create_session(AgentKind::Pi, cwd, None, None)
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(rig.app.sessions.read().await.len(), 1);
-    assert!(rig.saved("sessions.json").to_string().contains(&made.id));
+    // The save runs on its own after the answer: waited for until it is there, not for a fixed time.
+    let saved = || rig.saved("sessions.json").to_string().contains(&made.id);
+    for _ in 0..400 {
+        if saved() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(saved());
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 
@@ -1778,7 +1792,7 @@ async fn an_attach_sends_the_session_and_its_transcript_then_answers() {
 }
 
 /// Prime's daemon may take two minutes over an attach. The client's other requests are answered meanwhile.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_attach_that_waits_on_the_agent_does_not_hold_the_client() {
     let rig = Rig::new("serve-slow-attach", &[]);
     rig.script("attach", json!({ "snapshot": { "messages": [] } }));
@@ -1799,7 +1813,7 @@ async fn an_attach_that_waits_on_the_agent_does_not_hold_the_client() {
 }
 
 /// A detach that overtakes its attach wins: the attach is answered, and no transcript is sent.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_detach_during_an_attach_leaves_the_client_detached() {
     let rig = Rig::new("serve-detach", &[]);
     rig.script("attach", json!({ "snapshot": { "messages": [] } }));

@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -126,6 +126,22 @@ pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
             Some(json!({ "provider": provider, "id": id, "name": id }))
         })
         .collect();
+    // A listing that failed is not an empty one: said, not cached as "no models". A table that came with a failing
+    // exit is kept and the exit logged, since how each program ends a good listing has not been seen.
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        if models.is_empty() {
+            bail!(
+                "{program} could not list its models ({}): {said}",
+                output.status
+            );
+        }
+        eprintln!(
+            "{program} listed its models but ended with {}: {said}",
+            output.status
+        );
+    }
     Ok(json!(models))
 }
 

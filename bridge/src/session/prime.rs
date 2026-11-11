@@ -127,6 +127,17 @@ impl App {
         }
     }
 
+    /// Adds `session` unless one with its id was added since it was looked for, and gives back the one listed. A
+    /// look under the read lock and a push under the write lock are two steps another update can come between.
+    pub(super) async fn insert_once(&self, session: Arc<Session>) -> Arc<Session> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(existing) = sessions.iter().find(|s| s.id == session.id) {
+            return existing.clone();
+        }
+        sessions.push(session.clone());
+        session
+    }
+
     /// Mirror one Prime roster row into a session, creating it on first sight.
     pub(super) async fn apply_prime_row(self: &Arc<Self>, row: PrimeRow) -> Arc<Session> {
         let session = match self.find(&row.id).await {
@@ -142,14 +153,7 @@ impl App {
                     row.cwd,
                     state,
                 ));
-                let mut sessions = self.sessions.write().await;
-                match sessions.iter().find(|s| s.id == row.id) {
-                    Some(existing) => existing.clone(),
-                    None => {
-                        sessions.push(session.clone());
-                        session
-                    }
-                }
+                self.insert_once(session).await
             }
         };
         let mut st = session.state.lock().await;
@@ -183,6 +187,8 @@ impl App {
         if let Some(queue) = row.queue {
             s.queue = queue;
         }
+        // Taken as the row has it, absent included: after `new_session` the old file is retired, and keeping it would
+        // match this live session to the daemon's notice that the old one ended.
         st.session_file = row.session_file;
         // `new_session` replaces the conversation, and the window chosen for the session goes with it, or a
         // restarted bridge would look for the window under an id the session no longer has.

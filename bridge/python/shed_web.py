@@ -82,10 +82,11 @@ def search(query, *, limit=5, sources=None, categories=None, tbs=None, location=
     sources: ["web", "news", "images"]; categories: ["github", "research", "pdf"]; tbs: "qdr:d" (past day), "qdr:w",
     "qdr:m", "qdr:y"; body: more fields for Firecrawl's search request.
     """
-    args = ["search", query] + _options(dict(
+    # The query after `--`, so one that starts with `--` is not read as an option.
+    args = ["search"] + _options(dict(
         limit=limit, sources=sources, categories=categories, tbs=tbs, location=location, country=country,
         scrape=scrape, body=body,
-    ))
+    )) + ["--", query]
     return _run(args, timeout)["sources"]
 
 
@@ -102,10 +103,10 @@ def fetch(url, *, formats=None, prompt=None, schema=None, all_content=False, inc
     country, languages: load the page from a country ("DE"), in languages (["de-DE"]).
     body: more fields for Firecrawl's scrape request.
     """
-    args = ["fetch", url] + _options(dict(
+    args = ["fetch"] + _options(dict(
         format=formats, prompt=prompt, schema=schema, all_content=all_content, include_tags=include_tags,
         exclude_tags=exclude_tags, wait=wait, mobile=mobile, max_age=max_age, timeout=timeout, proxy=proxy,
         country=country, languages=languages, out=out, body=body,
-    ))
+    )) + ["--", url]
     seconds = (timeout or 60_000) / 1000 + 60
     return _run(args, seconds)
