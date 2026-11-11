@@ -63,6 +63,18 @@ pub trait Keeps {
     ) -> BoxFuture<'_, Result<PrimeRow>>;
 }
 
+/// An agent answered a command and said no, in its own words: as opposed to not being there, or not answering.
+#[derive(Debug)]
+pub struct Refused(pub String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
 /// Where a session's background commands are found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobsFrom {

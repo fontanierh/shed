@@ -79,7 +79,8 @@ impl App {
                         delivery: Delivery::Turn,
                     };
                     match self.command(session, prompt).await {
-                        Err(e) if e.to_string().to_lowercase().contains("stream") => {
+                        // A turn began between the look at its status and the prompt.
+                        Err(e) if crate::agent_wire::refused_as_busy(&e) => {
                             self.command(session, Ask::Steer(text)).await
                         }
                         other => other,

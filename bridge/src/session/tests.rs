@@ -147,7 +147,7 @@ impl Live for ScriptedSession {
                 tokio::time::sleep(slow).await;
             }
             if let Some(refusal) = refusal {
-                return Err(anyhow!("{refusal}"));
+                return Err(anyhow::Error::new(crate::agent::Refused(refusal)));
             }
             let scripted = self.script.answers.lock().unwrap().get(&kind).cloned();
             match (scripted, &self.rest) {
@@ -210,7 +210,7 @@ impl Rig {
                 real: installed.get(kind).clone(),
             })
         });
-        let app = App::assemble(store, prime, limits, agents).unwrap();
+        let app = App::assemble(store, limits, agents).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(app.clone().run_prime(rx));
         Rig {
@@ -1661,5 +1661,273 @@ async fn a_saved_session_of_an_agent_that_keeps_its_own_is_left_out() {
     let rig = Rig::new("saved-kept", &[("sessions.json", saved)]);
     assert!(rig.app.find("pi1").await.is_ok());
     assert!(rig.app.find("p1").await.is_err());
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A client of the bridge with no socket: what it says goes to `server::serve`, and what it is sent is kept in
+/// the order it came.
+struct Client {
+    says: mpsc::Sender<String>,
+    hears: mpsc::UnboundedReceiver<Arc<str>>,
+}
+
+impl Client {
+    /// Connected, and past the list of sessions every client is sent first.
+    async fn connect(rig: &Rig) -> Client {
+        let (says, incoming) = mpsc::channel(1);
+        let (out, hears) = mpsc::unbounded_channel();
+        tokio::spawn(crate::server::serve(rig.app.clone(), incoming, out));
+        let mut client = Client { says, hears };
+        assert_eq!(client.next().await["type"], "sessions");
+        client
+    }
+
+    async fn say(&self, message: Value) {
+        self.says.send(message.to_string()).await.unwrap();
+    }
+
+    async fn next(&mut self) -> Value {
+        let text = tokio::time::timeout(Duration::from_secs(5), self.hears.recv())
+            .await
+            .expect("the bridge sends something")
+            .unwrap();
+        serde_json::from_str(&text).unwrap()
+    }
+
+    /// Everything sent up to the reply to `id`, that reply last.
+    async fn until_reply(&mut self, id: &str) -> Vec<Value> {
+        let mut sent = Vec::new();
+        loop {
+            let message = self.next().await;
+            let done = message["type"] == "reply" && message["id"] == id;
+            sent.push(message);
+            if done {
+                return sent;
+            }
+        }
+    }
+}
+
+/// A session Prime's daemon keeps, as its roster would have brought it in, not attached.
+async fn prime_session(rig: &Rig, id: &str, parent: Option<&str>) -> Arc<Session> {
+    let kind = match parent {
+        Some(_) => SessionKind::Subagent,
+        None => SessionKind::Root,
+    };
+    let mut summary = new_summary(id, AgentKind::Prime, kind, "/work/project");
+    summary.parent_id = parent.map(str::to_string);
+    let state = SessionState::new(summary, None, BackendState::prime());
+    let session = Arc::new(Session::new(
+        id.to_string(),
+        AgentKind::Prime,
+        "/work/project".into(),
+        state,
+    ));
+    rig.app.sessions.write().await.push(session.clone());
+    session
+}
+
+fn types(sent: &[Value]) -> Vec<&str> {
+    sent.iter().map(|m| m["type"].as_str().unwrap()).collect()
+}
+
+/// An attach as an app relies on it: the session, then its transcript, then the answer, which is last. The session
+/// may be sent more than once, as it changes while it attaches.
+fn attached_in_order(sent: &[Value]) -> &Value {
+    let types = types(sent);
+    let snapshot = types
+        .iter()
+        .position(|t| *t == "snapshot")
+        .expect("a snapshot");
+    assert!(types[..snapshot].contains(&"session"), "{types:?}");
+    assert_eq!(types.iter().filter(|t| **t == "snapshot").count(), 1);
+    assert_eq!(sent.last().unwrap()["ok"], true);
+    &sent[snapshot]
+}
+
+/// The order an app relies on: the session, its transcript, then the answer. What the session says after that
+/// follows.
+#[tokio::test]
+async fn an_attach_sends_the_session_and_its_transcript_then_answers() {
+    let rig = Rig::new("serve-attach", &[]);
+    rig.script(
+        "attach",
+        json!({ "snapshot": { "messages": [{ "role": "user", "content": text("hello") }] } }),
+    );
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "a", "op": "attach", "sessionId": "p1" }))
+        .await;
+    let sent = client.until_reply("a").await;
+    assert_eq!(attached_in_order(&sent)["items"][0]["text"], "hello");
+
+    let said = DaemonEvent::SessionEvent {
+        active_session_id: "p1".into(),
+        event: json!({ "type": "message_end", "message": { "role": "user", "content": text("and again") } }),
+    };
+    rig.prime.send(said).ok().unwrap();
+    loop {
+        let message = client.next().await;
+        if message["type"] == "item_add" {
+            assert_eq!(message["item"]["text"], "and again");
+            break;
+        }
+    }
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Prime's daemon may take two minutes over an attach. The client's other requests are answered meanwhile.
+#[tokio::test]
+async fn an_attach_that_waits_on_the_agent_does_not_hold_the_client() {
+    let rig = Rig::new("serve-slow-attach", &[]);
+    rig.script("attach", json!({ "snapshot": { "messages": [] } }));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_millis(500);
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "a", "op": "attach", "sessionId": "p1" }))
+        .await;
+    client.say(json!({ "id": "b", "op": "ping" })).await;
+    let first = client.next().await;
+    assert_eq!(
+        (first["type"].as_str(), first["id"].as_str()),
+        (Some("reply"), Some("b"))
+    );
+    attached_in_order(&client.until_reply("a").await);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A detach that overtakes its attach wins: the attach is answered, and no transcript is sent.
+#[tokio::test]
+async fn a_detach_during_an_attach_leaves_the_client_detached() {
+    let rig = Rig::new("serve-detach", &[]);
+    rig.script("attach", json!({ "snapshot": { "messages": [] } }));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_millis(300);
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "a", "op": "attach", "sessionId": "p1" }))
+        .await;
+    client
+        .say(json!({ "id": "d", "op": "detach", "sessionId": "p1" }))
+        .await;
+    assert_eq!(client.until_reply("d").await.last().unwrap()["ok"], true);
+    let sent = client.until_reply("a").await;
+    assert!(!types(&sent).contains(&"snapshot"), "{sent:?}");
+    assert_eq!(sent.last().unwrap()["ok"], true);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// The words are what apps from before the codes compare with, so both are answered and neither may change.
+#[tokio::test]
+async fn a_subagent_its_agent_let_go_of_is_answered_as_ended_and_removed() {
+    let rig = Rig::new("serve-ended", &[]);
+    rig.agents
+        .refusals
+        .lock()
+        .unwrap()
+        .insert("attach".into(), "no such session".into());
+    prime_session(&rig, "p1", None).await;
+    prime_session(&rig, "p1.child", Some("p1")).await;
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "a", "op": "attach", "sessionId": "p1.child" }))
+        .await;
+    let sent = client.until_reply("a").await;
+    assert_eq!(
+        sent.last().unwrap(),
+        &json!({ "type": "reply", "id": "a", "ok": false, "error": "session ended", "code": "session_ended" })
+    );
+    assert!(rig.app.find("p1.child").await.is_err());
+
+    // A root session the daemon refuses is no ended subagent: its own words, no code, and it stays.
+    client
+        .say(json!({ "id": "b", "op": "attach", "sessionId": "p1" }))
+        .await;
+    let sent = client.until_reply("b").await;
+    assert_eq!(
+        sent.last().unwrap(),
+        &json!({ "type": "reply", "id": "b", "ok": false, "error": "no such session" })
+    );
+    assert!(rig.app.find("p1").await.is_ok());
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// What the new-session sheet acts on: it forgets a folder that is gone. The system's words stay in the sentence
+/// for apps from before the codes.
+#[tokio::test]
+async fn a_session_in_a_folder_that_is_gone_is_refused_with_its_code() {
+    let rig = Rig::new("serve-no-folder", &[]);
+    let mut client = Client::connect(&rig).await;
+    let gone = rig.app.store.dir().join("gone");
+    client
+        .say(json!({ "id": "c", "op": "create_session", "agent": "pi", "cwd": gone }))
+        .await;
+    let sent = client.until_reply("c").await;
+    let reply = sent.last().unwrap();
+    assert_eq!(reply["code"], "no_such_directory");
+    let error = reply["error"].as_str().unwrap();
+    assert!(error.contains("No such file or directory"), "{error}");
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 0);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// An app newer than the bridge asks for something the bridge has never heard of. It is told so under its id, in
+/// the words the apps look for to say "update this computer's bridge".
+#[tokio::test]
+async fn an_operation_the_bridge_does_not_know_is_refused_under_its_id() {
+    let rig = Rig::new("serve-unknown", &[]);
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "x", "op": "from_the_future" }))
+        .await;
+    let sent = client.until_reply("x").await;
+    let reply = sent.last().unwrap();
+    assert_eq!(reply["ok"], false);
+    let error = reply["error"].as_str().unwrap();
+    assert!(error.contains("unknown variant"), "{error}");
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Close and delete as a client asks for them, and a session that is no longer there is an error it is told.
+#[tokio::test]
+async fn a_client_closes_then_deletes_a_session() {
+    let rig = Rig::new("serve-close-delete", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "r", "op": "resume_session", "sessionId": "pi1" }))
+        .await;
+    assert_eq!(client.until_reply("r").await.last().unwrap()["ok"], true);
+
+    client
+        .say(json!({ "id": "c", "op": "close_session", "sessionId": "pi1" }))
+        .await;
+    assert_eq!(client.until_reply("c").await.last().unwrap()["ok"], true);
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    client
+        .say(json!({ "id": "l", "op": "list_sessions" }))
+        .await;
+    let listed = client.until_reply("l").await;
+    let sessions = listed.last().unwrap()["data"].as_array().unwrap();
+    let pi1 = sessions.iter().find(|s| s["id"] == "pi1").unwrap();
+    assert_eq!(pi1["status"], "stopped");
+
+    client
+        .say(json!({ "id": "d", "op": "delete_session", "sessionId": "pi1" }))
+        .await;
+    assert_eq!(client.until_reply("d").await.last().unwrap()["ok"], true);
+    assert!(rig.app.find("pi1").await.is_err());
+
+    client
+        .say(json!({ "id": "e", "op": "close_session", "sessionId": "pi1" }))
+        .await;
+    let sent = client.until_reply("e").await;
+    let reply = sent.last().unwrap();
+    assert_eq!(
+        (reply["ok"].as_bool(), reply["error"].as_str()),
+        (Some(false), Some("unknown session pi1"))
+    );
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

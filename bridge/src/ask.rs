@@ -70,6 +70,8 @@ pub enum Ask {
     },
     KillKernelBash(String),
     KillPersistentShell(String),
+    /// Prime's: have the daemon send this session's events, and answer with its transcript.
+    Attach,
 }
 
 impl Ask {
@@ -141,6 +143,10 @@ impl Ask {
             Ask::KillPersistentShell(shell) => {
                 ("kill_persistent_shell", json!({ "shellId": shell }))
             }
+            Ask::Attach => (
+                "attach",
+                json!({ "capabilities": ["attach_snapshot", "event_sequence"] }),
+            ),
         }
     }
 

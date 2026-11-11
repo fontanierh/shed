@@ -18,7 +18,7 @@ It turns the three agents into one client protocol (`bridge/src/protocol.rs`, mi
 
 - one `SessionSummary` per session: status, model, effort, context usage, cost, queue, goal, background jobs, sites, a question waiting for an answer, parent and children;
 - a normalized transcript of `user`, `text`, `thinking`, `tool`, `compaction`, `error` and `note` items, streamed as `snapshot`, `item_add` and `item_patch` messages to the clients attached to that session;
-- request/reply operations (`send`, `abort`, `compact`, `set_model`, `list_dir`, `list_jobs`, …), each answered by a `reply` with the request's `id`.
+- request/reply operations (`send`, `abort`, `compact`, `set_model`, `list_dir`, `list_jobs`, …), each answered by a `reply` with the request's `id`. A failed one carries the sentence to show (`error`) and, for the failures an app does something about, a `code` (`session_ended`, `no_such_directory`). Apps from before the codes compare the sentence, so those sentences are fixed (`bridge/src/protocol.rs`). An `attach` waits on the agent apart from the connection, so a slow one holds nothing else up; its snapshot is still taken on the connection's own loop, which is what keeps it in order with the events after it.
 
 How each agent is driven:
 
