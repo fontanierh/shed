@@ -90,7 +90,7 @@ The bridge, in `bridge/src`:
 | `guide.rs` | What each agent is told about Shed in its system prompt. |
 | `files.rs`, `git.rs`, `github.rs`, `media.rs` | What the apps ask about the machine: folders to pick from, a folder's branch, the user's GitHub, and the files an agent shows. |
 | `channel.rs` | `offer`: a send that may find nobody listening. |
-| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. A few are still written elsewhere: the agents' guide (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`) and the web log (`web.rs`). |
+| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. Some are still written elsewhere, among them the agents' guide and the log of loops (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`), and the web log and the Python module (`web.rs`). |
 
 The rules the bridge keeps to:
 
