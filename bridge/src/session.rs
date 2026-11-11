@@ -919,11 +919,16 @@ impl App {
 
     pub async fn shutdown(&self) {
         let sessions = self.sessions.read().await.clone();
-        for s in sessions.iter().filter(|s| s.backend == Backend::Started) {
-            if let Err(e) = self.close_session(s).await {
-                eprintln!("closing {} failed: {e}", s.id);
-            }
-        }
+        // All at once: each close may wait up to 3 seconds for its agent to end.
+        let closes = sessions
+            .iter()
+            .filter(|s| s.backend == Backend::Started)
+            .map(|s| async move {
+                if let Err(e) = self.close_session(s).await {
+                    eprintln!("closing {} failed: {e}", s.id);
+                }
+            });
+        futures_util::future::join_all(closes).await;
     }
 
     // ---- events ----
