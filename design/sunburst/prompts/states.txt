@@ -1,5 +1,5 @@
 UI design reference sheet of EMPTY, CONNECTION and SETTINGS states of "Shed" (app for AI coding agents running on your Macs), four panels with captions on the dithered beam background:
-1) "Can't reach Jim's Mac": centered: a laptop line icon with a small red dot, title "Can't reach Jim's Mac", grey text "Shed couldn't connect to its bridge.", buttons "Settings…" (glass) and "Retry" (blue, circular-arrow icon).
-2) Connection bar at the bottom of a window: slim glass strip with orange pulsing dot "Connecting to Jim's Mac…" and text buttons "Settings…" "Retry".
-3) "Computers" settings sheet: dark glass grouped list: "This Mac" laptop icon, "ws://127.0.0.1:7878/ws" in monospace grey, status "Connected" with blue dot; "Jim's Mac" network icon, "wss://jims-macbook-pro.ts.net:7878/ws", red dot "Not connected"; "+ Add computer…"; footer caption; "Done" blue button.
+1) "Can't reach Studio Mac": centered: a laptop line icon with a small red dot, title "Can't reach Studio Mac", grey text "Shed couldn't connect to its bridge.", buttons "Settings…" (glass) and "Retry" (blue, circular-arrow icon).
+2) Connection bar at the bottom of a window: slim glass strip with orange pulsing dot "Connecting to Studio Mac…" and text buttons "Settings…" "Retry".
+3) "Computers" settings sheet: dark glass grouped list: "This Mac" laptop icon, "ws://127.0.0.1:7878/ws" in monospace grey, status "Connected" with blue dot; "Studio Mac" network icon, "wss://studio-mac.ts.net:7878/ws", red dot "Not connected"; "+ Add computer…"; footer caption; "Done" blue button.
 4) Empty sidebar: "No sessions yet" with "Start one with New session." and a faint hut logo outline.

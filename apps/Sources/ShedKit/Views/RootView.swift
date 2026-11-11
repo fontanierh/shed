@@ -274,7 +274,7 @@ struct EnvironmentEditor: View {
 
     var body: some View {
         Form {
-            TextField("Name", text: $env.name, prompt: Text(env.url.isEmpty ? "Jim\u{2019}s MacBook" : BridgeEnvironment.name(for: env.url)))
+            TextField("Name", text: $env.name, prompt: Text(env.url.isEmpty ? "Studio Mac" : BridgeEnvironment.name(for: env.url)))
             TextField("Bridge URL", text: $env.url, prompt: Text("wss://my-mac.tailnet.ts.net:7878/ws"))
                 .font(.mono(13))
                 #if os(iOS)

@@ -73,6 +73,7 @@ The bridge, in `bridge/src`:
 
 | File | What it holds |
 |---|---|
+| `main.rs` | Starts the bridge, and the `agent-remote web` command the agents call. |
 | `protocol.rs` | The messages the apps and the bridge exchange. |
 | `server.rs` | The WebSocket endpoint: one connection per app, and the sessions it is attached to. |
 | `rpc.rs`, `dsh.rs`, `prime.rs` | One driver per agent: a Pi process, a DeepSeek Harness process made to speak Pi's protocol, and the connection to Prime's daemon. |
@@ -86,14 +87,17 @@ The bridge, in `bridge/src`:
 | `session/watchers.rs` | What the bridge checks on its own: spending, background jobs, stuck commands. |
 | `opencodex.rs`, `web.rs` | Open Codex's catalog and history, and the web provider. Each reads the other side's JSON into types in its own file. |
 | `jobs.rs`, `sites.rs`, `stall.rs`, `runaway.rs`, `cost.rs`, `history.rs` | One feature each: background commands, sites, stuck commands, runaway replies, a Prime session's real cost, a Prime session's history before its last compaction. |
-| `store.rs` | The bridge's own files under `~/.agent-remote`. |
+| `guide.rs` | What each agent is told about Shed in its system prompt. |
+| `files.rs`, `git.rs`, `github.rs`, `media.rs` | What the apps ask about the machine: folders to pick from, a folder's branch, the user's GitHub, and the files an agent shows. |
+| `channel.rs` | `offer`: a send that may find nobody listening. |
+| `store.rs` | Most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites. A few are still written elsewhere (`prime.rs`, `jobs.rs`, `web.rs`). |
 
 The rules the bridge keeps to:
 
-- **Data from outside is read once, where it arrives.** What an agent says about a session becomes a typed value in `agent_wire.rs`, by a `read` function written by hand, and the session code works with those types only. `opencodex.rs` and `web.rs` do the same for their two services. The readers are forgiving on purpose: a field that is missing or has the wrong type reads as absent, because the agents change between releases. Not everything follows the rule yet: the drivers (`dsh.rs`, `prime.rs`), `transcript.rs` and `jobs.rs` still pick fields out of JSON in their own code.
-- **Each kind of session keeps its own state.** `BackendState` has one case for a Pi or DeepSeek Harness process, one for a Prime session and one for a Pi subagent, and code that does something different for each kind matches on all of them, so a new kind fails to compile there until it has an answer. Plain yes-or-no checks on one kind are still written as comparisons.
-- **An error is handled, logged, or dropped with a stated reason.** The linter rejects `let _ = …` and a bare `.ok();` on a result. The one thing that may fail silently is a send to a channel nobody listens to any more, written `offer` (`channel.rs`).
-- **Behaviour is pinned.** `session/tests.rs` feeds each agent's recorded events, malformed ones, and every command through the same entry points the bridge uses, with no agent running, and compares everything the apps would receive with the files in `session/pins/`. A change that only moves code must leave those files as they are.
+- **Data from outside is read once, where it arrives.** What an agent says about a session becomes a typed value in `agent_wire.rs`, by a `read` function written by hand, and the session code works with those types only. `opencodex.rs` and `web.rs` do the same for their two services. The readers are forgiving on purpose: a field that is missing or has the wrong type reads as absent, because the agents change between releases. Not everything follows the rule yet. The drivers (`dsh.rs`, `prime.rs`, `rpc.rs`), `transcript.rs`, `jobs.rs`, `github.rs`, `history.rs`, `cost.rs`, `store.rs`, `sites.rs` and `stall.rs` still pick fields out of JSON in their own code, and a question an agent asks is passed to the apps as it came.
+- **Each kind of session keeps its own state.** `BackendState` has one case for a Pi or DeepSeek Harness process, one for a Prime session and one for a Pi subagent, and most code that does something different for each kind matches on all of them. It is not complete: about thirty yes-or-no checks are plain comparisons, and DeepSeek Harness, its subagents and Prime's subagents have no case of their own (a DeepSeek Harness session is a Pi one with a different `agent`).
+- **An error is handled, logged, or dropped with a stated reason.** The linter rejects `let _ = …` and a bare `.ok();` on a result, and a result dropped on purpose carries an `#[expect]` with its reason. A send to a channel nobody listens to any more is written `offer` (`channel.rs`). The linter does not see every form: `.ok()` in the middle of a chain, `unwrap_or_default()` and `if let Ok` can still drop an error unlogged.
+- **Behaviour is pinned.** `session/tests.rs` feeds each agent's events and malformed ones to the session code, with no agent running, and compares everything the apps would receive with the files in `session/pins/`. It covers what events do to a session and eight of the operations an app can ask for. Starting, stopping and attaching a session, and `server.rs`, have no test. A change that only moves code must leave those files as they are.
 
 The apps, in `apps/Sources/ShedKit`:
 
@@ -105,7 +109,7 @@ The apps, in `apps/Sources/ShedKit`:
 | `SessionStore+….swift` | What changes that state, by job: the computers and their connections, messages coming in, requests going out, the session tree. |
 | `Views/` | The SwiftUI views. `SessionView.swift` is the session screen; its header, composer, model picker and cards are each in their own file. |
 
-Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types can't drift apart without a test failing.
+Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing. Replies to operations are not covered.
 
 ## Setup
 
