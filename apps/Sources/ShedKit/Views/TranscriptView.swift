@@ -527,7 +527,7 @@ struct StepNode: View {
         let tint = self.tint
         ZStack {
             // A halo drawn as a gradient, not a shadow: a shadow is a second render pass on every row while scrolling.
-            if item.status == .running || item.status == .pending {
+            if item.status?.isInFlight == true {
                 Circle().fill(RadialGradient(colors: [tint.opacity(0.45), tint.opacity(0)], center: .center, startRadius: 8, endRadius: 17))
                     .frame(width: 34, height: 34)
             }
@@ -639,7 +639,8 @@ struct ReasoningLines: View {
     }
 
     var body: some View {
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        let normalized = text.contains("\r\n") ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
+        let lines = normalized.split(separator: "\n", omittingEmptySubsequences: true)
         VStack(alignment: .leading, spacing: 7) {
             Finished(lines: lines.dropLast()).equatable()
             if let last = lines.last { Self.style(Text(last)).frame(maxWidth: .infinity, alignment: .leading) }
@@ -762,7 +763,7 @@ struct ToolRow: View {
     @State private var confirmingStop = false
     @State private var confirmingRestart = false
 
-    private var running: Bool { item.status == .running || item.status == .pending }
+    private var running: Bool { item.status?.isInFlight == true }
 
     var body: some View {
         let description = ToolDescription(item)

@@ -73,7 +73,7 @@ extension SessionStore {
         environments = found
         saveEnvironments()
         if let first = found.first {
-            drafts = Dictionary(uniqueKeysWithValues: drafts.map { (Self.split($0.key) == nil ? Self.tag(first.id, $0.key) : $0.key, $0.value) })
+            drafts = Dictionary(drafts.map { (Self.split($0.key) == nil ? Self.tag(first.id, $0.key) : $0.key, $0.value) }, uniquingKeysWith: { _, latest in latest })
             defaults.set(drafts, forKey: "drafts")
         }
     }

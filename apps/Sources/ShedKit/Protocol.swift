@@ -22,6 +22,13 @@ public enum ToolStatus: String, Codable, Sendable {
     case preparing, pending, running, done, error
     /// A state this version of the app has no name for. The bridge never sends this word.
     case unknown
+
+    public var isInFlight: Bool {
+        switch self {
+        case .preparing, .pending, .running: true
+        case .done, .error, .unknown: false
+        }
+    }
 }
 
 extension ToolStatus {

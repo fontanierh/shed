@@ -43,7 +43,7 @@ extension SessionStore {
             current.patched = [:]
             live.texts = [:]
             current.items = snapshot
-            current.itemIndex = Dictionary(uniqueKeysWithValues: snapshot.enumerated().map { ($1.id, $0) })
+            current.itemIndex = Dictionary(snapshot.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, latest in latest })
             for item in snapshot.suffix(20) where item.kind == .user { arrived(item.text, in: sessionId) }
         case .itemAdd(let sessionId, let item):
             let sessionId = Self.tag(env, sessionId)
@@ -116,7 +116,7 @@ extension SessionStore {
             let older = page.items.filter { current.itemIndex[$0.id] == nil }
             flush()
             current.items = older + current.items
-            current.itemIndex = Dictionary(uniqueKeysWithValues: current.items.enumerated().map { ($1.id, $0) })
+            current.itemIndex = Dictionary(current.items.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { _, latest in latest })
             current.earlier = page.earlier
         } catch {
             if open === current { report(error) }

@@ -109,6 +109,7 @@ struct Composer: View {
     /// Bumped on each send, to kick the button.
     @State private var sent = 0
     @State private var attachments: [Attachment] = []
+    @State private var uploads: [Task<Void, Never>] = []
     @State private var dropping = false
 
     /// The draft being typed. It is saved to the store a moment after typing stops, not on every keystroke: saving
@@ -293,6 +294,8 @@ struct Composer: View {
         .onAppear { draft = store.drafts[session.id] ?? "" }
         .onChange(of: session.id) { old, new in
             saveDraft(for: old)
+            uploads.forEach { $0.cancel() }
+            uploads = []
             draft = store.drafts[new] ?? ""
             attachments = []
         }
@@ -300,7 +303,11 @@ struct Composer: View {
             guard edits > 0, (try? await Task.sleep(for: .milliseconds(500))) != nil else { return }
             saveDraft()
         }
-        .onDisappear { saveDraft() }
+        .onDisappear {
+            saveDraft()
+            uploads.forEach { $0.cancel() }
+            uploads = []
+        }
         // A message that failed to send comes back as the draft.
         .onChange(of: store.drafts[session.id]) { _, restored in
             if let restored, draft.isEmpty { draft = restored }
@@ -325,19 +332,24 @@ struct Composer: View {
     }
 
     private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
-        let media = store.media(for: session.id)
-        Task {
+        let targetId = session.id
+        let media = store.media(for: targetId)
+        let task = Task {
             for file in await files() {
+                guard !Task.isCancelled, session.id == targetId else { return }
                 let attachment = Attachment(name: file.name)
                 attachments.append(attachment)
                 do {
                     let path = try await media.upload(file.data, name: file.name)
+                    guard !Task.isCancelled, session.id == targetId else { return }
                     if let i = attachments.firstIndex(where: { $0.id == attachment.id }) { attachments[i].path = path }
                 } catch {
+                    guard !Task.isCancelled, session.id == targetId else { return }
                     if let i = attachments.firstIndex(where: { $0.id == attachment.id }) { attachments[i].error = error.localizedDescription }
                 }
             }
         }
+        uploads.append(task)
     }
 
     private var placeholder: String {

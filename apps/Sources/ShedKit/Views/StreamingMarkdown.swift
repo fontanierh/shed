@@ -81,15 +81,39 @@ struct StreamingMarkdown: View {
         fileprivate let kind: Kind
     }
 
-    private static func isFence(_ line: Substring) -> Bool {
-        let trimmed = line.drop { $0 == " " }
-        return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
+    private struct Fence {
+        let char: Character
+        let count: Int
+    }
+
+    /// CommonMark opening code fence: up to 3 leading spaces, 3+ ` or ~, and no ` in a backtick fence's info string.
+    private static func openingFence(_ line: Substring) -> Fence? {
+        let spaces = line.prefix { $0 == " " }.count
+        guard spaces <= 3 else { return nil }
+        let rest = line.dropFirst(spaces)
+        guard let mark = rest.first, mark == "`" || mark == "~" else { return nil }
+        let count = rest.prefix { $0 == mark }.count
+        guard count >= 3 else { return nil }
+        let info = rest.dropFirst(count)
+        if mark == "`", info.contains("`") { return nil }
+        return Fence(char: mark, count: count)
+    }
+
+    /// CommonMark closing code fence: up to 3 leading spaces, at least `fence.count` matching marks, then whitespace only.
+    private static func closesFence(_ line: Substring, _ fence: Fence) -> Bool {
+        let spaces = line.prefix { $0 == " " }.count
+        guard spaces <= 3 else { return false }
+        let rest = line.dropFirst(spaces)
+        let count = rest.prefix { $0 == fence.char }.count
+        guard count >= fence.count else { return false }
+        return rest.dropFirst(count).allSatisfy(\.isWhitespace)
     }
 
     /// Top-level blocks: runs of lines between blank lines, with fenced code kept whole.
     /// Memoized: the view asks for the same text's blocks at every update. A streaming reply
     /// only grows, which changes nothing before its last block: it is split again from there, not from its start.
-    @MainActor static func blocks(_ text: String) -> [Block] {
+    @MainActor static func blocks(_ rawText: String) -> [Block] {
+        let text = rawText.contains("\r\n") ? rawText.replacingOccurrences(of: "\r\n", with: "\n") : rawText
         if let hit = recent.first(where: { $0.text == text }) { return hit.blocks }
         var blocks: [Block]
         if let base = recent.first(where: { !$0.blocks.isEmpty && text.hasPrefix($0.text) }) {
@@ -107,13 +131,19 @@ struct StreamingMarkdown: View {
 
     @MainActor private static var recent: [(text: String, blocks: [Block], lastStart: Int)] = []
 
-    static func blockTexts(_ text: String) -> [String] {
+    static func blockTexts(_ rawText: String) -> [String] {
+        let text = rawText.contains("\r\n") ? rawText.replacingOccurrences(of: "\r\n", with: "\n") : rawText
         var blocks: [String] = []
         var current: [Substring] = []
-        var fenced = false
+        var activeFence: Fence?
         for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            if isFence(line) { fenced.toggle() }
-            if !fenced, line.allSatisfy(\.isWhitespace) {
+            if let fence = activeFence {
+                current.append(line)
+                if closesFence(line, fence) { activeFence = nil }
+            } else if let fence = openingFence(line) {
+                activeFence = fence
+                current.append(line)
+            } else if line.allSatisfy(\.isWhitespace) {
                 if !current.isEmpty { blocks.append(current.joined(separator: "\n")); current = [] }
             } else {
                 current.append(line)
@@ -126,8 +156,9 @@ struct StreamingMarkdown: View {
     fileprivate enum Kind: Equatable { case heading(Int), code, table, rule, quote, other }
 
     private static func kind(_ block: String) -> Kind {
-        let first = block.prefix { $0 != "\n" }.drop { $0 == " " }
-        if isFence(first) { return .code }
+        let firstLine = block.prefix { $0 != "\n" }
+        if openingFence(firstLine) != nil { return .code }
+        let first = firstLine.drop { $0 == " " }
         if first.hasPrefix("#") {
             let level = first.prefix { $0 == "#" }.count
             if level <= 6, first.dropFirst(level).first == " " { return .heading(level) }
