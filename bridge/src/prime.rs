@@ -228,6 +228,7 @@ impl PrimeDaemon {
         match message["type"].as_str().unwrap_or("") {
             "response" => {
                 let Some(id) = message["id"].as_str() else {
+                    eprintln!("prime daemon: an answer that does not say which command: {message}");
                     return;
                 };
                 let result = if message["success"] == true {

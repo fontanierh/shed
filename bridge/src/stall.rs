@@ -15,7 +15,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use tokio::io::AsyncWriteExt;
 
-use crate::protocol::Stuck;
+use crate::protocol::{Stuck, StuckKind};
 
 /// The only model the Decisions API serves for now.
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
@@ -43,7 +43,7 @@ pub struct Judge {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
     /// "tool" or "command", as in `Stuck`.
-    pub kind: &'static str,
+    pub kind: StuckKind,
     pub pid: u32,
     /// Tells one tool call or command from the next under the same process.
     pub id: String,
@@ -133,8 +133,7 @@ impl Tracker {
 
 /// What the model is told about a suspect command.
 pub struct Question {
-    /// "tool" or "command", as in `Target`.
-    pub kind: &'static str,
+    pub kind: StuckKind,
     /// The Python code of a tool call, or the shell command.
     pub command: String,
     pub running_secs: u64,
@@ -215,8 +214,8 @@ pub struct Verdict {
 /// Asks the model how likely the command is stuck, and on what: a verdict when it is likely enough.
 pub async fn ask(judge: &Judge, question: &Question) -> Result<Option<Verdict>> {
     let evidence = json!({
-        "kind": if question.kind == "tool" { "tool" } else { "background command" },
-        "language": if question.kind == "tool" { "python" } else { "shell" },
+        "kind": if question.kind == StuckKind::Tool { "tool" } else { "background command" },
+        "language": if question.kind == StuckKind::Tool { "python" } else { "shell" },
         "code": clip(&question.command, 8000),
         "runningSeconds": question.running_secs,
         "secondsWithoutCpu": STILL_FOR.as_secs(),
@@ -318,7 +317,7 @@ mod tests {
 
     fn target() -> Option<Target> {
         Some(Target {
-            kind: "command",
+            kind: StuckKind::Command,
             pid: 7,
             id: "ls ~/Documents".into(),
         })
@@ -358,7 +357,7 @@ mod tests {
         let target = target().unwrap();
         tracker.observe(Some(target.clone()), 1.0, Duration::from_secs(100), t0);
         let stuck = Stuck {
-            kind: "command",
+            kind: StuckKind::Command,
             command: "ls".into(),
             reason: "waiting".into(),
             probability: Some(0.9),
@@ -451,7 +450,7 @@ mod tests {
         let kernel = "/Users/me/.prime/agent/kernel-venv/bin/python -m rlm.repl";
         let cases = [
             ("passphrase", true, Question {
-                kind: "command",
+                kind: StuckKind::Command,
                 command: "cd ~/src/app && git push origin main".into(),
                 running_secs: 600,
                 cwd: "/Users/me/src/app".into(),
@@ -464,7 +463,7 @@ mod tests {
                 said: Some("Pushing the fix to main.".into()),
             }),
             ("server", false, Question {
-                kind: "command",
+                kind: StuckKind::Command,
                 command: "python -m http.server 8000".into(),
                 running_secs: 600,
                 cwd: "/Users/me/src/site".into(),
@@ -476,7 +475,7 @@ mod tests {
                 said: Some("I'll serve the site locally so you can preview it.".into()),
             }),
             ("sleep", false, Question {
-                kind: "tool",
+                kind: StuckKind::Tool,
                 command: "import time\n# give the deploy time to roll out\ntime.sleep(300)\nprint(check_status())".into(),
                 running_secs: 120,
                 cwd: "/Users/me/src/app".into(),
@@ -485,7 +484,7 @@ mod tests {
                 said: Some("Waiting five minutes for the rollout before checking.".into()),
             }),
             ("documents", true, Question {
-                kind: "tool",
+                kind: StuckKind::Tool,
                 command: "import os\nprint(os.listdir('/Users/me/Documents'))".into(),
                 running_secs: 300,
                 cwd: "/Users/me/dev".into(),
@@ -494,7 +493,7 @@ mod tests {
                 said: Some("Let me see what's in your Documents folder.".into()),
             }),
             ("fifo", true, Question {
-                kind: "tool",
+                kind: StuckKind::Tool,
                 command: "import os\np = '/tmp/fifo'\nos.path.exists(p) or os.mkfifo(p)\nprint(open(p).read())".into(),
                 running_secs: 120,
                 cwd: "/Users/me/tmp".into(),

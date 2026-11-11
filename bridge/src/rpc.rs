@@ -229,6 +229,7 @@ impl RpcChild {
             {
                 if record["type"] == "response" {
                     let Some(id) = record["id"].as_str() else {
+                        eprintln!("the agent answered without saying which command: {record}");
                         continue;
                     };
                     let result = if record["success"] == true {

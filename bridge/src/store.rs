@@ -777,7 +777,7 @@ mod tests {
         );
 
         // A record written before sessions kept their file still loads.
-        let older = r#"[{ "id": "0a1b2c3d", "agent": "prime", "cwd": "/work", "title": "work", "createdAt": 1 }]"#;
+        let older = r#"[{ "id": "0a1b2c3d", "agent": "pi", "cwd": "/work", "title": "work", "createdAt": 1 }]"#;
         std::fs::write(store.dir.join("sessions.json"), older).unwrap();
         assert_eq!(store.load_sessions()[0].session_file, None);
 

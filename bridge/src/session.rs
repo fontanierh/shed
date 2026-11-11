@@ -625,7 +625,7 @@ impl App {
     /// when it keeps its own sessions.
     pub async fn command(&self, session: &Session, ask: Ask) -> Result<Value> {
         if session.backend == Backend::Subagent {
-            bail!("Pi subagents are read-only; steer the parent session instead")
+            bail!("Subagents are read-only; steer the parent session instead")
         }
         let child = session.state.lock().await.child().cloned();
         let live = match child {
@@ -686,7 +686,7 @@ impl App {
         match session.backend {
             Backend::Started => {}
             Backend::Prime | Backend::Subagent => {
-                bail!("only Pi sessions can be resumed; Prime sessions stay live in its daemon")
+                bail!("this session is kept by its agent, which has it running: there is nothing to resume")
             }
         }
         let resume = {
@@ -872,7 +872,7 @@ impl App {
                 }
                 Ok(())
             }
-            Backend::Subagent => bail!("Pi subagents end with their tool call"),
+            Backend::Subagent => bail!("Subagents end with their tool call"),
         }
     }
 

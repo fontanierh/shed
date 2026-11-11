@@ -637,3 +637,68 @@ mod tests {
         assert_eq!(tool.status, Some(ToolStatus::Preparing));
     }
 }
+/// A transcript is reloaded from its agent's own list while the agent may be streaming (after a compaction that
+/// ran in the middle of a turn). A reply or a tool that ends after the reload comes out whole, though its start was
+/// wiped. A whole message that arrives between the agent's answer and the reload is not covered: the bridge cannot
+/// tell whether the answer already holds it, so it is missing or shown twice until the next reload
+/// (docs/architecture.md, "Known limits").
+#[cfg(test)]
+mod reload {
+    use super::*;
+    use serde_json::json;
+
+    fn text(text: &str) -> Value {
+        json!([{ "type": "text", "text": text }])
+    }
+
+    fn reloaded(before: &[Value], after: &[Value]) -> Vec<(ItemKind, String)> {
+        let mut transcript = Transcript::default();
+        before
+            .iter()
+            .for_each(|event| transcript.handle_event(event));
+        transcript.reset(&[json!({ "role": "user", "content": text("hi") })]);
+        after
+            .iter()
+            .for_each(|event| transcript.handle_event(event));
+        let said = |item: &Item| (item.kind, item.text.clone());
+        transcript.items.iter().skip(1).map(said).collect()
+    }
+
+    #[test]
+    fn a_reply_streaming_across_a_reload_ends_whole() {
+        let delta = |kind: &str, delta: &str| {
+            json!({ "type": "message_update", "message": { "role": "assistant" },
+                "assistantMessageEvent": { "type": kind, "contentIndex": 0, "delta": delta } })
+        };
+        let items = reloaded(
+            &[
+                json!({ "type": "message_start", "message": { "role": "assistant", "content": [] } }),
+                delta("text_start", ""),
+                delta("text_delta", "Hel"),
+            ],
+            &[
+                delta("text_delta", "lo"),
+                json!({ "type": "message_end", "message": { "role": "assistant", "content": text("Hello") } }),
+            ],
+        );
+        assert_eq!(items, [(ItemKind::Text, "Hello".to_string())]);
+    }
+
+    #[test]
+    fn a_tool_running_across_a_reload_ends_with_its_name_and_output() {
+        let mut transcript = Transcript::default();
+        transcript.handle_event(
+            &json!({ "type": "tool_execution_start", "toolCallId": "c1", "toolName": "bash",
+            "args": { "command": "ls" } }),
+        );
+        transcript.reset(&[]);
+        transcript.handle_event(
+            &json!({ "type": "tool_execution_end", "toolCallId": "c1", "toolName": "bash",
+            "result": { "content": text("a.txt") } }),
+        );
+        let tool = &transcript.items[0];
+        assert_eq!(tool.tool_name.as_deref(), Some("bash"));
+        assert_eq!(tool.status, Some(ToolStatus::Done));
+        assert_eq!(tool.output.as_deref(), Some("a.txt"));
+    }
+}

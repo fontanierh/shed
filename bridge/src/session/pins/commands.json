@@ -692,31 +692,31 @@
     "compact": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "compact with blank instructions": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "compact with instructions": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "new session": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "rename": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "rename to nothing": {
@@ -734,25 +734,25 @@
     "send": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "send while it works": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "send, and the agent is already streaming": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     },
     "stop the tool": {
       "asked": [],
       "changed": {},
-      "fails": "Pi subagents are read-only; steer the parent session instead",
+      "fails": "Subagents are read-only; steer the parent session instead",
       "refreshed": false
     }
   }
