@@ -1833,6 +1833,26 @@ async fn a_detach_during_an_attach_leaves_the_client_detached() {
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 
+/// Attach, detach, attach again: the first attach, ending late, answers for itself only, and the second still
+/// brings the transcript.
+#[tokio::test(start_paused = true)]
+async fn an_attach_called_off_and_made_again_is_not_spent_by_the_first() {
+    let rig = Rig::new("serve-reattach", &[]);
+    rig.script("attach", json!({ "snapshot": { "messages": [] } }));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_millis(300);
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    for (id, op) in [("a", "attach"), ("d", "detach"), ("b", "attach")] {
+        client
+            .say(json!({ "id": id, "op": op, "sessionId": "p1" }))
+            .await;
+    }
+    let first = client.until_reply("a").await;
+    assert!(!types(&first).contains(&"snapshot"), "{first:?}");
+    attached_in_order(&client.until_reply("b").await);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
 /// The words are what apps from before the codes compare with, so both are answered and neither may change.
 #[tokio::test]
 async fn a_subagent_its_agent_let_go_of_is_answered_as_ended_and_removed() {

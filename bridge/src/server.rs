@@ -105,7 +105,16 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
 }
 
 /// An attach whose wait on the agent is over: who asked, for which session, and how it went.
-type Attached = (Option<String>, String, Result<Arc<Session>>);
+/// An attach whose wait is over: its request id, its own number on this connection, its session, and the outcome.
+type Attached = (Option<String>, u64, String, Result<Arc<Session>>);
+
+/// The attaches of one connection still waiting on their agent, each by its own number: a late one, or one a detach
+/// called off, can only ever answer for itself.
+#[derive(Default)]
+struct Attaching {
+    next: u64,
+    waiting: HashMap<String, std::collections::HashSet<u64>>,
+}
 
 /// One client: what it sends arrives on `incoming`, and what it is sent leaves on `out`. It ends when `incoming`
 /// does.
@@ -117,8 +126,8 @@ pub(crate) async fn serve(
     let mut hub = app.hub.subscribe();
     // Session id -> sequence number of the snapshot this client received.
     let mut attached: HashMap<String, u64> = HashMap::new();
-    // Attaches still waiting on their agent, by session: how many, so a detach meanwhile calls them all off.
-    let mut attaching: HashMap<String, usize> = HashMap::new();
+    // Attaches still waiting on their agent: a detach meanwhile calls off those of its session.
+    let mut attaching = Attaching::default();
     let (attach_done, mut attaches) = mpsc::unbounded_channel::<Attached>();
     out.offer(encode(&ServerMessage::Sessions {
         sessions: app.summaries().await,
@@ -131,20 +140,14 @@ pub(crate) async fn serve(
                 Some(text) => handle_text(&app, &out, &mut attached, &mut attaching, &attach_done, &text),
                 None => break,
             },
-            Some((id, session_id, result)) = attaches.recv() => {
+            Some((id, ticket, session_id, result)) = attaches.recv() => {
                 // The snapshot is taken here, on the loop that forwards events, so its sequence number and the
                 // events after it stay in order.
-                let wanted = match attaching.get_mut(&session_id) {
-                    Some(count) => {
-                        *count -= 1;
-                        if *count == 0 {
-                            attaching.remove(&session_id);
-                        }
-                        true
-                    }
-                    // Detached while it waited: answered, and not attached.
-                    None => false,
-                };
+                // Called off by a detach while it waited: answered, and not attached.
+                let wanted = attaching.waiting.get_mut(&session_id).is_some_and(|tickets| tickets.remove(&ticket));
+                if attaching.waiting.get(&session_id).is_some_and(|tickets| tickets.is_empty()) {
+                    attaching.waiting.remove(&session_id);
+                }
                 let result = match result {
                     Ok(session) => {
                         if wanted {
@@ -201,7 +204,7 @@ fn handle_text(
     app: &Arc<App>,
     out: &mpsc::UnboundedSender<Arc<str>>,
     attached: &mut HashMap<String, u64>,
-    attaching: &mut HashMap<String, usize>,
+    attaching: &mut Attaching,
     attach_done: &mpsc::UnboundedSender<Attached>,
     text: &str,
 ) {
@@ -220,19 +223,25 @@ fn handle_text(
         // The wait on the agent (Prime's daemon may take its time) runs apart, so this client's other requests and
         // its events go on meanwhile. `serve` takes the snapshot when the wait is over.
         ClientOp::Attach { session_id } => {
-            *attaching.entry(session_id.clone()).or_default() += 1;
+            attaching.next += 1;
+            let ticket = attaching.next;
+            attaching
+                .waiting
+                .entry(session_id.clone())
+                .or_default()
+                .insert(ticket);
             let (app, done) = (app.clone(), attach_done.clone());
             tokio::spawn(async move {
                 let result = match app.find(&session_id).await {
                     Ok(session) => app.ensure_attached(&session).await.map(|()| session),
                     Err(e) => Err(e),
                 };
-                done.offer((id, session_id, result));
+                done.offer((id, ticket, session_id, result));
             });
         }
         ClientOp::Detach { session_id } => {
             attached.remove(&session_id);
-            attaching.remove(&session_id);
+            attaching.waiting.remove(&session_id);
             out.offer(reply(id, Ok(Value::Null)));
         }
         op => {
