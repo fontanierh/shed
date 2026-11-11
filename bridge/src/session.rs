@@ -2,7 +2,7 @@
 //! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
 //! read-only views of what their parent session reports about them.
 
-use crate::ask::{Ask, Delivery};
+use crate::ask::Ask;
 use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -864,18 +864,13 @@ impl App {
                 }
                 Ok(())
             }
-            Backend::Prime => {
-                let out = tokio::process::Command::new("prime-agent")
-                    .args(["stop", &session.id])
-                    .output()
-                    .await?;
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                // An empty draft (e.g. right after new_session) has no worker to stop.
-                if !out.status.success() && !stderr.contains("Unknown active session") {
-                    bail!("prime-agent stop failed: {}", stderr.trim());
-                }
-                Ok(())
-            }
+            Backend::Prime => match self.agent(session.agent).sessions() {
+                Sessions::Kept(agent) => agent.stop(&session.id).await,
+                Sessions::Started(_) => bail!(
+                    "{:?} starts its sessions here, yet this one is kept by its agent",
+                    session.agent
+                ),
+            },
             Backend::Subagent => bail!("Subagents end with their tool call"),
         }
     }
@@ -1104,30 +1099,10 @@ impl App {
             "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
              Carry on from where you were; if you were writing a tool call, write it again."
         );
-        let stopped = match session.backend {
-            Backend::Prime => {
-                // Queued as a steer first, so stopping the reply delivers it straight away.
-                let steer = Ask::Prompt {
-                    message: note,
-                    delivery: Delivery::SteerOrQueue,
-                };
-                [
-                    self.command(session, steer).await,
-                    self.command(session, Ask::AbortAndSendQueued).await,
-                ]
-            }
-            Backend::Started | Backend::Subagent => [
-                self.command(session, Ask::Abort).await,
-                self.command(
-                    session,
-                    Ask::Prompt {
-                        message: note,
-                        delivery: Delivery::Turn,
-                    },
-                )
-                .await,
-            ],
-        };
+        let mut stopped = Vec::new();
+        for ask in self.agent(session.agent).verbs().interrupt(note) {
+            stopped.push(self.command(session, ask).await);
+        }
         for error in stopped.into_iter().filter_map(Result::err) {
             eprintln!(
                 "stopping the looping reply of {} failed: {error}",

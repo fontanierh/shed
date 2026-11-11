@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
 use crate::agent_wire::{InactiveRow, PrimeRow};
@@ -443,6 +443,74 @@ fn start_daemon() -> Result<()> {
         .spawn()
         .map_err(|e| anyhow!("failed to start prime-agent daemon: {e}"))?;
     Ok(())
+}
+
+/// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
+/// kernels run on this machine: kill the session's own kernel, found by the session id in its environment, along with
+/// whatever it started. Prime notices the kernel is gone and starts a fresh one on the next Python call.
+pub async fn restart_kernel(session_file: Option<String>) -> Result<Value> {
+    let file = session_file.context("Prime hasn't reported this session's file yet")?;
+    let rlm_session = std::path::Path::new(&file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let output = tokio::process::Command::new("/bin/ps")
+        .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
+        .output()
+        .await?;
+    if !output.status.success() {
+        bail!("the processes on this computer can't be listed");
+    }
+    let table = String::from_utf8_lossy(&output.stdout);
+    let processes: Vec<(u32, u32, &str)> = table
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let pid = parts.next()?.parse().ok()?;
+            let ppid = parts.next()?.parse().ok()?;
+            Some((pid, ppid, line))
+        })
+        .collect();
+    let marker = format!("RLM_SESSION_ID={rlm_session}");
+    let kernels: Vec<u32> = processes
+        .iter()
+        .filter(|(_, _, line)| {
+            line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker)
+        })
+        .map(|(pid, _, _)| *pid)
+        .collect();
+    if kernels.is_empty() {
+        bail!("No Python kernel is running for this session");
+    }
+    // The kernels and everything under them: a hung shell command would otherwise outlive its kernel.
+    let mut doomed = kernels.clone();
+    let mut i = 0;
+    while i < doomed.len() {
+        let parent = doomed[i];
+        let children: Vec<u32> = processes
+            .iter()
+            .filter(|(pid, ppid, _)| *ppid == parent && !doomed.contains(pid))
+            .map(|(pid, _, _)| *pid)
+            .collect();
+        doomed.extend(children);
+        i += 1;
+    }
+    let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
+    let killed = tokio::process::Command::new("/bin/kill")
+        .arg("-9")
+        .args(&pids)
+        .output()
+        .await?;
+    // Some of them may have gone on their own meanwhile, which `kill` also reports as a failure: said, not
+    // answered as an error, since the kernel it was asked to end is ended either way.
+    if !killed.status.success() {
+        eprintln!(
+            "restarting the kernel of {rlm_session}: kill said {}",
+            String::from_utf8_lossy(&killed.stderr).trim()
+        );
+    }
+    Ok(json!({ "killed": doomed.len() }))
 }
 
 #[cfg(test)]

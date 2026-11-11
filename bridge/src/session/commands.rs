@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 use super::{default_title, App, Backend, Session};
@@ -58,35 +58,25 @@ impl App {
                 return Ok(json!({}));
             }
         }
-        let result = match session.backend {
-            Backend::Prime => {
-                let prompt = Ask::Prompt {
-                    message: text,
-                    delivery: Delivery::SteerOrQueue,
-                };
-                self.command(session, prompt).await
+        let verbs = self.agent(session.agent).verbs();
+        let busy = matches!(
+            session.state.lock().await.summary.status,
+            SessionStatus::Running | SessionStatus::Compacting
+        );
+        let ask = verbs.message(text.clone(), busy);
+        let turn = matches!(
+            ask,
+            Ask::Prompt {
+                delivery: Delivery::Turn,
+                ..
             }
-            Backend::Started | Backend::Subagent => {
-                let busy = matches!(
-                    session.state.lock().await.summary.status,
-                    SessionStatus::Running | SessionStatus::Compacting
-                );
-                if busy {
-                    self.command(session, Ask::Steer(text)).await
-                } else {
-                    let prompt = Ask::Prompt {
-                        message: text.clone(),
-                        delivery: Delivery::Turn,
-                    };
-                    match self.command(session, prompt).await {
-                        // A turn began between the look at its status and the prompt.
-                        Err(e) if crate::agent_wire::refused_as_busy(&e) => {
-                            self.command(session, Ask::Steer(text)).await
-                        }
-                        other => other,
-                    }
-                }
+        );
+        let result = match self.command(session, ask).await {
+            // A turn began between the look at its status and the prompt.
+            Err(e) if turn && crate::agent_wire::refused_as_busy(&e) => {
+                self.command(session, verbs.message(text, true)).await
             }
+            other => other,
         };
         let mut st = session.state.lock().await;
         if let (Err(_), Some(id)) = (&result, &send_id) {
@@ -96,136 +86,36 @@ impl App {
         result
     }
 
-    /// Prime's `compact` command aborts the session first, which drops the background-command and subagent notices
-    /// waiting to wake it and holds the rest until the next prompt: an idle session waiting on its jobs never wakes.
-    /// Its `/compact` slash command compacts without aborting, after the current turn if one is running.
+    /// Compacting, in the agent's words (`Verbs::compact` says why Prime's differ).
     pub async fn compact(
         self: &Arc<Self>,
         session: &Arc<Session>,
         instructions: Option<String>,
     ) -> Result<Value> {
         let instructions = instructions.filter(|text| !text.trim().is_empty());
-        match session.backend {
-            Backend::Prime => {
-                let message = match instructions {
-                    Some(text) => format!("/compact {text}"),
-                    None => "/compact".to_string(),
-                };
-                let prompt = Ask::Prompt {
-                    message,
-                    delivery: Delivery::FollowUp,
-                };
-                self.command(session, prompt).await
-            }
-            Backend::Started | Backend::Subagent => {
-                self.command(session, Ask::Compact { instructions }).await
-            }
-        }
+        let ask = self.agent(session.agent).verbs().compact(instructions);
+        self.command(session, ask).await
     }
 
-    /// Prime's `/goal clear`, steered in so a running turn picks it up at its next step instead of after the turn.
     pub async fn clear_goal(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        match session.backend {
-            Backend::Prime => {
-                let prompt = Ask::Prompt {
-                    message: "/goal clear".into(),
-                    delivery: Delivery::Steer,
-                };
-                self.command(session, prompt).await
-            }
-            Backend::Started | Backend::Subagent => bail!("Only Prime sessions have goals"),
-        }
-    }
-
-    /// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
-    /// kernels run on this machine: kill the session's own kernel, found by the session id in its environment, along
-    /// with whatever it started. Prime notices the kernel is gone and starts a fresh one on the next Python call.
-    pub async fn restart_kernel(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        match session.backend {
-            Backend::Prime => {}
-            Backend::Started | Backend::Subagent => {
-                bail!("Only Prime sessions have a Python kernel")
-            }
-        }
-        let file = session
-            .state
-            .lock()
-            .await
-            .session_file
-            .clone()
-            .context("Prime hasn't reported this session's file yet")?;
-        let rlm_session = std::path::Path::new(&file)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
-        let output = tokio::process::Command::new("/bin/ps")
-            .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
-            .output()
-            .await?;
-        if !output.status.success() {
-            bail!("the processes on this computer can't be listed");
-        }
-        let table = String::from_utf8_lossy(&output.stdout);
-        let processes: Vec<(u32, u32, &str)> = table
-            .lines()
-            .filter_map(|line| {
-                let mut parts = line.split_whitespace();
-                let pid = parts.next()?.parse().ok()?;
-                let ppid = parts.next()?.parse().ok()?;
-                Some((pid, ppid, line))
-            })
-            .collect();
-        let marker = format!("RLM_SESSION_ID={rlm_session}");
-        let kernels: Vec<u32> = processes
-            .iter()
-            .filter(|(_, _, line)| {
-                line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker)
-            })
-            .map(|(pid, _, _)| *pid)
-            .collect();
-        if kernels.is_empty() {
-            bail!("No Python kernel is running for this session");
-        }
-        // The kernels and everything under them: a hung shell command would otherwise outlive its kernel.
-        let mut doomed = kernels.clone();
-        let mut i = 0;
-        while i < doomed.len() {
-            let parent = doomed[i];
-            let children: Vec<u32> = processes
-                .iter()
-                .filter(|(pid, ppid, _)| *ppid == parent && !doomed.contains(pid))
-                .map(|(pid, _, _)| *pid)
-                .collect();
-            doomed.extend(children);
-            i += 1;
-        }
-        let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
-        let killed = tokio::process::Command::new("/bin/kill")
-            .arg("-9")
-            .args(&pids)
-            .output()
-            .await?;
-        // Some of them may have gone on their own meanwhile, which `kill` also reports as a failure: said, not
-        // answered as an error, since the kernel it was asked to end is ended either way.
-        if !killed.status.success() {
-            eprintln!(
-                "restarting the kernel of {}: kill said {}",
-                session.id,
-                String::from_utf8_lossy(&killed.stderr).trim()
-            );
-        }
-        Ok(json!({ "killed": doomed.len() }))
-    }
-
-    /// A plain abort leaves Prime holding steered messages until the next prompt; `abort_and_send_queued` delivers
-    /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
-    /// is queued.
-    pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let stop = match session.backend {
-            Backend::Prime => Ask::AbortAndSendQueued,
-            Backend::Started | Backend::Subagent => Ask::Abort,
+        let Some(ask) = self.agent(session.agent).verbs().clear_goal() else {
+            bail!("Only Prime sessions have goals")
         };
+        self.command(session, ask).await
+    }
+
+    /// Kill the session's Python kernel, for an agent whose sessions have one: it starts a fresh one on the next
+    /// Python call.
+    pub async fn restart_kernel(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
+        let file = session.state.lock().await.session_file.clone();
+        let Some(restart) = self.agent(session.agent).verbs().restart_kernel(file) else {
+            bail!("Only Prime sessions have a Python kernel")
+        };
+        restart.await
+    }
+
+    pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
+        let stop = self.agent(session.agent).verbs().stop_tool();
         self.command(session, stop).await
     }
 
