@@ -64,6 +64,9 @@ pub struct Session {
     pub backend: Backend,
     pub cwd: String,
     pub state: Mutex<SessionState>,
+    /// Held while a message with a send id is with the agent, so the same message sent again waits to learn whether
+    /// the first copy was taken.
+    pub sending: Mutex<()>,
 }
 
 impl Session {
@@ -75,6 +78,7 @@ impl Session {
             backend: state.own.backend(),
             cwd,
             state: Mutex::new(state),
+            sending: Mutex::new(()),
         }
     }
 }

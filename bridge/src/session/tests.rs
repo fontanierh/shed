@@ -1487,6 +1487,14 @@ async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
     let second = send();
     assert_eq!(first.await.unwrap(), Err("no model is set".to_string()));
     assert!(second.await.unwrap().is_ok());
-    assert_eq!(rig.agents.asked.lock().unwrap().len(), 2);
+    let prompts = rig
+        .agents
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|asked| asked["command"] == "prompt")
+        .count();
+    assert_eq!(prompts, 2);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

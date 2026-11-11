@@ -44,6 +44,12 @@ impl App {
         text: String,
         send_id: Option<String>,
     ) -> Result<Value> {
+        // One message with a send id at a time: a repeat that arrives while the first copy is still with the agent
+        // waits here, and then finds the id kept (taken) or forgotten (refused, so this copy goes).
+        let _sending = match &send_id {
+            Some(_) => Some(session.sending.lock().await),
+            None => None,
+        };
         // Sent again after a lost reply: it was taken the first time, and that is the answer.
         if let Some(id) = &send_id {
             if !session.state.lock().await.take_send(id) {
