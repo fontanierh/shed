@@ -48,7 +48,8 @@ final class SubagentLinkTests: XCTestCase {
     /// Opening a subagent the bridge can't attach to marks it ended without an alert; it leaves the lists, its
     /// mentions lead nowhere, and it comes back if it works again.
     @MainActor func testSubagentThatCannotBeOpenedEnds() async {
-        let store = SessionStore(defaults: scratchDefaults())
+        // Its moment on screen is a pause the test does not wait out.
+        let store = SessionStore(defaults: scratchDefaults(), connection: { ScriptedBridge() }, pause: { _ in })
         store.apply(.sessions([summary("p"), summary("c", parent: "p", name: "scout", createdAt: 10_000, lastActiveAt: 10_000)]), from: "test")
         let mention = SubagentMention(name: "scout", date: date(60))
         XCTAssertEqual(store.link(of: "test:p", to: mention), .open("test:c"))

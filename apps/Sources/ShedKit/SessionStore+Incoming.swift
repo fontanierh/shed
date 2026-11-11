@@ -66,8 +66,9 @@ extension SessionStore {
             // A change of state (a tool finishing, a reply ending) shows at once; streamed text a few times a second.
             // Keep one deadline through the burst. Replacing it on each delta would starve a fast stream.
             if set != nil { flush() } else if flushing == nil {
-                flushing = Task { [weak self] in
-                    do { try await Task.sleep(for: .milliseconds(80)) } catch { return }
+                // Through `pause`, so tests can hold the deadline and let it go instead of waiting it out.
+                flushing = Task { [weak self, pause] in
+                    await pause(.milliseconds(80))
                     guard !Task.isCancelled else { return }
                     self?.flush(streamed: true)
                 }
