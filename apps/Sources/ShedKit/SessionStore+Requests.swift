@@ -113,10 +113,11 @@ extension SessionStore {
                 do {
                     try await client(env).call(message)
                 } catch let lost as ConnectionLost {
-                    // Cut off by a dropped connection: send it again once back, unless the session's transcript, sent
-                    // afresh on reconnecting, shows it arrived after all.
+                    // Cut off by a dropped connection: send it again once back. A bridge that takes a message once per
+                    // id is simply sent it again. An older one would run it twice, so there the session's transcript,
+                    // sent afresh on reconnecting, says whether it arrived after all.
                     guard await reconnected(env) else { throw lost }
-                    if lost.maybeDelivered {
+                    if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
                         try? await Task.sleep(for: .seconds(2))
                         let queued = sessions[id]?.queue
                         let landed = busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
