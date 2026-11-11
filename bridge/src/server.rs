@@ -87,6 +87,7 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
     let mut attached: HashMap<String, u64> = HashMap::new();
     out.offer(encode(&ServerMessage::Sessions {
         sessions: app.summaries().await,
+        bridge: crate::protocol::BRIDGE,
     }));
 
     loop {
@@ -113,7 +114,10 @@ async fn client_loop(app: Arc<App>, socket: WebSocket) {
                             send_snapshot(&out, &mut attached, &session).await;
                         }
                     }
-                    out.offer(encode(&ServerMessage::Sessions { sessions: app.summaries().await }));
+                    out.offer(encode(&ServerMessage::Sessions {
+                        sessions: app.summaries().await,
+                        bridge: crate::protocol::BRIDGE,
+                    }));
                 }
                 Err(RecvError::Closed) => break,
             },

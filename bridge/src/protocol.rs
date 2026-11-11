@@ -523,6 +523,11 @@ pub struct ClientMessage {
     pub op: ClientOp,
 }
 
+/// What the bridge understands, sent with the list of sessions. It goes up when the bridge learns something an app
+/// has to know before relying on it. A bridge that sends none is 1.
+/// 2: a `send` with a `sendId` is taken once, however often it is sent.
+pub const BRIDGE: u32 = 2;
+
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(test, derive(strum::VariantNames), strum(serialize_all = "snake_case"))]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -538,6 +543,8 @@ pub enum ServerMessage {
     },
     Sessions {
         sessions: Vec<SessionSummary>,
+        /// What this bridge understands, so an app can tell an older one: `BRIDGE`.
+        bridge: u32,
     },
     Session {
         session: Box<SessionSummary>,
@@ -742,6 +749,7 @@ mod tests {
             },
             ServerMessage::Sessions {
                 sessions: vec![bare_summary(), full_summary()],
+                bridge: BRIDGE,
             },
             ServerMessage::Session {
                 session: Box::new(full_summary()),
