@@ -417,7 +417,7 @@
     "sessionFile": [
       {
         "differs": {
-          "known.sessionFile": "/work/sessions/earlier.jsonl",
+          "known.sessionFile": null,
           "new.sessionFile": null
         },
         "when": "missing | null | true | 7 | -3 | 1.5 | [] | {}"

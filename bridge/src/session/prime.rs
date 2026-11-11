@@ -187,10 +187,9 @@ impl App {
         if let Some(queue) = row.queue {
             s.queue = queue;
         }
-        // A row without the field says nothing about the file: the one known stays (a new conversation brings its own).
-        if row.session_file.is_some() {
-            st.session_file = row.session_file;
-        }
+        // Taken as the row has it, absent included: after `new_session` the old file is retired, and keeping it would
+        // match this live session to the daemon's notice that the old one ended.
+        st.session_file = row.session_file;
         // `new_session` replaces the conversation, and the window chosen for the session goes with it, or a
         // restarted bridge would look for the window under an id the session no longer has.
         if let Some(current) = row.conversation {

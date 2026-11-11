@@ -99,19 +99,19 @@ port="$(plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/dev.ag
 port="${port:-7878}"
 answers() { curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; }
 if [ -n "$new" ] && [ "$new" = "$(cdhash ~/.agent-remote/bin/agent-remote)" ]; then
-  done="bridge unchanged"
+  outcome="bridge unchanged"
 else
   install -m 755 target/release/agent-remote ~/.agent-remote/bin/agent-remote
   launchctl kickstart -k "gui/$(id -u)/dev.agentremote.bridge"
-  done="bridge updated and restarted"
+  outcome="bridge updated and restarted"
 fi
 # Checked either way: a bridge that failed to start on the last run is "unchanged" on this one, and the sync is
 # only recorded as done when the bridge answers.
 for _ in $(seq 20); do answers && break; sleep 0.5; done
 if answers; then
-  echo "  $done"
+  echo "  $outcome"
 else
-  echo "  $done, but it doesn't answer on port $port: see ~/.agent-remote/logs/bridge.log on that Mac" >&2
+  echo "  $outcome, but it doesn't answer on port $port: see ~/.agent-remote/logs/bridge.log on that Mac" >&2
   exit 1
 fi
 REMOTE

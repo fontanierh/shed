@@ -115,15 +115,6 @@ pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
         .await
         .map_err(|_| anyhow!("{program} took too long to list its models"))?
         .map_err(|e| anyhow!("failed to run {program}: {e}"))?;
-    // A listing that failed is not an empty one: said, not cached as "no models".
-    if !output.status.success() {
-        let said = String::from_utf8_lossy(&output.stderr);
-        let said = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        bail!(
-            "{program} could not list its models ({}): {said}",
-            output.status
-        );
-    }
     let text = String::from_utf8_lossy(&output.stdout);
     let models: Vec<Value> = text
         .lines()
@@ -135,6 +126,22 @@ pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
             Some(json!({ "provider": provider, "id": id, "name": id }))
         })
         .collect();
+    // A listing that failed is not an empty one: said, not cached as "no models". A table that came with a failing
+    // exit is kept and the exit logged, since how each program ends a good listing has not been seen.
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        if models.is_empty() {
+            bail!(
+                "{program} could not list its models ({}): {said}",
+                output.status
+            );
+        }
+        eprintln!(
+            "{program} listed its models but ended with {}: {said}",
+            output.status
+        );
+    }
     Ok(json!(models))
 }
 
