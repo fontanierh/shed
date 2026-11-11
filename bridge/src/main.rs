@@ -17,6 +17,7 @@ mod media;
 mod opencodex;
 mod prime;
 mod protocol;
+mod requests;
 mod rpc;
 mod runaway;
 mod server;
