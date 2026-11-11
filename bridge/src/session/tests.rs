@@ -1052,16 +1052,13 @@ async fn malformed_state_and_stats() {
 /// Prime's daemon attached.
 fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
     match backend {
-        Backend::Pi => BackendState::Pi {
-            child: live.then(|| {
-                Arc::new(ScriptedSession {
-                    script: rig.agents.clone(),
-                    id: id.to_string(),
-                    rest: None,
-                    absent: "agent is not running",
-                }) as Arc<dyn Live>
-            }),
-        },
+        Backend::Pi if live => BackendState::Pi(Process::Running(Arc::new(ScriptedSession {
+            script: rig.agents.clone(),
+            id: id.to_string(),
+            rest: None,
+            absent: "agent is not running",
+        }))),
+        Backend::Pi => BackendState::pi(),
         Backend::Prime => BackendState::Prime(PrimeState {
             attached: live,
             ..Default::default()
