@@ -144,7 +144,7 @@ The `agent-remote guide <agent>` command and the cards in the new-session sheet 
 - *Subagents.* `session/subagents.rs` labels the child sessions it makes as Pi's or DeepSeek's.
 - *Models.* `rpc::listed_models` parses the table Pi and Prime print. With Open Codex, the catalogue is written to a hand-kept list of folders in `opencodex.rs`.
 - *Time limits.* Only `compact` gets the long limit (`Ask::limit` in `ask.rs`).
-- *Tests.* The scripted agent stands in for every kind, but `protocol/server_messages.json` lists the agents and fails both sides' tests until it is written again with `UPDATE_FIXTURES=1`, and the commands pin lists the kinds it covers by hand (`session/tests.rs`), so a new agent has no pin until it is added there.
+- *Tests.* The scripted agent stands in for every kind, but `protocol/server_messages.json` lists the agents and fails both sides' tests until it is written again with `UPDATE_FIXTURES=1`. The commands pin runs every command against every agent there is (`session/tests.rs`), so a new agent fails it until the pin is written again with it.
 - *The apps' features.* These compare with one agent and need a look each: `hasBackgroundCommands` and `controlsAutoCompaction` in `Protocol.swift`; the default models and the split of models by name in `Views/NewSessionSheet.swift`; goals and the kernel restart in `Views/SessionHeader.swift`, `Views/PhoneSessionToolbar.swift` and `Views/SessionView.swift`; the empty list in `Views/BackgroundCommands.swift`. (The cost on the lock screen goes through `spendIncludesSubagents`, which the compiler asks for.)
 - *Setup.* Its install step in `setup/`.
 
