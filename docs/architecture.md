@@ -75,9 +75,9 @@ The bridge, in `bridge/src`:
 | `main.rs` | Starts the bridge, and the `agent-remote web` command the agents call. |
 | `protocol.rs` | The messages the apps and the bridge exchange. |
 | `server.rs` | The WebSocket endpoint: one connection per app, and the sessions it is attached to. |
-| `agent.rs` | What the bridge asks of an agent: the `Agent` trait (start a session, list models), the `Live` trait (a running session: send a command, close) and the list of agents the bridge has. The tests run the session code against a scripted agent that implements the same two traits. |
-| `ask.rs` | Every question the bridge asks an agent, as one enum: its wire name and fields for each driver, and its time limit. |
-| `rpc.rs`, `dsh.rs`, `prime.rs` | One driver per agent: a Pi process, a DeepSeek Harness process made to speak Pi's protocol, and the connection to Prime's daemon. |
+| `agent.rs` | The agent contract (`Agent`, `Verbs`, `Starts`, `Keeps`, `Live`), `capabilities`, and the `Agents` registry. Tests run the session code against a scripted agent implementing the same traits. |
+| `ask.rs` | Every question the bridge asks an agent, as one enum: its JSONL RPC wire form and its time limit. |
+| `pi.rs`, `dsh.rs`, `prime.rs`, `rpc.rs` | One module per agent (`Agent`, `Verbs` and `Starts` or `Keeps` in `pi.rs`, `dsh.rs` and `prime.rs`), plus `rpc.rs`, the shared subprocess carrier for Pi and DeepSeek Harness. |
 | `requests.rs` | Matching an agent's answers to what it was asked, with a time limit on every request. The three drivers use it. |
 | `agent_wire.rs` | Everything an agent tells the bridge about a session, read into the bridge's own types. |
 | `transcript.rs` | Turns an agent's messages and streaming events into the flat list of transcript items. |
@@ -93,7 +93,7 @@ The bridge, in `bridge/src`:
 | `files.rs`, `git.rs`, `github.rs`, `media.rs` | What the apps ask about the machine: folders to pick from, a folder's branch, the user's GitHub, and the files an agent shows. |
 | `channel.rs` | `offer`: a send that may find nobody listening. |
 | `host.rs` | The home folder and the clock, asked in one place. |
-| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. Some are still written elsewhere, among them the guide file Pi's subagents read (`agent.rs`, in Pi's `start`), the log of loops (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`), and the web log and the Python module (`web.rs`). |
+| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. Some are still written elsewhere, among them the guide file Pi's subagents read (`pi.rs`, in Pi's `start`), the log of loops (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`), and the web log and the Python module (`web.rs`). |
 
 The rules the bridge keeps to:
 
@@ -121,14 +121,14 @@ Both sides' tests read the example messages in `protocol/`, so the Rust and Swif
 
 ## Adding an agent
 
-An agent is one implementation of `Agent` (`bridge/src/agent.rs`), plus a `Live` driver if it speaks its own protocol. Every session command, time limit (`Ask::limit`) and client capability (`SessionSummary.capabilities`) flows from `Agent` and `Verbs`, so neither `server.rs` nor the apps' views branch on agent names for features.
+An agent is its own module (`pi.rs`, `dsh.rs`, `prime.rs`) implementing `Agent` and `Verbs` from `bridge/src/agent.rs`, plus a `Live` driver if it speaks its own protocol. Every session command, time limit (`Ask::limit`) and client capability (`SessionSummary.capabilities`) flows from `Agent` and `Verbs`, so neither `server.rs` nor the apps' views branch on agent names for features.
 
 **What the compiler asks for.** Add a case to `AgentKind` in `bridge/src/rpc.rs` and to `AgentKind` in `apps/Sources/ShedKit/Protocol.swift`. Neither side builds until the new agent has:
 
 - its guide text in `bridge/src/guide.rs`;
-- its place in `Agents` in `agent.rs` (a field, and its line in `installed`, `of` and `get`), which needs an implementation of `Agent`;
-- in that implementation, the eight answers, none with a default: `sessions` (`Started`, the bridge runs a process per session, or `Kept`, the agent keeps them itself), `models`, `jobs` (`JobsFrom`), `subagents` (`SubagentsFrom`), `gateway_session`, `cost`, `spend_includes_subagents`, and `verbs`;
-- `verbs` (`Verbs`), with no defaults: `message`, `follow_up`, `abort`, `compact`, `auto_compaction`, `new_session`, `clear_goal`, `stop_tool`, `interrupt`, `restart_kernel`, `answer` and `thinking_levels` (`None` where the agent lacks a command). An agent that speaks Pi's RPC can reuse `PiRpc`; DeepSeek Harness uses `DshVerbs` and Prime uses `PrimeVerbs`. If the agent speaks its own protocol, its `Live::send(Ask)` matches on `Ask` directly (as `Dsh::send` does) and passes `ask.limit()` to its request matcher;
+- its module registered in `Agents` in `agent.rs` (a field, and its line in `installed`, `of` and `get`), returning an `Arc<dyn Agent>`;
+- in that `Agent` implementation, the eight answers, none with a default: `sessions` (`Started`, the bridge runs a process per session, or `Kept`, the agent keeps them itself), `models`, `jobs` (`JobsFrom`), `subagents` (`SubagentsFrom`), `gateway_session`, `cost`, `spend_includes_subagents`, and `verbs`;
+- `verbs` (`Verbs`), with no defaults: `message`, `follow_up`, `abort`, `compact`, `auto_compaction`, `new_session`, `clear_goal`, `stop_tool`, `interrupt`, `restart_kernel`, `answer` and `thinking_levels` (`None` where the agent lacks a command). An agent that speaks Pi's RPC can reuse `pi::PiRpc`; otherwise it defines a private `Verbs` struct in its own module (as `dsh.rs` and `prime.rs` do). If the agent speaks its own protocol, its `Live::send(Ask)` matches on `Ask` directly (as `Dsh::send` does) and passes `ask.limit()` to its request matcher;
 - `Starts::start` for a started agent, or `Keeps` (`session`, `stop`, `create`) for a kept one;
 - in the apps, its name (`Protocol.swift`), its legacy fallback line in `SessionCapabilities.legacy` (`Protocol.swift`, used only when talking to a bridge older than `capabilities`), its colour (`Views/Theme.swift`), its glyph (`Views/Atmosphere.swift`) and its card title and description (`Views/NewSessionSheet.swift`).
 

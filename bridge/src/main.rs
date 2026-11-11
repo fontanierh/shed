@@ -18,6 +18,7 @@ mod host;
 mod jobs;
 mod media;
 mod opencodex;
+mod pi;
 mod prime;
 mod protocol;
 mod requests;

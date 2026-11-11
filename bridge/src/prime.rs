@@ -8,9 +8,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use futures_util::future::BoxFuture;
 use serde_json::{json, Value};
 
-use crate::agent_wire::{InactiveRow, PrimeRow};
+use crate::agent::{Agent, JobsFrom, Keeps, Live, Sessions, SubagentsFrom, Verbs};
+use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
+use crate::ask::{Ask, Delivery};
 use crate::channel::Offer;
 use crate::protocol::SessionKind;
 use crate::store::Store;
@@ -34,6 +37,209 @@ pub enum DaemonEvent {
     SessionClosed(String),
     Inactive(InactiveRow),
     Disconnected(String),
+}
+
+pub fn agent(daemon: Arc<PrimeDaemon>) -> Arc<dyn Agent> {
+    Arc::new(Prime {
+        daemon,
+        costs: crate::cost::Costs::default(),
+    })
+}
+
+/// Prime Agent, whose sessions live in its daemon: the daemon announces them, and the bridge attaches.
+struct Prime {
+    daemon: Arc<PrimeDaemon>,
+    /// Sessions' spending, subagents included, read from their session files.
+    costs: crate::cost::Costs,
+}
+
+impl Agent for Prime {
+    fn sessions(&self) -> Sessions<'_> {
+        Sessions::Kept(self)
+    }
+
+    fn models(&self) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(crate::rpc::listed_models("prime-agent", &["model", "list"]))
+    }
+
+    fn jobs(&self) -> JobsFrom {
+        JobsFrom::Kernel
+    }
+
+    fn subagents(&self) -> SubagentsFrom {
+        SubagentsFrom::Roster
+    }
+
+    fn gateway_session(
+        &self,
+        _session_file: Option<&str>,
+        conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        Some(conversation?.as_str().to_string())
+    }
+
+    /// Own calls (as Prime reports them, or as its file records them if that's more) plus its subagents', never less
+    /// than before.
+    fn cost(&self, session_file: Option<&str>, reported: f64, before: f64) -> f64 {
+        let total = match session_file.and_then(|f| self.costs.read(f)) {
+            Some((recorded, subagents)) => reported.max(recorded) + subagents,
+            None => reported,
+        };
+        total.max(before)
+    }
+
+    /// Prime counts what its subagents spend into their parent.
+    fn spend_includes_subagents(&self) -> bool {
+        true
+    }
+
+    fn verbs(&self) -> &'static dyn Verbs {
+        &PrimeVerbs
+    }
+}
+
+impl Keeps for Prime {
+    fn create(
+        &self,
+        cwd: String,
+        model: Option<String>,
+        thinking: Option<String>,
+    ) -> BoxFuture<'_, Result<PrimeRow>> {
+        Box::pin(async move {
+            self.daemon
+                .create(&cwd, model.as_deref(), thinking.as_deref())
+                .await
+        })
+    }
+
+    fn stop(&self, id: &str) -> BoxFuture<'_, Result<()>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let out = tokio::process::Command::new("prime-agent")
+                .args(["stop", &id])
+                .output()
+                .await?;
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // An empty draft (e.g. right after new_session) has no worker to stop.
+            if !out.status.success() && !stderr.contains("Unknown active session") {
+                anyhow::bail!("prime-agent stop failed: {}", stderr.trim());
+            }
+            Ok(())
+        })
+    }
+
+    fn session(&self, id: &str) -> Arc<dyn Live> {
+        Arc::new(PrimeSession {
+            daemon: self.daemon.clone(),
+            id: id.to_string(),
+        })
+    }
+}
+
+/// Prime Agent's commands, as its daemon takes them.
+struct PrimeVerbs;
+
+impl Verbs for PrimeVerbs {
+    /// Prime steers or queues it itself, whatever the session is doing.
+    fn message(&self, text: String, _busy: bool) -> Ask {
+        Ask::Prompt {
+            message: text,
+            delivery: Delivery::SteerOrQueue,
+        }
+    }
+
+    fn follow_up(&self, text: String) -> Option<Ask> {
+        Some(Ask::FollowUp(text))
+    }
+
+    fn abort(&self) -> Ask {
+        Ask::Abort
+    }
+
+    /// Prime's `compact` command aborts the session first, which drops the background-command and subagent notices
+    /// waiting to wake it and holds the rest until the next prompt: an idle session waiting on its jobs never wakes.
+    /// Its `/compact` slash command compacts without aborting, after the current turn if one is running.
+    fn compact(&self, instructions: Option<String>) -> Ask {
+        let message = match instructions {
+            Some(text) => format!("/compact {text}"),
+            None => "/compact".to_string(),
+        };
+        Ask::Prompt {
+            message,
+            delivery: Delivery::FollowUp,
+        }
+    }
+
+    fn auto_compaction(&self, enabled: bool) -> Option<Ask> {
+        Some(Ask::SetAutoCompaction(enabled))
+    }
+
+    fn new_session(&self) -> Option<Ask> {
+        Some(Ask::NewSession)
+    }
+
+    /// `/goal clear`, steered in so a running turn picks it up at its next step instead of after the turn.
+    fn clear_goal(&self) -> Option<Ask> {
+        Some(Ask::Prompt {
+            message: "/goal clear".into(),
+            delivery: Delivery::Steer,
+        })
+    }
+
+    /// A plain abort leaves Prime holding steered messages until the next prompt; `abort_and_send_queued` delivers
+    /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
+    /// is queued.
+    fn stop_tool(&self) -> Ask {
+        Ask::AbortAndSendQueued
+    }
+
+    /// The note queued as a steer first, so stopping the reply delivers it straight away.
+    fn interrupt(&self, note: String) -> [Ask; 2] {
+        [
+            Ask::Prompt {
+                message: note,
+                delivery: Delivery::SteerOrQueue,
+            },
+            Ask::AbortAndSendQueued,
+        ]
+    }
+
+    fn restart_kernel(
+        &self,
+        session_file: Option<String>,
+    ) -> Option<BoxFuture<'static, Result<Value>>> {
+        Some(Box::pin(restart_kernel(session_file)))
+    }
+
+    fn answer(&self, _: String, _: Vec<Value>) -> Option<Ask> {
+        None
+    }
+
+    /// Prime has no levels command.
+    fn thinking_levels(&self) -> Option<Ask> {
+        None
+    }
+}
+
+struct PrimeSession {
+    daemon: Arc<PrimeDaemon>,
+    id: String,
+}
+
+impl Live for PrimeSession {
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let limit = ask.limit();
+            let Some((kind, fields)) = ask.wire() else {
+                anyhow::bail!("Prime has no {ask:?} command");
+            };
+            self.daemon.session(&self.id, kind, fields, limit).await
+        })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
 }
 
 pub struct PrimeDaemon {
@@ -452,7 +658,7 @@ fn start_daemon() -> Result<()> {
 /// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
 /// kernels run on this machine: kill the session's own kernel, found by the session id in its environment, along with
 /// whatever it started. Prime notices the kernel is gone and starts a fresh one on the next Python call.
-pub async fn restart_kernel(session_file: Option<String>) -> Result<Value> {
+async fn restart_kernel(session_file: Option<String>) -> Result<Value> {
     let file = session_file.context("Prime hasn't reported this session's file yet")?;
     let rlm_session = std::path::Path::new(&file)
         .file_stem()
@@ -595,7 +801,7 @@ mod tests {
     fn prime_daemon_protocol_doc_lists_the_session_commands_the_bridge_sends() {
         use std::collections::BTreeSet;
 
-        use crate::agent::{PrimeVerbs, Verbs};
+        use crate::agent::Verbs;
         use crate::ask::Ask;
 
         let verbs = PrimeVerbs;
