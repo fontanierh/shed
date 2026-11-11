@@ -3,6 +3,7 @@
 //! files saved with a file in `pins/`. `UPDATE_FIXTURES=1 cargo test` rewrites the files: read the diff before
 //! committing it, since it is the change in behaviour.
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -21,6 +22,10 @@ pub struct Script {
     /// Commands the agent refuses, and what it says.
     refusals: std::sync::Mutex<HashMap<String, String>>,
     asked: std::sync::Mutex<Vec<Value>>,
+    /// Sessions started and sessions closed, and how long a start takes.
+    starts: std::sync::atomic::AtomicUsize,
+    closes: std::sync::atomic::AtomicUsize,
+    slow_start: std::sync::Mutex<Duration>,
 }
 
 /// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
@@ -40,6 +45,8 @@ struct ScriptedSession {
 
 impl Agent for Scripted {
     fn start(&self, _opts: &SpawnOptions) -> Result<Started> {
+        self.script.starts.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.script.slow_start.lock().unwrap());
         let (_events, output) = mpsc::unbounded_channel();
         Ok((self.live("started"), output))
     }
@@ -91,7 +98,9 @@ impl Live for ScriptedSession {
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async {})
+        Box::pin(async {
+            self.script.closes.fetch_add(1, Ordering::SeqCst);
+        })
     }
 }
 
@@ -1278,4 +1287,83 @@ async fn commands() {
         "commands no longer do as pinned, from {}. UPDATE_FIXTURES=1 cargo test rewrites {path}.",
         first_difference(&pinned, &text)
     );
+}
+
+/// What an agent that starts well answers while the bridge reads it for the first time.
+fn starting_answers() -> HashMap<String, Value> {
+    serde_json::from_value(json!({
+        "get_state": { "model": { "provider": "example", "id": "model-1", "name": "Model One" },
+            "thinkingLevel": "high", "sessionFile": "/work/sessions/pi1.jsonl" },
+        "get_session_stats": { "cost": 0.5 },
+        "get_messages": { "messages": [] },
+        "get_available_models": { "models": [] },
+        "get_available_thinking_levels": { "levels": ["low", "high"] },
+    }))
+    .unwrap()
+}
+
+/// Two resumes of one stopped session, close together, start one agent, and both are told it runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn two_resumes_start_one_agent() {
+    let rig = Rig::new("resume-twice", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    *rig.agents.slow_start.lock().unwrap() = Duration::from_millis(200);
+    let pi = rig.app.find("pi1").await.unwrap();
+    let resume = || {
+        let (app, pi) = (rig.app.clone(), pi.clone());
+        tokio::spawn(async move { app.resume_session(&pi).await.map(|summary| summary.id) })
+    };
+    let (first, second) = tokio::join!(resume(), resume());
+    assert_eq!(first.unwrap().unwrap(), "pi1");
+    assert_eq!(second.unwrap().unwrap(), "pi1");
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 1);
+    // And once it runs, a repeated resume is still a success.
+    assert_eq!(rig.app.resume_session(&pi).await.unwrap().id, "pi1");
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 1);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A resume whose agent starts and then cannot be read leaves no agent running, and the session can be resumed again.
+#[tokio::test]
+async fn a_resume_that_fails_halfway_closes_its_agent() {
+    let rig = Rig::new("resume-fails", &[("sessions.json", SAVED_SESSIONS)]);
+    let pi = rig.app.find("pi1").await.unwrap();
+    // Nothing is scripted: the agent starts, and answers nothing.
+    let failed = rig.app.resume_session(&pi).await;
+    assert_eq!(failed.unwrap_err().to_string(), "agent is not running");
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    {
+        let st = pi.state.lock().await;
+        assert!(st.stopped());
+        assert_eq!(st.summary.status, SessionStatus::Error);
+    }
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    assert_eq!(rig.app.resume_session(&pi).await.unwrap().id, "pi1");
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A new session whose agent starts and then cannot be read is closed and is not kept: the error is the answer.
+#[tokio::test]
+async fn a_new_session_that_fails_halfway_is_not_kept() {
+    let rig = Rig::new("create-fails", &[]);
+    let cwd = rig.app.store.dir().to_string_lossy().into_owned();
+    let failed = rig
+        .app
+        .create_session(AgentKind::Pi, cwd.clone(), None, None)
+        .await;
+    assert_eq!(failed.unwrap_err().to_string(), "agent is not running");
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    assert!(rig.app.sessions.read().await.is_empty());
+    // One that starts well is kept and saved.
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let made = rig
+        .app
+        .create_session(AgentKind::Pi, cwd, None, None)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(rig.app.sessions.read().await.len(), 1);
+    assert!(rig.saved("sessions.json").to_string().contains(&made.id));
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
