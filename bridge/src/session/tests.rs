@@ -7,6 +7,7 @@ use crate::ask::Ask;
 use crate::host::now_ms;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use strum::IntoEnumIterator;
 
 use futures_util::future::BoxFuture;
 
@@ -1269,13 +1270,24 @@ async fn commands() {
         "get_available_thinking_levels": { "levels": ["low", "high"] },
     });
     // Whether the agent is there to answer. A stopped session has no agent, and a subagent takes no commands.
-    let kinds = [
-        ("pi", AgentKind::Pi, Backend::Started, true),
-        ("deepseek", AgentKind::Deepseek, Backend::Started, true),
-        ("prime", AgentKind::Prime, Backend::Prime, true),
-        ("pi, stopped", AgentKind::Pi, Backend::Started, false),
-        ("subagent", AgentKind::Pi, Backend::Subagent, false),
-    ];
+    // Every agent there is, running, so a new one is pinned the day it is added; then the two ways a session takes
+    // no commands.
+    let mut kinds: Vec<(String, AgentKind, Backend, bool)> = AgentKind::iter()
+        .map(|agent| {
+            let backend = match rig.app.agent(agent).sessions() {
+                Sessions::Started(_) => Backend::Started,
+                Sessions::Kept(_) => Backend::Prime,
+            };
+            (
+                json!(agent).as_str().unwrap().to_string(),
+                agent,
+                backend,
+                true,
+            )
+        })
+        .collect();
+    kinds.push(("pi, stopped".into(), AgentKind::Pi, Backend::Started, false));
+    kinds.push(("subagent".into(), AgentKind::Pi, Backend::Subagent, false));
     let cases = [
         "rename",
         "rename to nothing",
@@ -1363,7 +1375,7 @@ async fn commands() {
             }
             of_kind.insert(case.into(), outcome);
         }
-        seen.insert(kind.into(), Value::Object(of_kind));
+        seen.insert(kind, Value::Object(of_kind));
     }
     let text = serde_json::to_string_pretty(&Value::Object(seen)).unwrap() + "\n";
     let path = format!(
