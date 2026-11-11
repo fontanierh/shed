@@ -5,6 +5,7 @@
 
 mod agent;
 mod agent_wire;
+mod ask;
 mod channel;
 mod cost;
 mod dsh;

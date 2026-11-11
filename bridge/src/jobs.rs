@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
+use crate::ask::Ask;
 use crate::protocol::{BackgroundJob, WaitingOn};
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
@@ -316,13 +317,14 @@ fn wrapped_command(wrapper: &str) -> String {
 impl App {
     /// Whether the session's agent is asked for its background commands, rather than the bridge reading them.
     fn agent_lists_jobs(&self, session: &Session) -> bool {
-        session.backend == Backend::Pi && self.agent(session.agent).lists_own_jobs()
+        session.backend == Backend::Started
+            && self.agent(session.agent).jobs() == crate::agent::JobsFrom::Agent
     }
 
     /// Newest first.
     pub async fn list_jobs(&self, session: &Session) -> Result<Vec<BackgroundJob>> {
         if self.agent_lists_jobs(session) {
-            let data = self.command(session, "dsh_jobs", json!({})).await?;
+            let data = self.command(session, Ask::Jobs).await?;
             let mut jobs: Vec<BackgroundJob> = data["jobs"]
                 .as_array()
                 .map(|jobs| jobs.iter().map(dsh_job).collect())
@@ -332,14 +334,11 @@ impl App {
         }
         let mut jobs = match session.backend {
             Backend::Prime => {
-                let bash = self.command(session, "list_kernel_bash", json!({})).await?;
+                let bash = self.command(session, Ask::KernelBash).await?;
                 let mut jobs: Vec<BackgroundJob> =
                     activities(&bash).filter_map(|a| prime_job(a, "")).collect();
                 // Older daemons have no persistent shells; they still list kernel bash.
-                if let Ok(shells) = self
-                    .command(session, "list_persistent_shells", json!({}))
-                    .await
-                {
+                if let Ok(shells) = self.command(session, Ask::PersistentShells).await {
                     jobs.extend(activities(&shells).filter_map(|a| prime_job(a, SHELL)));
                 }
                 // The count comes from the processes, so list every running one, listed by Prime or not.
@@ -368,12 +367,12 @@ impl App {
                 mark_permission_prompts(&mut jobs, tree.as_ref());
                 jobs
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let mut jobs = pi_jobs(&session.id);
                 mark_permission_prompts(&mut jobs, ProcessTree::snapshot().await.as_ref());
                 jobs
             }
-            Backend::PiSubagent => Vec::new(),
+            Backend::Subagent => Vec::new(),
         };
         jobs.sort_by_key(|job| std::cmp::Reverse(job.started_at));
         Ok(jobs)
@@ -384,7 +383,7 @@ impl App {
         let lines = lines.clamp(1, 200);
         if self.agent_lists_jobs(session) {
             let data = self
-                .command(session, "dsh_job_output", json!({ "jobId": job_id }))
+                .command(session, Ask::JobOutput(job_id.to_string()))
                 .await?;
             let text = data["text"].as_str().unwrap_or_default();
             let all: Vec<&str> = text.lines().collect();
@@ -399,16 +398,20 @@ impl App {
                     Some(shell) => {
                         self.command(
                             session,
-                            "tail_persistent_shell",
-                            json!({ "shellId": shell, "lines": lines }),
+                            Ask::TailPersistentShell {
+                                shell: shell.to_string(),
+                                lines,
+                            },
                         )
                         .await?
                     }
                     None => {
                         self.command(
                             session,
-                            "tail_kernel_bash",
-                            json!({ "activityId": job_id, "lines": lines }),
+                            Ask::TailKernelBash {
+                                activity: job_id.to_string(),
+                                lines,
+                            },
                         )
                         .await?
                     }
@@ -419,7 +422,7 @@ impl App {
                     .unwrap_or_default()
                     .to_string())
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let log =
                     std::fs::read(pi_dir(&session.id).join(format!("{}.log", safe_id(job_id)?)))
                         .map_err(|_| anyhow!("This command is no longer available."))?;
@@ -429,7 +432,7 @@ impl App {
                 let all: Vec<&str> = text.lines().collect();
                 Ok(all[all.len().saturating_sub(lines as usize)..].join("\n"))
             }
-            Backend::PiSubagent => bail!("Pi subagents have no background commands"),
+            Backend::Subagent => bail!("Pi subagents have no background commands"),
         }
     }
 
@@ -437,7 +440,7 @@ impl App {
     /// stops the job itself.
     pub async fn kill_job(&self, session: &Session, job_id: &str) -> Result<bool> {
         if self.agent_lists_jobs(session) {
-            self.command(session, "dsh_kill_job", json!({ "jobId": job_id }))
+            self.command(session, Ask::KillJob(job_id.to_string()))
                 .await?;
             return Ok(true);
         }
@@ -467,21 +470,17 @@ impl App {
             Backend::Prime => {
                 let data = match job_id.strip_prefix(SHELL) {
                     Some(shell) => {
-                        self.command(
-                            session,
-                            "kill_persistent_shell",
-                            json!({ "shellId": shell }),
-                        )
-                        .await?
+                        self.command(session, Ask::KillPersistentShell(shell.to_string()))
+                            .await?
                     }
                     None => {
-                        self.command(session, "kill_kernel_bash", json!({ "activityId": job_id }))
+                        self.command(session, Ask::KillKernelBash(job_id.to_string()))
                             .await?
                     }
                 };
                 Ok(data["killed"].as_bool().unwrap_or(true))
             }
-            Backend::Pi => {
+            Backend::Started => {
                 let job = pi_jobs(&session.id)
                     .into_iter()
                     .find(|job| job.id == job_id)
@@ -510,7 +509,7 @@ impl App {
                 });
                 Ok(status.success())
             }
-            Backend::PiSubagent => bail!("Pi subagents have no background commands"),
+            Backend::Subagent => bail!("Pi subagents have no background commands"),
         }
     }
 }

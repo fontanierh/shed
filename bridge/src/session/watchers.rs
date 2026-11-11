@@ -1,12 +1,13 @@
 //! Watchers: what the bridge keeps an eye on for every session without being asked. What each has spent, the
 //! background commands it has running, and whether it is stuck waiting on one.
 
+use crate::ask::Ask;
 use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::{App, Backend, Session, SessionState};
 use crate::agent_wire;
@@ -238,7 +239,7 @@ impl App {
                 .read()
                 .await
                 .iter()
-                .filter(|s| matches!(s.backend, Backend::Pi | Backend::Prime))
+                .filter(|s| matches!(s.backend, Backend::Started | Backend::Prime))
                 .cloned()
                 .collect();
             if sessions.is_empty() {
@@ -248,12 +249,12 @@ impl App {
             let tree = crate::jobs::ProcessTree::snapshot().await;
             for session in sessions {
                 // An agent that lists its own background commands reports them as events.
-                if self.agent(session.agent).lists_own_jobs() {
+                if self.agent(session.agent).jobs() == crate::agent::JobsFrom::Agent {
                     continue;
                 }
                 let (jobs, waiting) = match session.backend {
-                    Backend::Pi => crate::jobs::pi_running(&session.id, tree.as_ref()),
-                    Backend::PiSubagent => continue,
+                    Backend::Started => crate::jobs::pi_running(&session.id, tree.as_ref()),
+                    Backend::Subagent => continue,
                     Backend::Prime => {
                         let worker = session.state.lock().await.worker_pid();
                         let (Some(worker), Some(tree)) = (worker, &tree) else {
@@ -402,7 +403,7 @@ impl App {
             live
         } else {
             // Not attached: the transcript isn't kept live, so read it.
-            self.command(session, "get_messages", json!({}))
+            self.command(session, Ask::Messages)
                 .await
                 .ok()
                 .map(|data| {

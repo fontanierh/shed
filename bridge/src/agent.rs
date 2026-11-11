@@ -3,46 +3,28 @@
 
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::agent_wire::PrimeRow;
+use crate::ask::Ask;
 use crate::prime::PrimeDaemon;
 use crate::rpc::{AgentKind, ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
 use crate::store::Store;
 
-/// One kind of agent. An agent the bridge runs as a process starts its sessions here (`start`); one that keeps its
-/// sessions itself, as Prime's daemon does, hands out the ones it has (`session`).
+/// One kind of agent.
 pub trait Agent: Send + Sync {
-    /// Start a session as a process of this agent: what runs it, and what it says besides answers.
-    fn start(&self, opts: &SpawnOptions) -> Result<Started> {
-        bail!("{:?} sessions are not started by the bridge", opts.agent)
-    }
-
-    /// The session this agent keeps under `id`, for an agent that keeps its sessions itself.
-    fn session(&self, _id: &str) -> Option<Arc<dyn Live>> {
-        None
-    }
-
-    /// For an agent that keeps its sessions itself: make one there, and say how its roster will list it. None from
-    /// an agent whose sessions the bridge starts.
-    fn create(
-        &self,
-        _cwd: String,
-        _model: Option<String>,
-        _thinking: Option<String>,
-    ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
-        None
-    }
+    /// How its sessions come about. Every agent says which: there is no third way, and no default.
+    fn sessions(&self) -> Sessions<'_>;
 
     /// The models a session can start on, as `[{provider, id, name}]`.
     fn models(&self) -> BoxFuture<'_, Result<Value>>;
 
     /// Whether it lists, shows and stops its background commands itself (`dsh_jobs`, `dsh_job_output`,
     /// `dsh_kill_job`) and reports them as events. Otherwise the bridge reads them where the agent leaves them.
-    fn lists_own_jobs(&self) -> bool;
+    fn jobs(&self) -> JobsFrom;
 
     /// The session id it sends Open Codex with its requests, from the name of the session's file without its
     /// extension. An agent that keeps its own sessions is known by its conversation instead.
@@ -52,12 +34,52 @@ pub trait Agent: Send + Sync {
     fn spend_includes_subagents(&self) -> bool;
 }
 
+/// How an agent's sessions come about.
+pub enum Sessions<'a> {
+    /// The bridge starts a process for each session, and stops it.
+    Started(&'a dyn Starts),
+    /// The agent keeps its sessions itself, as Prime's daemon does: the bridge asks it to make one, and asks the
+    /// ones it has.
+    Kept(&'a dyn Keeps),
+}
+
+/// An agent the bridge runs as a process for each session.
+pub trait Starts {
+    /// Start a session: what runs it, and what it says besides answers.
+    fn start(&self, opts: &SpawnOptions) -> Result<Started>;
+}
+
+/// An agent that keeps its sessions itself.
+pub trait Keeps {
+    /// The session it keeps under `id`.
+    fn session(&self, id: &str) -> Arc<dyn Live>;
+
+    /// Make one there, and say how its roster will list it.
+    fn create(
+        &self,
+        cwd: String,
+        model: Option<String>,
+        thinking: Option<String>,
+    ) -> BoxFuture<'_, Result<PrimeRow>>;
+}
+
+/// Where a session's background commands are found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobsFrom {
+    /// The files Pi's background-command extension keeps for each session.
+    Files,
+    /// The processes under the session's Python kernel, with what Prime lists of them.
+    Kernel,
+    /// The agent is asked, and reports their number in its events.
+    Agent,
+}
+
 pub type Started = (Arc<dyn Live>, mpsc::UnboundedReceiver<ChildOutput>);
 
 /// A session's agent while it runs.
 pub trait Live: Send + Sync {
-    /// Ask it one command, in Pi's vocabulary, and wait for the answer.
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>>;
+    /// Ask it one thing and wait for the answer.
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>>;
 
     /// Its process here, when it has one.
     fn pid(&self) -> Option<u32> {
@@ -104,7 +126,7 @@ impl Agents {
 
 struct Pi(Store);
 
-impl Agent for Pi {
+impl Starts for Pi {
     fn start(&self, opts: &SpawnOptions) -> Result<Started> {
         let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
         if let Some(model) = &opts.model {
@@ -129,13 +151,19 @@ impl Agent for Pi {
         let (child, output) = RpcChild::spawn(launch, opts)?;
         Ok((child, output))
     }
+}
+
+impl Agent for Pi {
+    fn sessions(&self) -> Sessions<'_> {
+        Sessions::Started(self)
+    }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
         Box::pin(crate::rpc::listed_models("pi", &["--list-models"]))
     }
 
-    fn lists_own_jobs(&self) -> bool {
-        false
+    fn jobs(&self) -> JobsFrom {
+        JobsFrom::Files
     }
 
     /// The id in the file's name, `<time>_<id>.jsonl`.
@@ -155,7 +183,7 @@ impl Agent for Pi {
 /// DeepSeek Harness, driven through Shed's dsh plugin by `crate::dsh`.
 struct Deepseek(Store);
 
-impl Agent for Deepseek {
+impl Starts for Deepseek {
     fn start(&self, opts: &SpawnOptions) -> Result<Started> {
         // The session's model, reasoning effort and resumption go to the plugin once it starts.
         let layer = crate::dsh::install_profile(&self.0)
@@ -175,13 +203,19 @@ impl Agent for Deepseek {
         let (child, output) = RpcChild::spawn(launch, opts)?;
         Ok((child, output))
     }
+}
+
+impl Agent for Deepseek {
+    fn sessions(&self) -> Sessions<'_> {
+        Sessions::Started(self)
+    }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
         Box::pin(crate::dsh::list_models(&self.0))
     }
 
-    fn lists_own_jobs(&self) -> bool {
-        true
+    fn jobs(&self) -> JobsFrom {
+        JobsFrom::Agent
     }
 
     fn gateway_session(&self, file_name: &str) -> String {
@@ -196,33 +230,39 @@ impl Agent for Deepseek {
 /// Prime Agent, whose sessions live in its daemon: the daemon announces them, and the bridge attaches.
 struct Prime(Arc<PrimeDaemon>);
 
-impl Agent for Prime {
+impl Keeps for Prime {
     fn create(
         &self,
         cwd: String,
         model: Option<String>,
         thinking: Option<String>,
-    ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
-        Some(Box::pin(async move {
+    ) -> BoxFuture<'_, Result<PrimeRow>> {
+        Box::pin(async move {
             self.0
                 .create(&cwd, model.as_deref(), thinking.as_deref())
                 .await
-        }))
+        })
     }
 
-    fn session(&self, id: &str) -> Option<Arc<dyn Live>> {
-        Some(Arc::new(PrimeSession {
+    fn session(&self, id: &str) -> Arc<dyn Live> {
+        Arc::new(PrimeSession {
             daemon: self.0.clone(),
             id: id.to_string(),
-        }))
+        })
+    }
+}
+
+impl Agent for Prime {
+    fn sessions(&self) -> Sessions<'_> {
+        Sessions::Kept(self)
     }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
         Box::pin(crate::rpc::listed_models("prime-agent", &["model", "list"]))
     }
 
-    fn lists_own_jobs(&self) -> bool {
-        false
+    fn jobs(&self) -> JobsFrom {
+        JobsFrom::Kernel
     }
 
     fn gateway_session(&self, file_name: &str) -> String {
@@ -241,9 +281,11 @@ struct PrimeSession {
 }
 
 impl Live for PrimeSession {
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
-        let kind = kind.to_string();
-        Box::pin(async move { self.daemon.session(&self.id, &kind, fields).await })
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let (kind, fields) = ask.wire();
+            self.daemon.session(&self.id, kind, fields).await
+        })
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
@@ -252,9 +294,11 @@ impl Live for PrimeSession {
 }
 
 impl Live for RpcChild {
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
-        let kind = kind.to_string();
-        Box::pin(async move { RpcChild::send(self, &kind, fields).await })
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let (kind, fields) = ask.wire();
+            RpcChild::send(self, kind, fields, ask.limit()).await
+        })
     }
 
     fn pid(&self) -> Option<u32> {
