@@ -107,15 +107,15 @@ const CLAUDE_SUBSCRIPTION: &str = "anthropic/";
 
 /// The models Open Codex serves, as it lists them, less the Claude subscription's. Cached for a minute.
 async fn catalog(gateway: &Gateway) -> Result<Vec<Model>> {
-    static CACHE: Mutex<Option<(Instant, Vec<Model>)>> = Mutex::new(None);
-    if let Some((at, models)) = CACHE.lock().unwrap().as_ref() {
-        if at.elapsed() < Duration::from_secs(60) {
+    static CACHE: Mutex<Option<(String, Instant, Vec<Model>)>> = Mutex::new(None);
+    if let Some((url, at, models)) = CACHE.lock().unwrap().as_ref() {
+        if url == &gateway.url && at.elapsed() < Duration::from_secs(60) {
             return Ok(models.clone());
         }
     }
     let reply = get(&format!("{}/v1/models", gateway.url), None).await?;
     let models: Vec<Model> = listed(&reply)?.iter().map(Model::read).collect();
-    *CACHE.lock().unwrap() = Some((Instant::now(), models.clone()));
+    *CACHE.lock().unwrap() = Some((gateway.url.clone(), Instant::now(), models.clone()));
     Ok(models)
 }
 
@@ -309,19 +309,24 @@ fn dsh_model(model: &Model) -> Option<Value> {
 }
 
 /// Where the catalog is kept for dsh's profile layer, which is written without waiting on the network.
-fn dsh_catalog_file(home: &Path) -> PathBuf {
-    home.join(".agent-remote/opencodex-models.json")
+fn dsh_catalog_file(store_dir: &Path) -> PathBuf {
+    store_dir.join("opencodex-models.json")
 }
 
 /// Write the catalog into each agent's configuration, as its `opencodex` provider, and move a default model that
 /// Open Codex also serves onto it. Other providers are left as they are, for the agents' own use and their older
 /// sessions.
-pub async fn sync(gateway: &Gateway) -> Result<()> {
-    write(&crate::host::home(), &gateway.url, &catalog(gateway).await?)
+pub async fn sync(store: &Store, gateway: &Gateway) -> Result<()> {
+    write(
+        &crate::host::home(),
+        store.dir(),
+        &gateway.url,
+        &catalog(gateway).await?,
+    )
 }
 
-/// What `sync` writes, in the agents' folders under `home`.
-fn write(home: &Path, url: &str, models: &[Model]) -> Result<()> {
+/// What `sync` writes, in the agents' folders under `home` and the bridge's `store_dir`.
+fn write(home: &Path, store_dir: &Path, url: &str, models: &[Model]) -> Result<()> {
     for (agent, session_header) in [(".pi/agent", true), (".prime/agent", false)] {
         let dir = home.join(agent);
         if !dir.is_dir() {
@@ -345,7 +350,10 @@ fn write(home: &Path, url: &str, models: &[Model]) -> Result<()> {
         })?;
     }
     let dsh: Vec<Value> = models.iter().filter_map(dsh_model).collect();
-    write_if_changed(&dsh_catalog_file(home), &serde_json::to_vec_pretty(&dsh)?)
+    write_if_changed(
+        &dsh_catalog_file(store_dir),
+        &serde_json::to_vec_pretty(&dsh)?,
+    )
 }
 
 /// The default model in an agent's `settings.json`.
@@ -394,9 +402,13 @@ fn move_default(settings: &mut Value, models: &[Model]) {
     }
 }
 
-/// Read a JSON file (an empty object if it's missing), change it, and write it back if that changed anything.
+/// Read a JSON file (an empty object only when it is missing), change it, and write it back if that changed anything.
 fn update(path: &PathBuf, change: impl FnOnce(&mut Value)) -> Result<()> {
-    let raw = std::fs::read_to_string(path).ok();
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => Some(raw),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
     let mut value: Value = match &raw {
         Some(raw) => serde_json::from_str(raw)?,
         None => json!({}),
@@ -442,8 +454,7 @@ fn write_if_changed(path: &PathBuf, bytes: &[u8]) -> Result<()> {
 pub fn dsh_layer(store: &Store) -> Option<String> {
     let gateway = gateway(store)?;
     let models: Value =
-        serde_json::from_slice(&std::fs::read(dsh_catalog_file(&crate::host::home())).ok()?)
-            .ok()?;
+        serde_json::from_slice(&std::fs::read(dsh_catalog_file(store.dir())).ok()?).ok()?;
     let providers = json!({
         PROVIDER: {
             "displayName": "Open Codex",
@@ -498,7 +509,13 @@ impl Tally {
             );
             if let Some(cursor) = &cursor {
                 url.push_str("&cursor=");
-                url.push_str(cursor);
+                for b in cursor.bytes() {
+                    if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+                        url.push(b as char);
+                    } else {
+                        url.push_str(&format!("%{b:02X}"));
+                    }
+                }
             }
             match counted.add(Page::read(&get(&url, Some(token)).await?)) {
                 Some(next) => cursor = Some(next),
@@ -1133,7 +1150,13 @@ mod tests {
             r#"{"theme":"dark","defaultProvider":"mistral","defaultModel":"small"}"#,
         )
         .unwrap();
-        write(&home, "http://gateway.test", &small_catalog()).unwrap();
+        write(
+            &home,
+            &home.join(".agent-remote"),
+            "http://gateway.test",
+            &small_catalog(),
+        )
+        .unwrap();
         let read = |file: &str| std::fs::read_to_string(home.join(file)).unwrap();
         assert_eq!(read(".pi/agent/models.json"), PI_MODELS);
         assert_eq!(
@@ -1152,7 +1175,13 @@ mod tests {
         for dir in [".pi/agent", ".agent-remote"] {
             std::fs::create_dir_all(home.join(dir)).unwrap();
         }
-        write(&home, "http://gateway.test", &small_catalog()).unwrap();
+        write(
+            &home,
+            &home.join(".agent-remote"),
+            "http://gateway.test",
+            &small_catalog(),
+        )
+        .unwrap();
         // The same content on one line, as an agent might rewrite it.
         let models = home.join(".pi/agent/models.json");
         let written: Value =
@@ -1165,7 +1194,13 @@ mod tests {
             r#"{"defaultProvider":"google","defaultModel":"small"}"#,
         )
         .unwrap();
-        write(&home, "http://gateway.test", &small_catalog()).unwrap();
+        write(
+            &home,
+            &home.join(".agent-remote"),
+            "http://gateway.test",
+            &small_catalog(),
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&models).unwrap(), compact);
         assert_eq!(
             std::fs::read_to_string(&settings).unwrap(),
@@ -1176,12 +1211,24 @@ mod tests {
         // Neither file is a JSON object: left alone.
         std::fs::write(&models, "[1]").unwrap();
         std::fs::write(&settings, "\"dark\"").unwrap();
-        write(&home, "http://gateway.test", &small_catalog()).unwrap();
+        write(
+            &home,
+            &home.join(".agent-remote"),
+            "http://gateway.test",
+            &small_catalog(),
+        )
+        .unwrap();
         assert_eq!(std::fs::read_to_string(&models).unwrap(), "[1]");
         assert_eq!(std::fs::read_to_string(&settings).unwrap(), "\"dark\"");
         // A file that isn't JSON stops the sync.
         std::fs::write(&models, "not json").unwrap();
-        assert!(write(&home, "http://gateway.test", &small_catalog()).is_err());
+        assert!(write(
+            &home,
+            &home.join(".agent-remote"),
+            "http://gateway.test",
+            &small_catalog()
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(&home);
     }
 

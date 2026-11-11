@@ -36,6 +36,7 @@ use anyhow::{bail, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
 use axum::Router;
+use channel::Offer;
 
 fn usage() -> ! {
     eprintln!("usage: agent-remote [--host 127.0.0.1] [--port 7878]");
@@ -107,30 +108,34 @@ async fn main() -> Result<()> {
     eprintln!("agent-remote listening on ws://{host}:{port}/ws");
     eprintln!("token: ~/.agent-remote/config.json");
 
-    let shutdown_app = app.clone();
-    axum::serve(listener, router)
-        .with_graceful_shutdown(async move {
-            // Ctrl-C in a terminal, SIGTERM from launchd.
-            let mut terminate =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("SIGTERM can be listened for");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = terminate.recv() => {}
-            }
-            eprintln!("shutting down, closing agent sessions");
-            // A session that doesn't answer must not hold the restart: launchd waits, then kills.
-            let closing = shutdown_app.shutdown();
-            if tokio::time::timeout(std::time::Duration::from_secs(3), closing)
-                .await
-                .is_err()
-            {
-                eprintln!("agent sessions still closing after 3 seconds, exiting anyway");
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            // The apps' open connections would keep the server waiting.
-            std::process::exit(0);
-        })
-        .await?;
-    Ok(())
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = axum::serve(listener, router).with_graceful_shutdown(async move {
+        // Return right after the signal so Axum stops accepting new connections before sessions close.
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM can be listened for");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+        stop_tx.offer(());
+    });
+    tokio::spawn(async move {
+        if let Err(e) = server.await {
+            eprintln!("server stopped: {e}");
+        }
+    });
+    drop(stop_rx.await);
+    tokio::task::yield_now().await;
+    eprintln!("shutting down, closing agent sessions");
+    // A session that doesn't answer must not hold the restart: launchd waits, then kills.
+    if tokio::time::timeout(std::time::Duration::from_secs(3), app.shutdown())
+        .await
+        .is_err()
+    {
+        eprintln!("agent sessions still closing after 3 seconds, exiting anyway");
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    // The apps' open connections would keep the server waiting.
+    std::process::exit(0);
 }

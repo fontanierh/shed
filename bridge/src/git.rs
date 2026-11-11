@@ -11,7 +11,11 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(6);
 
 /// The branch of the repository `folder` is in. None when it is detached, or when the folder is in no repository.
 pub async fn branch(folder: &str) -> Value {
-    let branch = git(folder, &["symbolic-ref", "--short", "-q", "HEAD"])
+    let expanded = match folder.strip_prefix("~") {
+        Some(rest) => format!("{}{}", crate::host::home_text(), rest),
+        None => folder.to_string(),
+    };
+    let branch = git(&expanded, &["symbolic-ref", "--short", "-q", "HEAD"])
         .await
         .map(|branch| branch.trim().to_string())
         .filter(|branch| !branch.is_empty());

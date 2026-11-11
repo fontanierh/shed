@@ -33,8 +33,10 @@ impl Costs {
         }
         if len > ledger.offset {
             f.seek(SeekFrom::Start(ledger.offset)).ok()?;
+            let mut chunk = Vec::new();
+            let read = f.take(len - ledger.offset).read_to_end(&mut chunk).ok()? as u64;
             let mut bytes = std::mem::take(&mut ledger.partial);
-            let read = f.take(len - ledger.offset).read_to_end(&mut bytes).ok()? as u64;
+            bytes.extend_from_slice(&chunk);
             ledger.offset += read;
             let complete = bytes.iter().rposition(|&b| b == b'\n').map_or(0, |i| i + 1);
             ledger.partial = bytes.split_off(complete);
@@ -64,4 +66,47 @@ fn total(usage: &Value) -> f64 {
         .as_f64()
         .or_else(|| usage["cost"].as_f64())
         .unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_incrementally_keeps_partial_lines_and_resets_on_truncation() {
+        let dir = std::env::temp_dir().join(format!("shed-cost-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("session.jsonl");
+        let path = file.to_str().unwrap();
+
+        let line1 = "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"usage\":{\"cost\":0.2}}}\n";
+        let line2_half1 = "{\"type\":\"child_usage_attributed\",\"childUsage\":";
+        let line2_half2 = "{\"cost\":{\"total\":0.35}}}\n";
+
+        std::fs::write(&file, format!("{line1}{line2_half1}")).unwrap();
+        let costs = Costs::default();
+        let (own, children) = costs.read(path).unwrap();
+        assert!((own - 0.2).abs() < 1e-9);
+        assert_eq!(children, 0.0);
+
+        // Append the rest of the split line.
+        use std::io::Write;
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(line2_half2.as_bytes())
+            .unwrap();
+        let (own, children) = costs.read(path).unwrap();
+        assert!((own - 0.2).abs() < 1e-9);
+        assert!((children - 0.35).abs() < 1e-9);
+
+        // Rewriting a shorter file resets the ledger cleanly.
+        std::fs::write(&file, "{\"type\":\"usage\",\"usage\":{\"cost\":0.05}}\n").unwrap();
+        let (own, children) = costs.read(path).unwrap();
+        assert!((own - 0.05).abs() < 1e-9);
+        assert_eq!(children, 0.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

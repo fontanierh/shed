@@ -35,7 +35,7 @@ impl ModelInfo {
         Some(ModelInfo {
             provider: v["provider"].as_str().unwrap_or("").to_string(),
             name: v["name"].as_str().unwrap_or(&id).to_string(),
-            context_window: v["contextWindow"].as_u64(),
+            context_window: v["contextWindow"].as_u64().filter(|&w| w > 0),
             reasoning: v["reasoning"].as_bool().unwrap_or(false),
             id,
         })
@@ -276,11 +276,14 @@ impl AgentStats {
         AgentStats {
             cost: answer["cost"].as_f64(),
             session_file: text(&answer["sessionFile"]),
-            context: usage["contextWindow"].as_u64().map(|window| ContextUsage {
-                tokens: usage["tokens"].as_u64(),
-                window,
-                percent: usage["percent"].as_f64(),
-            }),
+            context: usage["contextWindow"]
+                .as_u64()
+                .filter(|&w| w > 0)
+                .map(|window| ContextUsage {
+                    tokens: usage["tokens"].as_u64(),
+                    window,
+                    percent: usage["percent"].as_f64(),
+                }),
         }
     }
 }
@@ -567,5 +570,27 @@ mod tests {
         );
         assert_eq!(read(json!({ "id": "i1" })), Some((None, Some("i1".into()))));
         assert_eq!(read(json!({ "activeSessionId": "a1" })), None);
+    }
+}
+
+#[cfg(test)]
+mod zero_window_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn ignores_zero_context_windows_at_the_boundary() {
+        let stats = AgentStats::read(&json!({
+            "contextUsage": { "tokens": 500, "contextWindow": 0 }
+        }));
+        assert!(stats.context.is_none());
+        let model = ModelInfo::from_value(&json!({
+            "provider": "p",
+            "id": "m",
+            "contextWindow": 0
+        }))
+        .unwrap();
+        assert_eq!(model.context_window, None);
     }
 }

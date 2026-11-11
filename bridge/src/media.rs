@@ -72,29 +72,71 @@ pub async fn media_handler(
 
 /// `POST /upload?name=shot.png` with the file as the body, authorized like the WebSocket: a file dropped on the
 /// composer, saved on this machine so the message can point the agent at it. Answers `{"path": ...}`.
+const MAX_UPLOAD_BYTES: usize = 512 << 20;
+
 pub async fn upload_handler(
     Query(query): Query<HashMap<String, String>>,
     headers: HeaderMap,
     State(app): State<Arc<App>>,
-    body: axum::body::Bytes,
+    body: Body,
 ) -> Response {
+    use futures_util::StreamExt;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::AsyncWriteExt;
+
+    // Checked before reading a single byte of the body so unauthenticated callers cannot buffer into memory.
     if !authorized(&app, &query, &headers) {
         return StatusCode::UNAUTHORIZED.into_response();
     }
     let name = upload_name(query.get("name").map(String::as_str).unwrap_or(""));
-    // A folder per upload, so two files dropped with the same name don't overwrite each other. The temp dir is
-    // purged by the system, which is all the cleanup throwaway attachments need.
-    let dir = std::env::temp_dir()
-        .join("shed-uploads")
-        .join(uuid::Uuid::new_v4().to_string());
+    let root = std::env::temp_dir().join("shed-uploads");
+    let dir = root.join(uuid::Uuid::new_v4().to_string());
     let path = dir.join(&name);
-    let written = async {
-        tokio::fs::create_dir_all(&dir).await?;
-        tokio::fs::write(&path, &body).await
-    };
-    match written.await {
+    let written: Result<(), (StatusCode, String)> = async {
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Err(e) = std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)) {
+            eprintln!("upload root permissions: {e}");
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut opts = tokio::fs::OpenOptions::new();
+        opts.write(true).create_new(true).mode(0o600);
+        let mut file = opts
+            .open(&path)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut stream = body.into_data_stream();
+        let mut total = 0usize;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+            total = total.saturating_add(chunk.len());
+            if total > MAX_UPLOAD_BYTES {
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "upload exceeds 512 MiB".into(),
+                ));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        }
+        file.flush()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    }
+    .await;
+    match written {
         Ok(()) => axum::Json(serde_json::json!({ "path": path.to_string_lossy() })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err((code, msg)) => {
+            if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    eprintln!("cleaning failed upload {}: {e}", dir.display());
+                }
+            }
+            (code, msg).into_response()
+        }
     }
 }
 
