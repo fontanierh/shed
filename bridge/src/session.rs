@@ -140,6 +140,8 @@ pub struct SessionState {
     own: BackendState,
     session_file: Option<String>,
     named: bool,
+    /// Its agent is being started: a second start must not begin.
+    starting: bool,
     stopping: bool,
     /// Deleted: late events (a Pi child exiting after the delete) must not publish it again.
     removed: bool,
@@ -278,6 +280,7 @@ impl SessionState {
             own,
             session_file,
             named: false,
+            starting: false,
             stopping: false,
             removed: false,
             refresh_scheduled: false,
@@ -604,7 +607,11 @@ impl App {
         let state = SessionState::new(summary, None, BackendState::pi());
         let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
-        self.start_pi(&session, None, model, thinking).await?;
+        if let Err(e) = self.start_pi(&session, None, model, thinking).await {
+            // Nothing to come back to: it has no transcript, and whoever asked is told why.
+            self.remove(&session.id).await;
+            return Err(e);
+        }
         tokio::spawn(self.clone().save_registry());
         let summary = session.state.lock().await.summary.clone();
         Ok(summary)
@@ -621,13 +628,17 @@ impl App {
             }
         }
         let resume = {
-            let st = session.state.lock().await;
-            if st.child().is_some() {
-                bail!("session is already running");
+            let mut st = session.state.lock().await;
+            // Resuming twice does no harm: a session that runs, or is about to, is the answer.
+            if st.child().is_some() || st.starting {
+                return Ok(st.summary.clone());
             }
-            st.session_file
+            let resume = st
+                .session_file
                 .clone()
-                .ok_or_else(|| anyhow!("session has no saved transcript to resume"))?
+                .ok_or_else(|| anyhow!("session has no saved transcript to resume"))?;
+            st.starting = true;
+            resume
         };
         self.start_pi(session, Some(resume), None, None).await?;
         let summary = session.state.lock().await.summary.clone();
@@ -676,6 +687,7 @@ impl App {
         };
         let (child, rx) = {
             let mut st = session.state.lock().await;
+            st.starting = false;
             match spawned {
                 Ok(pair) => {
                     if let BackendState::Pi { child } = &mut st.own {
@@ -695,17 +707,27 @@ impl App {
                 }
             }
         };
-        tokio::spawn(self.clone().run_pi_events(session.clone(), child, rx));
+        tokio::spawn(
+            self.clone()
+                .run_pi_events(session.clone(), child.clone(), rx),
+        );
         let started = async {
             self.resnapshot(session).await?;
             self.refresh(session).await
         }
         .await;
         if let Err(e) = &started {
-            let mut st = session.state.lock().await;
-            st.summary.status = SessionStatus::Error;
-            st.summary.error = Some(e.to_string());
-            self.publish_summary(&st);
+            // An agent that started and cannot be read is not left running behind a session marked as failed.
+            {
+                let mut st = session.state.lock().await;
+                if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
+                    st.own = BackendState::pi();
+                }
+                st.summary.status = SessionStatus::Error;
+                st.summary.error = Some(e.to_string());
+                self.publish_summary(&st);
+            }
+            child.close().await;
         }
         started
     }
