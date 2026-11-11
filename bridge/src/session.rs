@@ -2,7 +2,7 @@
 //! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
 //! read-only views of what their parent session reports about them.
 
-use crate::ask::{Ask, Delivery};
+use crate::ask::Ask;
 use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -673,7 +673,7 @@ impl App {
         let state = SessionState::new(summary, None, starting);
         let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
-        if let Err(e) = self.start_pi(&session, None, model, thinking).await {
+        if let Err(e) = self.start_process(&session, None, model, thinking).await {
             // Nothing to come back to: it has no transcript, and whoever asked is told why.
             self.remove(&session.id).await;
             return Err(e);
@@ -715,49 +715,26 @@ impl App {
             st.own = BackendState::Started(Process::Starting { closed: false });
             resume
         };
-        self.start_pi(session, Some(resume), None, None).await?;
+        self.start_process(session, Some(resume), None, None)
+            .await?;
         let summary = session.state.lock().await.summary.clone();
         Ok(summary)
     }
 
-    async fn start_pi(
+    async fn start_process(
         self: &Arc<Self>,
         session: &Arc<Session>,
         resume: Option<String>,
         model: Option<String>,
         thinking: Option<String>,
     ) -> Result<()> {
-        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
-        let guide = self.store.dir().join("guide.md");
-        if let Err(e) = std::fs::write(
-            &guide,
-            crate::guide::text(crate::rpc::AgentKind::Pi, &self.store),
-        ) {
-            eprintln!(
-                "can't write the guide for Pi's subagents to {}: {e}",
-                guide.display()
-            );
-        }
-        let env = vec![
-            // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
-            (
-                "AGENT_REMOTE_JOBS_DIR".to_string(),
-                crate::jobs::pi_dir(&session.id)
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            (
-                "AGENT_REMOTE_GUIDE".to_string(),
-                guide.to_string_lossy().into_owned(),
-            ),
-        ];
         let opts = SpawnOptions {
             agent: session.agent,
+            session_id: session.id.clone(),
             cwd: session.cwd.clone(),
             model,
             thinking,
             resume,
-            env,
         };
         let spawned = match self.agents.get(session.agent).sessions() {
             Sessions::Started(agent) => agent.start(&opts),
@@ -864,18 +841,13 @@ impl App {
                 }
                 Ok(())
             }
-            Backend::Prime => {
-                let out = tokio::process::Command::new("prime-agent")
-                    .args(["stop", &session.id])
-                    .output()
-                    .await?;
-                let stderr = String::from_utf8_lossy(&out.stderr);
-                // An empty draft (e.g. right after new_session) has no worker to stop.
-                if !out.status.success() && !stderr.contains("Unknown active session") {
-                    bail!("prime-agent stop failed: {}", stderr.trim());
-                }
-                Ok(())
-            }
+            Backend::Prime => match self.agent(session.agent).sessions() {
+                Sessions::Kept(agent) => agent.stop(&session.id).await,
+                Sessions::Started(_) => bail!(
+                    "{:?} starts its sessions here, yet this one is kept by its agent",
+                    session.agent
+                ),
+            },
             Backend::Subagent => bail!("Subagents end with their tool call"),
         }
     }
@@ -1104,30 +1076,10 @@ impl App {
             "[Shed] Your last reply was stopped automatically: {reason}, a generation loop. Nothing from it was kept. \
              Carry on from where you were; if you were writing a tool call, write it again."
         );
-        let stopped = match session.backend {
-            Backend::Prime => {
-                // Queued as a steer first, so stopping the reply delivers it straight away.
-                let steer = Ask::Prompt {
-                    message: note,
-                    delivery: Delivery::SteerOrQueue,
-                };
-                [
-                    self.command(session, steer).await,
-                    self.command(session, Ask::AbortAndSendQueued).await,
-                ]
-            }
-            Backend::Started | Backend::Subagent => [
-                self.command(session, Ask::Abort).await,
-                self.command(
-                    session,
-                    Ask::Prompt {
-                        message: note,
-                        delivery: Delivery::Turn,
-                    },
-                )
-                .await,
-            ],
-        };
+        let mut stopped = Vec::new();
+        for ask in self.agent(session.agent).verbs().interrupt(note) {
+            stopped.push(self.command(session, ask).await);
+        }
         for error in stopped.into_iter().filter_map(Result::err) {
             eprintln!(
                 "stopping the looping reply of {} failed: {error}",

@@ -62,6 +62,12 @@ impl Starts for Scripted {
 }
 
 impl Keeps for Scripted {
+    /// Counted as a close, and nothing run: no daemon is connected.
+    fn stop(&self, _id: &str) -> BoxFuture<'_, Result<()>> {
+        self.script.closes.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }
+
     fn session(&self, id: &str) -> Arc<dyn Live> {
         let Sessions::Kept(real) = self.real.sessions() else {
             unreachable!("asked only of an agent that keeps its sessions")
@@ -116,6 +122,11 @@ impl Agent for Scripted {
 
     fn spend_includes_subagents(&self) -> bool {
         self.real.spend_includes_subagents()
+    }
+
+    /// The real agent's: what the tests pin is what its commands become.
+    fn verbs(&self) -> &'static dyn crate::agent::Verbs {
+        self.real.verbs()
     }
 }
 

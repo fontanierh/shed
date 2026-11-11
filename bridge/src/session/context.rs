@@ -259,8 +259,8 @@ impl App {
         if !model.reasoning {
             return vec!["off".to_string()];
         }
-        if session.backend == Backend::Started {
-            if let Ok(data) = self.command(session, Ask::ThinkingLevels).await {
+        if let Some(ask) = self.agent(session.agent).verbs().thinking_levels() {
+            if let Ok(data) = self.command(session, ask).await {
                 if let Some(levels) = agent_wire::thinking_levels(&data) {
                     return levels;
                 }

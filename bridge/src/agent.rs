@@ -1,5 +1,6 @@
-//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it and giving it
-//! its place in `Agents`; `docs/architecture.md` says what else a new agent needs.
+//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it (with its
+//! `Verbs`, and `Starts` or `Keeps`) and giving it its place in `Agents`; `docs/architecture.md` says what else a
+//! new agent needs.
 
 use std::sync::Arc;
 
@@ -9,7 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::agent_wire::PrimeRow;
-use crate::ask::Ask;
+use crate::ask::{Ask, Delivery};
 use crate::prime::PrimeDaemon;
 use crate::rpc::{AgentKind, ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
 use crate::store::Store;
@@ -32,6 +33,150 @@ pub trait Agent: Send + Sync {
 
     /// Whether what Open Codex counts for a session already holds what its subagents spent.
     fn spend_includes_subagents(&self) -> bool;
+
+    /// What the commands an app gives one of its sessions become, in this agent's words.
+    fn verbs(&self) -> &'static dyn Verbs;
+}
+
+/// What a session's commands become in one agent's words. None has a default: an agent says each, or names an
+/// agent it speaks as (Pi's RPC, which DeepSeek Harness speaks through Shed's plugin too).
+pub trait Verbs: Send + Sync {
+    /// A message from the person, `busy` when the session is working.
+    fn message(&self, text: String, busy: bool) -> Ask;
+
+    /// Compacting the conversation, with what to keep if the person said.
+    fn compact(&self, instructions: Option<String>) -> Ask;
+
+    /// Clearing the session's goal, for an agent whose sessions have one.
+    fn clear_goal(&self) -> Option<Ask>;
+
+    /// Stopping the tool call that is running.
+    fn stop_tool(&self) -> Ask;
+
+    /// Stopping a reply that loops and telling the agent why, in the order to ask them.
+    fn interrupt(&self, note: String) -> [Ask; 2];
+
+    /// Restarting the session's Python kernel, for an agent whose sessions have one: given the session's file.
+    fn restart_kernel(
+        &self,
+        session_file: Option<String>,
+    ) -> Option<BoxFuture<'static, Result<Value>>>;
+
+    /// Asking which thinking levels the session's model takes, for an agent that answers it. Otherwise they are read
+    /// from the model list, where a level the model lacks is null.
+    fn thinking_levels(&self) -> Option<Ask>;
+}
+
+/// Pi's RPC protocol, which DeepSeek Harness also speaks through Shed's plugin.
+pub struct PiRpc;
+
+impl Verbs for PiRpc {
+    /// Prompted when idle; steered while it works. A prompt the agent refuses as busy (a turn began meanwhile) is
+    /// steered by the caller.
+    fn message(&self, text: String, busy: bool) -> Ask {
+        match busy {
+            true => Ask::Steer(text),
+            false => Ask::Prompt {
+                message: text,
+                delivery: Delivery::Turn,
+            },
+        }
+    }
+
+    fn compact(&self, instructions: Option<String>) -> Ask {
+        Ask::Compact { instructions }
+    }
+
+    fn clear_goal(&self) -> Option<Ask> {
+        None
+    }
+
+    fn stop_tool(&self) -> Ask {
+        Ask::Abort
+    }
+
+    fn interrupt(&self, note: String) -> [Ask; 2] {
+        [
+            Ask::Abort,
+            Ask::Prompt {
+                message: note,
+                delivery: Delivery::Turn,
+            },
+        ]
+    }
+
+    fn restart_kernel(&self, _: Option<String>) -> Option<BoxFuture<'static, Result<Value>>> {
+        None
+    }
+
+    fn thinking_levels(&self) -> Option<Ask> {
+        Some(Ask::ThinkingLevels)
+    }
+}
+
+/// Prime Agent's commands, as its daemon takes them.
+pub struct PrimeVerbs;
+
+impl Verbs for PrimeVerbs {
+    /// Prime steers or queues it itself, whatever the session is doing.
+    fn message(&self, text: String, _busy: bool) -> Ask {
+        Ask::Prompt {
+            message: text,
+            delivery: Delivery::SteerOrQueue,
+        }
+    }
+
+    /// Prime's `compact` command aborts the session first, which drops the background-command and subagent notices
+    /// waiting to wake it and holds the rest until the next prompt: an idle session waiting on its jobs never wakes.
+    /// Its `/compact` slash command compacts without aborting, after the current turn if one is running.
+    fn compact(&self, instructions: Option<String>) -> Ask {
+        let message = match instructions {
+            Some(text) => format!("/compact {text}"),
+            None => "/compact".to_string(),
+        };
+        Ask::Prompt {
+            message,
+            delivery: Delivery::FollowUp,
+        }
+    }
+
+    /// `/goal clear`, steered in so a running turn picks it up at its next step instead of after the turn.
+    fn clear_goal(&self) -> Option<Ask> {
+        Some(Ask::Prompt {
+            message: "/goal clear".into(),
+            delivery: Delivery::Steer,
+        })
+    }
+
+    /// A plain abort leaves Prime holding steered messages until the next prompt; `abort_and_send_queued` delivers
+    /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
+    /// is queued.
+    fn stop_tool(&self) -> Ask {
+        Ask::AbortAndSendQueued
+    }
+
+    /// The note queued as a steer first, so stopping the reply delivers it straight away.
+    fn interrupt(&self, note: String) -> [Ask; 2] {
+        [
+            Ask::Prompt {
+                message: note,
+                delivery: Delivery::SteerOrQueue,
+            },
+            Ask::AbortAndSendQueued,
+        ]
+    }
+
+    fn restart_kernel(
+        &self,
+        session_file: Option<String>,
+    ) -> Option<BoxFuture<'static, Result<Value>>> {
+        Some(Box::pin(crate::prime::restart_kernel(session_file)))
+    }
+
+    /// Prime has no levels command.
+    fn thinking_levels(&self) -> Option<Ask> {
+        None
+    }
 }
 
 /// How an agent's sessions come about.
@@ -53,6 +198,9 @@ pub trait Starts {
 pub trait Keeps {
     /// The session it keeps under `id`.
     fn session(&self, id: &str) -> Arc<dyn Live>;
+
+    /// Stop the session it keeps under `id`.
+    fn stop(&self, id: &str) -> BoxFuture<'_, Result<()>>;
 
     /// Make one there, and say how its roster will list it.
     fn create(
@@ -154,10 +302,32 @@ impl Starts for Pi {
         if let Some(resume) = &opts.resume {
             args.extend(["--session".into(), resume.clone()]);
         }
+        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
+        let guide = self.0.dir().join("guide.md");
+        if let Err(e) = std::fs::write(&guide, crate::guide::text(AgentKind::Pi, &self.0)) {
+            eprintln!(
+                "can't write the guide for Pi's subagents to {}: {e}",
+                guide.display()
+            );
+        }
+        let env = vec![
+            // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
+            (
+                "AGENT_REMOTE_JOBS_DIR".to_string(),
+                crate::jobs::pi_dir(&opts.session_id)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            // Read by Pi's subagent extension.
+            (
+                "AGENT_REMOTE_GUIDE".to_string(),
+                guide.to_string_lossy().into_owned(),
+            ),
+        ];
         let launch = Launch {
             program: "pi".into(),
             args,
-            env: Vec::new(),
+            env,
             protocol: Protocol::Pi,
         };
         let (child, output) = RpcChild::spawn(launch, opts)?;
@@ -189,6 +359,10 @@ impl Agent for Pi {
 
     fn spend_includes_subagents(&self) -> bool {
         false
+    }
+
+    fn verbs(&self) -> &'static dyn Verbs {
+        &PiRpc
     }
 }
 
@@ -237,6 +411,10 @@ impl Agent for Deepseek {
     fn spend_includes_subagents(&self) -> bool {
         false
     }
+
+    fn verbs(&self) -> &'static dyn Verbs {
+        &PiRpc
+    }
 }
 
 /// Prime Agent, whose sessions live in its daemon: the daemon announces them, and the bridge attaches.
@@ -253,6 +431,22 @@ impl Keeps for Prime {
             self.0
                 .create(&cwd, model.as_deref(), thinking.as_deref())
                 .await
+        })
+    }
+
+    fn stop(&self, id: &str) -> BoxFuture<'_, Result<()>> {
+        let id = id.to_string();
+        Box::pin(async move {
+            let out = tokio::process::Command::new("prime-agent")
+                .args(["stop", &id])
+                .output()
+                .await?;
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // An empty draft (e.g. right after new_session) has no worker to stop.
+            if !out.status.success() && !stderr.contains("Unknown active session") {
+                anyhow::bail!("prime-agent stop failed: {}", stderr.trim());
+            }
+            Ok(())
         })
     }
 
@@ -284,6 +478,10 @@ impl Agent for Prime {
     /// Prime counts what its subagents spend into their parent.
     fn spend_includes_subagents(&self) -> bool {
         true
+    }
+
+    fn verbs(&self) -> &'static dyn Verbs {
+        &PrimeVerbs
     }
 }
 
