@@ -26,7 +26,7 @@ The server speaks first:
 
 Responses: `{"id":"<id>","type":"response","command":"<type>","success":true,"data":…}` or `success:false, error`.
 
-Session commands are Prime's RPC commands with an `activeSessionId` added. The bridge sends `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_model`, `set_thinking_level`, `set_auto_compaction`, `set_session_name`, `prompt`, `abort`, `compact`, `new_session`, `attach` and `detach`. `steer` and `clear_queue` were verified too and aren't used. The daemon doesn't know `get_available_thinking_levels`; the levels come from `thinkingLevelMap` in `get_available_models` instead. Stats, state and prompt work without attaching.
+Session commands are Prime's RPC commands with an `activeSessionId` added. The bridge sends `get_state`, `get_session_stats`, `get_messages`, `get_available_models`, `set_model`, `set_thinking_level`, `set_auto_compaction`, `set_session_name`, `prompt`, `abort`, `abort_and_send_queued`, `follow_up`, `new_session`, `attach` and `detach`, and the kernel and shell commands below. It compacts with a `/compact` prompt, not `compact`, which aborts the session first. `follow_up` (the apps' Queue button) has not been checked against the daemon. `steer` and `clear_queue` were verified too and aren't used. The daemon doesn't know `get_available_thinking_levels`; the levels come from `thinkingLevelMap` in `get_available_models` instead. Stats, state and prompt work without attaching.
 
 Supervisor commands:
 

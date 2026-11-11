@@ -1796,6 +1796,35 @@ async fn a_closed_session_keeps_nothing_of_its_agent_at_work() {
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 
+/// The background commands an agent reports itself end with it: a stopped DeepSeek session is not left at work.
+#[tokio::test]
+async fn a_closed_session_keeps_no_background_commands_its_agent_reported() {
+    let rig = Rig::new("close-jobs", &[]);
+    let summary = new_summary(
+        "d1",
+        AgentKind::Deepseek,
+        SessionKind::Root,
+        "/work/project",
+    );
+    let state = SessionState::new(summary, None, own(&rig, "d1", Backend::Started, true));
+    let dsh = rig
+        .app
+        .insert_once(Arc::new(Session::new(
+            "d1".into(),
+            AgentKind::Deepseek,
+            "/work/project".into(),
+            state,
+        )))
+        .await;
+    rig.app
+        .handle_event(&dsh, &json!({ "type": "dsh_jobs", "running": 1 }))
+        .await;
+    assert_eq!(dsh.state.lock().await.summary.background_jobs, 1);
+    rig.app.close_session(&dsh).await.unwrap();
+    assert_eq!(dsh.state.lock().await.summary.background_jobs, 0);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
 /// A saved session of an agent that keeps its own is not one the bridge can start: taking it in would show a
 /// session whose every command goes to whatever that agent has under the same id.
 #[tokio::test]

@@ -44,7 +44,7 @@ A client can hold several **computers** at once, each a bridge URL and token. `S
 | Stop | `abort` | `abort` |
 | Reasoning, tool calls | RPC events, normalized | daemon `session_event`s (same shapes; no `contentIndex` on deltas) |
 | Context window, cost | `get_session_stats` | roster usage + `get_session_stats` |
-| Compaction | `compact`, `set_auto_compaction` | same |
+| Compaction | `compact`, `set_auto_compaction` | a `/compact` prompt queued as a follow-up, since Prime's `compact` aborts the session first; `set_auto_compaction` |
 | Model, effort | `set_model`, `get_available_thinking_levels`, `set_thinking_level` | same, levels from `thinkingLevelMap`; `set_thinking_level` also changes Prime's saved default |
 | New session | `new_session` | same (`activeSessionId` stays) |
 | Resume | `--session <file>` | sessions live in the daemon |
@@ -94,7 +94,7 @@ The bridge, in `bridge/src`:
 | `files.rs`, `git.rs`, `github.rs`, `media.rs` | What the apps ask about the machine: folders to pick from, a folder's branch, the user's GitHub, and the files an agent shows. |
 | `channel.rs` | `offer`: a send that may find nobody listening. |
 | `host.rs` | The home folder and the clock, asked in one place. |
-| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. Some are still written elsewhere, among them the agents' guide and the log of loops (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`), and the web log and the Python module (`web.rs`). |
+| `store.rs` | `config.json`, read into one typed `Config` for every reader, and most of the bridge's own files under `~/.agent-remote`: the sessions, the chosen context windows, the published sites, the Prime sessions it has listed. Some are still written elsewhere, among them the guide file Pi's subagents read (`agent.rs`, in Pi's `start`), the log of loops (`session.rs`), Open Codex's catalog for dsh (`opencodex.rs`), the marks on lost Pi jobs (`jobs.rs`), and the web log and the Python module (`web.rs`). |
 
 The rules the bridge keeps to:
 
@@ -143,7 +143,7 @@ The `agent-remote guide <agent>` command and the cards in the new-session sheet 
 - *Events and wire names.* `agent_wire.rs` reads Pi's vocabulary, and jobs, questions and subagents from events named `dsh_…`. `Ask::wire` gives each question one name: Pi's, the DeepSeek plugin's or Prime's (`ask.rs`). An agent with a third vocabulary for the same question needs `wire` to take the driver. Answering a question sends `dsh_answer` whatever the agent.
 - *Subagents.* `session/subagents.rs` labels the child sessions it makes as Pi's or DeepSeek's.
 - *Models.* `rpc::listed_models` parses the table Pi and Prime print. With Open Codex, the catalogue is written to a hand-kept list of folders in `opencodex.rs`.
-- *Time limits.* Only `compact` gets the long limit (`Ask::limit` in `ask.rs`).
+- *Time limits.* Each driver decides its own. Pi's honours `Ask::limit` (`ask.rs`), where only `compact` gets the long limit. DeepSeek's gives the long one to its slash commands by method name (`dsh.rs`). Prime's daemon gives every command the short one, 2 minutes (`prime.rs`).
 - *Tests.* The scripted agent stands in for every kind, but `protocol/server_messages.json` lists the agents and fails both sides' tests until it is written again with `UPDATE_FIXTURES=1`. The commands pin runs every command against every agent there is (`session/tests.rs`), so a new agent fails it until the pin is written again with it.
 - *The apps' features.* These compare with one agent and need a look each: `hasBackgroundCommands` and `controlsAutoCompaction` in `Protocol.swift`; the default models and the split of models by name in `Views/NewSessionSheet.swift`; goals and the kernel restart in `Views/SessionHeader.swift`, `Views/PhoneSessionToolbar.swift` and `Views/SessionView.swift`; the empty list in `Views/BackgroundCommands.swift`. (The cost on the lock screen goes through `spendIncludesSubagents`, which the compiler asks for.)
 - *Setup.* Its install step in `setup/`.
