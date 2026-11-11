@@ -34,5 +34,6 @@
   { "id": "c33", "op": "list_dir", "hidden": false },
   { "id": "c34", "op": "list_dir", "path": "/work", "hidden": true },
   { "id": "c35", "op": "git_branch", "path": "/work/project" },
-  { "id": "c36", "op": "github_overview" }
+  { "id": "c36", "op": "github_overview" },
+  { "id": "c37", "op": "send", "sessionId": "s1", "text": "Run the tests", "sendId": "m1" }
 ]

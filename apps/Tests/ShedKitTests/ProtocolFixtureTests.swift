@@ -35,7 +35,9 @@ final class ProtocolFixtureTests: XCTestCase {
             if type == "reply" { continue }
             let message = try JSONDecoder().decode(ServerMessage.self, from: JSONSerialization.data(withJSONObject: sent))
             switch message {
-            case .sessions(let sessions): try assertRead(sessions, holds: sent["sessions"], type)
+            case .sessions(let sessions, let bridge):
+                try assertRead(sessions, holds: sent["sessions"], type)
+                XCTAssertEqual(bridge, sent["bridge"] as? Int)
             case .session(let session): try assertRead(session, holds: sent["session"], type)
             case .sessionRemoved(let sessionId): XCTAssertEqual(sessionId, sent["sessionId"] as? String)
             case .snapshot(let sessionId, let items, let earlier):

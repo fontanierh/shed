@@ -9,7 +9,8 @@ enum ClientOp: Sendable {
     case attach(sessionId: String)
     case detach(sessionId: String)
     /// Prompt when idle; the bridge turns it into a steer while the agent is working.
-    case send(sessionId: String, text: String)
+    /// `sendId` names the message, so a bridge that takes each id once can be sent it again after a lost reply.
+    case send(sessionId: String, text: String, sendId: String? = nil)
     case followUp(sessionId: String, text: String)
     case abort(sessionId: String)
     /// Stops a stuck tool call and delivers what was queued behind it.
@@ -108,7 +109,8 @@ enum ClientOp: Sendable {
             (.createSession, ["agent": agent.rawValue, "cwd": cwd, "model": model, "thinking": thinking].compactMapValues { $0 })
         case .attach(let sessionId): (.attach, ["sessionId": sessionId])
         case .detach(let sessionId): (.detach, ["sessionId": sessionId])
-        case .send(let sessionId, let text): (.send, ["sessionId": sessionId, "text": text])
+        case .send(let sessionId, let text, let sendId):
+            (.send, ["sessionId": sessionId, "text": text, "sendId": sendId].compactMapValues { $0 })
         case .followUp(let sessionId, let text): (.followUp, ["sessionId": sessionId, "text": text])
         case .abort(let sessionId): (.abort, ["sessionId": sessionId])
         case .stopTool(let sessionId): (.stopTool, ["sessionId": sessionId])

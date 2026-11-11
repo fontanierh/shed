@@ -149,4 +149,52 @@ final class CutOffRequestTests: XCTestCase {
         await store.loadEarlier()
         XCTAssertEqual(store.items.map(\.id), ["a", "b"])
     }
+
+    /// A store with the session "s" of computer "one" open, whose bridge says it understands `level`.
+    @MainActor private func open(_ bridge: ScriptedBridge, level: Int) -> SessionStore {
+        let store = store(bridge)
+        store.apply(.sessions([summary("s")], bridge: level), from: "one")
+        store.select("one:s")
+        return store
+    }
+
+    @MainActor private func sendIds(_ bridge: ScriptedBridge) -> [String?] {
+        bridge.messages.filter { $0["op"] as? String == "send" }.map { $0["sendId"] as? String }
+    }
+
+    @MainActor func testAMessageCutOffGoesAgainAtOnceUnderItsIdToABridgeThatTakesIds() async {
+        let bridge = ScriptedBridge([.send: [.lost(maybeDelivered: true)]])
+        let store = open(bridge, level: 2)
+        let start = ContinuousClock.now
+        store.send("Carry on")
+        let again = await eventually { bridge.count(.send) == 2 }
+        XCTAssertTrue(again)
+        // No two-second look at the transcript: the bridge tells a repeat by its id.
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(1))
+        let ids = sendIds(bridge)
+        XCTAssertNotNil(ids[0])
+        XCTAssertEqual(ids[0], ids[1])
+    }
+
+    @MainActor func testAMessageCutOffWaitsForTheTranscriptOnAnOlderBridge() async {
+        let bridge = ScriptedBridge([.send: [.lost(maybeDelivered: true)]])
+        let store = open(bridge, level: 1)
+        let start = ContinuousClock.now
+        store.send("Carry on")
+        var again = false
+        for _ in 0..<3 where !again { again = await eventually { bridge.count(.send) == 2 } }
+        XCTAssertTrue(again)
+        XCTAssertGreaterThan(ContinuousClock.now - start, .milliseconds(1900))
+    }
+
+    @MainActor func testTwoMessagesWithTheSameWordsHaveTheirOwnIds() async {
+        let bridge = ScriptedBridge()
+        let store = open(bridge, level: 2)
+        store.send("continue")
+        store.send("continue")
+        let both = await eventually { bridge.count(.send) == 2 }
+        XCTAssertTrue(both)
+        let ids = sendIds(bridge)
+        XCTAssertNotEqual(ids[0], ids[1])
+    }
 }

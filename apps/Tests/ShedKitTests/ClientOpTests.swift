@@ -13,6 +13,7 @@ final class ClientOpTests: XCTestCase {
         .attach(sessionId: "s1"),
         .detach(sessionId: "s1"),
         .send(sessionId: "s1", text: "Run the tests"),
+        .send(sessionId: "s1", text: "Run the tests", sendId: "m1"),
         .followUp(sessionId: "s1", text: "Then open a pull request"),
         .abort(sessionId: "s1"),
         .stopTool(sessionId: "s1"),
