@@ -138,6 +138,69 @@ final class CutOffRequestTests: XCTestCase {
         XCTAssertNil(store.errorMessage)
     }
 
+    private let notDone = "That computer could not be reached, so this was not done."
+    private let maybeDone = "The connection to that computer dropped, so this may not have been done. Check before trying again."
+
+    /// The user asked for it and it did not happen: the connection state alone does not say so.
+    @MainActor func testAnOperationThatMayBeRepeatedIsReportedWhenTheComputerIsNotReached() async {
+        let bridge = ScriptedBridge([.abort: [.lost(maybeDelivered: false)]])
+        let store = store(bridge)
+        store.select("one:s")
+        store.connections["one"] = .disconnected(nil)
+        store.reconnectWait = .milliseconds(20)
+        store.abort()
+        let reported = await eventually { store.errorMessage != nil }
+        XCTAssertTrue(reported)
+        XCTAssertEqual(store.errorMessage, notDone)
+        XCTAssertEqual(bridge.count(.abort), 1)
+    }
+
+    @MainActor func testAnOperationThatMayBeRepeatedCutOffTwiceIsReportedAsMaybeDone() async {
+        let bridge = ScriptedBridge([.abort: [.lost(maybeDelivered: false), .lost(maybeDelivered: true)]])
+        let store = store(bridge)
+        store.select("one:s")
+        store.abort()
+        let reported = await eventually { store.errorMessage != nil }
+        XCTAssertTrue(reported)
+        XCTAssertEqual(store.errorMessage, maybeDone)
+        XCTAssertEqual(bridge.count(.abort), 2)
+    }
+
+    /// The connection state says the computer is out of reach, and the session is attached again on reconnecting.
+    @MainActor func testOpeningASessionOfAComputerOutOfReachRaisesNoError() async {
+        let bridge = ScriptedBridge([.attach: [.lost(maybeDelivered: false), .lost(maybeDelivered: false)]])
+        let store = store(bridge, connected: false)
+        store.reconnectWait = .milliseconds(20)
+        await store.attach("one:s")
+        XCTAssertEqual(bridge.sent, [.attach])
+        XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor func testAMessageCutOffTwiceComesBackAsADraftAndIsReported() async {
+        let bridge = ScriptedBridge([.send: [.lost(maybeDelivered: true), .lost(maybeDelivered: true)]])
+        let store = open(bridge, level: 2)
+        store.send("Carry on")
+        let reported = await eventually { store.errorMessage != nil }
+        XCTAssertTrue(reported)
+        XCTAssertEqual(store.errorMessage, maybeDone)
+        XCTAssertEqual(bridge.count(.send), 2)
+        XCTAssertEqual(store.drafts["one:s"], "Carry on")
+        XCTAssertEqual(store.transcript, [])
+    }
+
+    @MainActor func testAMessageToAComputerThatIsNotReachedComesBackAsADraftAndIsReported() async {
+        let bridge = ScriptedBridge([.send: [.lost(maybeDelivered: false)]])
+        let store = open(bridge, level: 2)
+        store.connections["one"] = .disconnected(nil)
+        store.reconnectWait = .milliseconds(20)
+        store.send("Carry on")
+        let reported = await eventually { store.errorMessage != nil }
+        XCTAssertTrue(reported)
+        XCTAssertEqual(store.errorMessage, notDone)
+        XCTAssertEqual(bridge.count(.send), 1)
+        XCTAssertEqual(store.drafts["one:s"], "Carry on")
+    }
+
     /// Whoever asked shows what it had or asks again; nothing was changed that needs saying.
     @MainActor func testAReadCutOffIsNeitherSentAgainNorReported() async {
         for maybeDelivered in [true, false] {

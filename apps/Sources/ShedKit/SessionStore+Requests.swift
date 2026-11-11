@@ -9,6 +9,12 @@ struct Unconfirmed: LocalizedError {
     }
 }
 
+/// An operation that changes something never left for its computer, whose connection did not come back in time.
+/// It is shown too: the connection state says the computer is out of reach, not that what was asked was given up.
+struct Unreached: LocalizedError {
+    var errorDescription: String? { "That computer could not be reached, so this was not done." }
+}
+
 extension SessionStore {
     func report(_ error: Error) {
         // A dropped connection shows as the connection state, and the client is already reconnecting.
@@ -16,12 +22,17 @@ extension SessionStore {
         errorMessage = error.localizedDescription
     }
 
+    /// What to tell the user of an operation that changes something and was given up after a dropped connection.
+    private static func givenUp(mayHaveArrived: Bool) -> Error {
+        mayHaveArrived ? Unconfirmed() : Unreached()
+    }
+
     /// Asks a computer's bridge for `op`. Every request goes this way but two: a message, which goes through
     /// `deliver` and is sent again under its id, and the `detach` of a session being left, which sent late could
     /// detach a session opened again since. Cut off by a dropped connection, an operation that changes something is sent
     /// again once the connection is back, when it can't have arrived or when doing it twice is harmless. If it
-    /// can't be, or is cut off again, it throws `Unconfirmed` unless the operation is one to repeat. A read is never
-    /// sent again: whoever asked gets the `ConnectionLost`.
+    /// can't be, or is cut off again, it throws what to show: `Unconfirmed` when a copy may have arrived, `Unreached`
+    /// when none can have. A read is never sent again: whoever asked gets the `ConnectionLost`.
     @discardableResult
     func call(_ env: String, _ op: ClientOp) async throws -> Data {
         do {
@@ -30,8 +41,8 @@ extension SessionStore {
             do {
                 guard !lost.maybeDelivered || op.repeatable, await reconnected(env) else { throw lost }
                 return try await client(env).call(op)
-            } catch is ConnectionLost where !op.repeatable {
-                throw Unconfirmed()
+            } catch let again as ConnectionLost {
+                throw Self.givenUp(mayHaveArrived: lost.maybeDelivered || again.maybeDelivered)
             }
         }
     }
@@ -84,6 +95,9 @@ extension SessionStore {
             if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
             return
         }
+        // A computer out of reach shows as the connection state, and the open session is attached again when its
+        // connection is back: nothing the user asked for was given up.
+        if error is Unreached || error is Unconfirmed { return }
         report(error)
     }
 
@@ -98,8 +112,6 @@ extension SessionStore {
         if let firstMessage, !firstMessage.isEmpty {
             do {
                 try await deliver(.send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString), to: env)
-            } catch is ConnectionLost {
-                report(Unconfirmed())
             } catch {
                 report(error)
             }
@@ -109,17 +121,21 @@ extension SessionStore {
     /// Sends a message, the composer's or the first of a new session. Cut off by a dropped connection, it goes again
     /// once the connection is back. A bridge that takes a message once per id is simply sent it again. An older one
     /// would run it twice if it had arrived, so there `landed` says whether it did, and with nothing to tell by the
-    /// message is not sent again.
+    /// message is not sent again. A message given up throws what to show, as `call` does.
     private func deliver(_ message: ClientOp, to env: String, landed: (() async -> Bool)? = nil) async throws {
         do {
             try await client(env).call(message)
         } catch let lost as ConnectionLost {
-            guard await reconnected(env) else { throw lost }
-            if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
-                guard let landed else { throw lost }
-                if await landed() { return }
+            do {
+                guard await reconnected(env) else { throw lost }
+                if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
+                    guard let landed else { throw lost }
+                    if await landed() { return }
+                }
+                try await client(env).call(message)
+            } catch let again as ConnectionLost {
+                throw Self.givenUp(mayHaveArrived: lost.maybeDelivered || again.maybeDelivered)
             }
-            try await client(env).call(message)
         }
     }
 
