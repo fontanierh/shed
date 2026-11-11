@@ -1,4 +1,4 @@
-High-fidelity macOS app UI design: the HOME page of "Shed", a native app for driving AI coding agents running on your own Macs. Full window with traffic lights. Left sidebar (solid near-black) with "Shed" hut logo, "New session" button, sections "This Mac" and "Jim's Mac" with 4 session rows with status dots.
+High-fidelity macOS app UI design: the HOME page of "Shed", a native app for driving AI coding agents running on your own Macs. Full window with traffic lights. Left sidebar (solid near-black) with "Shed" hut logo, "New session" button, sections "This Mac" and "Studio Mac" with 4 session rows with status dots.
 Main area over the full-strength dithered beam: the Shed wordmark with hut logo; a large glass composer "Ask an agent to build, fix or explore in a folder" with chips "~/src/shed", "Pi", "GPT-5.5 · OpenAI", "High", mic, white send button.
 A grid of glass cards below, data read from the local git CLI:
 - "Commits" heatmap: 26 weeks × 7 days of blue squares (brighter = more commits), caption "412 commits · +48,210 −9,804 lines · last 6 months".
