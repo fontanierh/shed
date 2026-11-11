@@ -2,6 +2,7 @@
 //! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
 //! read-only views of what their parent session reports about them.
 
+use crate::ask::{Ask, Delivery};
 use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -614,7 +615,7 @@ impl App {
 
     /// Run an agent command against a session: by the process the bridge runs for it, or else by the agent itself
     /// when it keeps its own sessions.
-    pub async fn command(&self, session: &Session, kind: &str, fields: Value) -> Result<Value> {
+    pub async fn command(&self, session: &Session, ask: Ask) -> Result<Value> {
         if session.backend == Backend::PiSubagent {
             bail!("Pi subagents are read-only; steer the parent session instead")
         }
@@ -624,7 +625,7 @@ impl App {
             None => self.agents.get(session.agent).session(&session.id),
         };
         let live = live.ok_or_else(|| anyhow!("session is not running"))?;
-        live.send(kind, fields).await
+        live.send(ask).await
     }
 
     // ---- creating and stopping ----
@@ -1070,18 +1071,25 @@ impl App {
         let stopped = match session.backend {
             Backend::Prime => {
                 // Queued as a steer first, so stopping the reply delivers it straight away.
-                let steer =
-                    json!({ "message": note, "streamingBehavior": "steer", "queueIfBusy": true });
+                let steer = Ask::Prompt {
+                    message: note,
+                    delivery: Delivery::SteerOrQueue,
+                };
                 [
-                    self.command(session, "prompt", steer).await,
-                    self.command(session, "abort_and_send_queued", json!({}))
-                        .await,
+                    self.command(session, steer).await,
+                    self.command(session, Ask::AbortAndSendQueued).await,
                 ]
             }
             Backend::Pi | Backend::PiSubagent => [
-                self.command(session, "abort", json!({})).await,
-                self.command(session, "prompt", json!({ "message": note }))
-                    .await,
+                self.command(session, Ask::Abort).await,
+                self.command(
+                    session,
+                    Ask::Prompt {
+                        message: note,
+                        delivery: Delivery::Turn,
+                    },
+                )
+                .await,
             ],
         };
         for error in stopped.into_iter().filter_map(Result::err) {
@@ -1105,7 +1113,7 @@ impl App {
         if detached {
             return Ok(());
         }
-        let data = self.command(session, "get_messages", json!({})).await?;
+        let data = self.command(session, Ask::Messages).await?;
         let messages = agent_wire::messages(&data);
         self.load_history(session, &messages).await;
         {

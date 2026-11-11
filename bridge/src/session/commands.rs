@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
 use super::{default_title, App, Backend, Session};
+use crate::ask::{Ask, Delivery};
 use crate::protocol::SessionStatus;
 
 impl App {
@@ -22,7 +23,7 @@ impl App {
         }
         let stopped = session.state.lock().await.stopped();
         if !stopped {
-            self.command(session, "set_session_name", json!({ "name": name }))
+            self.command(session, Ask::SetName(name.to_string()))
                 .await?;
             self.refresh(session).await?;
         }
@@ -59,9 +60,11 @@ impl App {
         }
         let result = match session.backend {
             Backend::Prime => {
-                let fields =
-                    json!({ "message": text, "streamingBehavior": "steer", "queueIfBusy": true });
-                self.command(session, "prompt", fields).await
+                let prompt = Ask::Prompt {
+                    message: text,
+                    delivery: Delivery::SteerOrQueue,
+                };
+                self.command(session, prompt).await
             }
             Backend::Pi | Backend::PiSubagent => {
                 let busy = matches!(
@@ -69,16 +72,15 @@ impl App {
                     SessionStatus::Running | SessionStatus::Compacting
                 );
                 if busy {
-                    self.command(session, "steer", json!({ "message": text }))
-                        .await
+                    self.command(session, Ask::Steer(text)).await
                 } else {
-                    match self
-                        .command(session, "prompt", json!({ "message": text }))
-                        .await
-                    {
+                    let prompt = Ask::Prompt {
+                        message: text.clone(),
+                        delivery: Delivery::Turn,
+                    };
+                    match self.command(session, prompt).await {
                         Err(e) if e.to_string().to_lowercase().contains("stream") => {
-                            self.command(session, "steer", json!({ "message": text }))
-                                .await
+                            self.command(session, Ask::Steer(text)).await
                         }
                         other => other,
                     }
@@ -108,15 +110,14 @@ impl App {
                     Some(text) => format!("/compact {text}"),
                     None => "/compact".to_string(),
                 };
-                let fields = json!({ "message": message, "streamingBehavior": "followUp" });
-                self.command(session, "prompt", fields).await
+                let prompt = Ask::Prompt {
+                    message,
+                    delivery: Delivery::FollowUp,
+                };
+                self.command(session, prompt).await
             }
             Backend::Pi | Backend::PiSubagent => {
-                let fields = match instructions {
-                    Some(text) => json!({ "customInstructions": text }),
-                    None => json!({}),
-                };
-                self.command(session, "compact", fields).await
+                self.command(session, Ask::Compact { instructions }).await
             }
         }
     }
@@ -125,8 +126,11 @@ impl App {
     pub async fn clear_goal(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
         match session.backend {
             Backend::Prime => {
-                let fields = json!({ "message": "/goal clear", "streamingBehavior": "steer" });
-                self.command(session, "prompt", fields).await
+                let prompt = Ask::Prompt {
+                    message: "/goal clear".into(),
+                    delivery: Delivery::Steer,
+                };
+                self.command(session, prompt).await
             }
             Backend::Pi | Backend::PiSubagent => bail!("Only Prime sessions have goals"),
         }
@@ -215,15 +219,15 @@ impl App {
     /// them at once, so the agent hears about the stop and carries on. Prime falls back to a plain abort when nothing
     /// is queued.
     pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let command = match session.backend {
-            Backend::Prime => "abort_and_send_queued",
-            Backend::Pi | Backend::PiSubagent => "abort",
+        let stop = match session.backend {
+            Backend::Prime => Ask::AbortAndSendQueued,
+            Backend::Pi | Backend::PiSubagent => Ask::Abort,
         };
-        self.command(session, command, json!({})).await
+        self.command(session, stop).await
     }
 
     pub async fn new_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let result = self.command(session, "new_session", json!({})).await?;
+        let result = self.command(session, Ask::NewSession).await?;
         {
             let mut st = session.state.lock().await;
             st.named = false;

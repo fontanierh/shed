@@ -3,6 +3,7 @@
 //! files saved with a file in `pins/`. `UPDATE_FIXTURES=1 cargo test` rewrites the files: read the diff before
 //! committing it, since it is the change in behaviour.
 
+use crate::ask::Ask;
 use crate::host::now_ms;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -113,9 +114,11 @@ impl Scripted {
 }
 
 impl Live for ScriptedSession {
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
-        let kind = kind.to_string();
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
+            // Recorded and answered as it goes to the agent.
+            let (kind, fields) = ask.wire();
+            let kind = kind.to_string();
             self.script
                 .asked
                 .lock()
@@ -132,7 +135,7 @@ impl Live for ScriptedSession {
             let scripted = self.script.answers.lock().unwrap().get(&kind).cloned();
             match (scripted, &self.rest) {
                 (Some(answer), _) => Ok(answer),
-                (None, Some(rest)) => rest.send(&kind, fields).await,
+                (None, Some(rest)) => rest.send(ask).await,
                 (None, None) => Err(anyhow!("{}", self.absent)),
             }
         })

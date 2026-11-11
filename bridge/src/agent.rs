@@ -9,6 +9,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::agent_wire::PrimeRow;
+use crate::ask::Ask;
 use crate::prime::PrimeDaemon;
 use crate::rpc::{AgentKind, ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
 use crate::store::Store;
@@ -56,8 +57,8 @@ pub type Started = (Arc<dyn Live>, mpsc::UnboundedReceiver<ChildOutput>);
 
 /// A session's agent while it runs.
 pub trait Live: Send + Sync {
-    /// Ask it one command, in Pi's vocabulary, and wait for the answer.
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>>;
+    /// Ask it one thing and wait for the answer.
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>>;
 
     /// Its process here, when it has one.
     fn pid(&self) -> Option<u32> {
@@ -241,9 +242,11 @@ struct PrimeSession {
 }
 
 impl Live for PrimeSession {
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
-        let kind = kind.to_string();
-        Box::pin(async move { self.daemon.session(&self.id, &kind, fields).await })
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let (kind, fields) = ask.wire();
+            self.daemon.session(&self.id, kind, fields).await
+        })
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
@@ -252,9 +255,11 @@ impl Live for PrimeSession {
 }
 
 impl Live for RpcChild {
-    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
-        let kind = kind.to_string();
-        Box::pin(async move { RpcChild::send(self, &kind, fields).await })
+    fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async move {
+            let (kind, fields) = ask.wire();
+            RpcChild::send(self, kind, fields, ask.limit()).await
+        })
     }
 
     fn pid(&self) -> Option<u32> {

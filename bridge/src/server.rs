@@ -12,6 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast::error::RecvError, mpsc};
 
+use crate::ask::Ask;
 use crate::channel::Offer;
 use crate::protocol::{ClientMessage, ClientOp, ServerMessage};
 use crate::session::{attach_snapshot, App};
@@ -208,12 +209,11 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
         }
         ClientOp::FollowUp { session_id, text } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "follow_up", json!({ "message": text }))
-                .await?
+            app.command(&session, Ask::FollowUp(text)).await?
         }
         ClientOp::Abort { session_id } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "abort", json!({})).await?
+            app.command(&session, Ask::Abort).await?
         }
         ClientOp::StopTool { session_id } => {
             let session = app.find(&session_id).await?;
@@ -234,9 +234,7 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
         }
         ClientOp::ListModels { session_id } => {
             let session = app.find(&session_id).await?;
-            let data = app
-                .command(&session, "get_available_models", json!({}))
-                .await?;
+            let data = app.command(&session, Ask::Models).await?;
             let mut models = crate::agent_wire::models(&data);
             // With Open Codex, a session switches among its models only, like the new-session list.
             if crate::opencodex::gateway(&app.store).is_some() {
@@ -250,19 +248,14 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             model_id,
         } => {
             let session = app.find(&session_id).await?;
-            app.command(
-                &session,
-                "set_model",
-                json!({ "provider": provider, "modelId": model_id }),
-            )
-            .await?;
+            app.command(&session, Ask::SetModel { provider, model_id })
+                .await?;
             app.refresh(&session).await?;
             Value::Null
         }
         ClientOp::SetThinking { session_id, level } => {
             let session = app.find(&session_id).await?;
-            app.command(&session, "set_thinking_level", json!({ "level": level }))
-                .await?;
+            app.command(&session, Ask::SetThinkingLevel(level)).await?;
             app.refresh(&session).await?;
             Value::Null
         }
@@ -271,12 +264,8 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             enabled,
         } => {
             let session = app.find(&session_id).await?;
-            app.command(
-                &session,
-                "set_auto_compaction",
-                json!({ "enabled": enabled }),
-            )
-            .await?;
+            app.command(&session, Ask::SetAutoCompaction(enabled))
+                .await?;
             app.refresh(&session).await?;
             Value::Null
         }
@@ -336,8 +325,10 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             let session = app.find(&session_id).await?;
             app.command(
                 &session,
-                "dsh_answer",
-                json!({ "questionId": question_id, "answers": answers }),
+                Ask::Answer {
+                    question_id,
+                    answers,
+                },
             )
             .await?;
             Value::Null

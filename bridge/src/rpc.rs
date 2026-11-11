@@ -14,7 +14,7 @@ use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::mpsc;
 
 use crate::channel::Offer;
-use crate::requests::{Requests, Unanswered, QUICK, SLOW};
+use crate::requests::{Requests, Unanswered};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(strum::EnumIter))]
@@ -255,7 +255,13 @@ impl RpcChild {
         Ok((rpc, rx))
     }
 
-    pub async fn send(&self, kind: &str, fields: Value) -> Result<Value> {
+    /// `limit` is how long an agent that is there may take; dsh sets its own.
+    pub async fn send(
+        &self,
+        kind: &str,
+        fields: Value,
+        limit: std::time::Duration,
+    ) -> Result<Value> {
         if let Some(dsh) = &self.dsh {
             return dsh.send(kind, fields).await;
         }
@@ -281,8 +287,6 @@ impl RpcChild {
                 return Err(anyhow!("agent is not running: {e}"));
             }
         }
-        // Pi answers `compact` once the compaction is done, and everything else at once.
-        let limit = if kind == "compact" { SLOW } else { QUICK };
         match asked.answer(limit).await {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(anyhow!(e)),
