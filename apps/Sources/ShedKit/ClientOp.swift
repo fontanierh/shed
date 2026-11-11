@@ -94,11 +94,12 @@ enum ClientOp: Sendable {
     }
 
     /// How long its reply may take. The bridge answers a compaction once it is done, and everything else at once:
-    /// these are the limits it gives its agents (`SLOW` and `QUICK` in the bridge's requests.rs).
+    /// these are the limits it gives its agents (`SLOW` and `QUICK` in the bridge's requests.rs), and a little more,
+    /// so that the bridge's own "the agent did not answer", which says which command, arrives first.
     var replyLimit: Duration {
         switch name {
-        case .compact: .seconds(30 * 60)
-        default: .seconds(120)
+        case .compact: .seconds(31 * 60)
+        default: .seconds(150)
         }
     }
 

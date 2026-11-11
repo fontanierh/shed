@@ -66,6 +66,12 @@ final class SubagentLinkTests: XCTestCase {
         XCTAssertTrue(store.children(of: "test:p").isEmpty)
         XCTAssertEqual(store.endedChildren(of: "test:p").map(\.id), ["test:c"])
         XCTAssertTrue(store.activeSubagents.isEmpty)
+        // A bridge that sends codes is believed by its code, whatever its words: they are free to change.
+        XCTAssertTrue(BridgeError("That subagent is over", code: .sessionEnded).isSessionEnded)
+        XCTAssertFalse(BridgeError("session ended", code: .noSuchDirectory).isSessionEnded)
+        XCTAssertTrue(BridgeError("/work/gone: No such file or directory (os error 2)").isMissingFolder)
+        XCTAssertTrue(BridgeError("That folder is gone", code: .noSuchDirectory).isMissingFolder)
+        XCTAssertFalse(BridgeError("timed out").isMissingFolder)
 
         store.apply(.session(summary("c", parent: "p", name: "scout", createdAt: 10_000, status: .running, lastActiveAt: 20_000)), from: "test")
         XCTAssertFalse(store.ended.contains("test:c"))

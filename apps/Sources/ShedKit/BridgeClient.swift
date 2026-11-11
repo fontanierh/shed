@@ -2,9 +2,38 @@
 import Foundation
 
 public struct BridgeError: LocalizedError, Sendable {
+    /// The failures the app does something about, as the bridge names them in a reply's `code`
+    /// (`ErrorCode` in the bridge's protocol.rs). A bridge from before the codes sends none.
+    public enum Code: String, Sendable {
+        case sessionEnded = "session_ended"
+        case noSuchDirectory = "no_such_directory"
+    }
+
     public let message: String
-    public init(_ message: String) { self.message = message }
+    /// Nil for a failure with no code, and for a code this version of the app does not know.
+    public let code: Code?
+    public init(_ message: String, code: Code? = nil) {
+        self.message = message
+        self.code = code
+    }
     public var errorDescription: String? { message }
+
+    /// Whether it is that failure: by its code, or, from a bridge that sends none, by the words that bridge used.
+    public func isFailure(_ code: Code, orSays words: (String) -> Bool) -> Bool {
+        self.code == code || (self.code == nil && words(message))
+    }
+}
+
+extension Error {
+    /// A subagent its agent has let go of: the one thing the bridge answers this way.
+    var isSessionEnded: Bool {
+        (self as? BridgeError)?.isFailure(.sessionEnded) { $0 == "session ended" } ?? false
+    }
+
+    /// The bridge refused a folder because it is gone.
+    var isMissingFolder: Bool {
+        (self as? BridgeError)?.isFailure(.noSuchDirectory) { $0.contains("No such file or directory") } ?? false
+    }
 }
 
 /// A request cut off by the connection dropping (iOS kills the socket while the app is suspended). The client
@@ -116,6 +145,7 @@ public final class BridgeClient: BridgeConnection {
         let id: String?
         let ok: Bool?
         let error: String?
+        let code: String?
     }
 
     private func receiveLoop(_ task: URLSessionWebSocketTask, _ gen: Int) async {
@@ -162,7 +192,7 @@ public final class BridgeClient: BridgeConnection {
         guard let head = try? JSONDecoder().decode(Head.self, from: data) else { return }
         if head.type == "reply" {
             guard let id = head.id else { return }
-            replies.settle(id, head.ok == true ? .success(data) : .failure(BridgeError(head.error ?? "Request failed")))
+            replies.settle(id, head.ok == true ? .success(data) : .failure(BridgeError(head.error ?? "Request failed", code: head.code.flatMap(BridgeError.Code.init))))
             return
         }
         do {
