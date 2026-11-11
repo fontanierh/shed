@@ -212,15 +212,9 @@ impl PrimeDaemon {
             let tx = tx.clone();
             tokio::spawn(async move {
                 let mut buf = Vec::new();
-                loop {
-                    buf.clear();
-                    match lines.read_until(b'\n', &mut buf).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let Ok(message) = serde_json::from_slice::<Value>(&buf) else {
-                        continue;
-                    };
+                while let Some(message) =
+                    crate::requests::next_message(&mut lines, &mut buf, "Prime's daemon").await
+                {
                     daemon.dispatch(message, &tx);
                 }
             })

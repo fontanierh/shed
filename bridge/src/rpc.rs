@@ -224,17 +224,9 @@ impl RpcChild {
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
             let mut buf = Vec::new();
-            loop {
-                buf.clear();
-                match reader.read_until(b'\n', &mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let line = String::from_utf8_lossy(&buf);
-                let line = line.trim_end_matches(['\n', '\r']);
-                let Ok(record) = serde_json::from_str::<Value>(line) else {
-                    continue;
-                };
+            while let Some(record) =
+                crate::requests::next_message(&mut reader, &mut buf, "the agent").await
+            {
                 if record["type"] == "response" {
                     let Some(id) = record["id"].as_str() else {
                         continue;

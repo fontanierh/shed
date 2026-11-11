@@ -51,7 +51,14 @@ impl App {
             self.command(session, "get_session_stats", json!({}))
         );
         let state = AgentState::read(&state?);
-        let stats = stats.ok().map(|stats| AgentStats::read(&stats));
+        // Without its figures the session still shows; they come with the next refresh.
+        let stats = match stats {
+            Ok(stats) => Some(AgentStats::read(&stats)),
+            Err(e) => {
+                eprintln!("session {}: no figures from its agent: {e:#}", session.id);
+                None
+            }
+        };
         let model_key = state
             .model
             .as_ref()

@@ -183,15 +183,9 @@ impl Dsh {
             let mut up = Some(up_tx);
             let mut lines = BufReader::new(stdout);
             let mut buf = Vec::new();
-            loop {
-                buf.clear();
-                match lines.read_until(b'\n', &mut buf).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let Ok(message) = serde_json::from_slice::<Value>(&buf) else {
-                    continue;
-                };
+            while let Some(message) =
+                crate::requests::next_message(&mut lines, &mut buf, "dsh").await
+            {
                 if message["event"] == "ready" {
                     if let Some(up) = up.take() {
                         up.offer(());
