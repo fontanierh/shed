@@ -1439,9 +1439,16 @@ async fn a_new_session_that_fails_halfway_is_not_kept() {
         .create_session(AgentKind::Pi, cwd, None, None)
         .await
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(rig.app.sessions.read().await.len(), 1);
-    assert!(rig.saved("sessions.json").to_string().contains(&made.id));
+    // The save runs on its own after the answer: waited for until it is there, not for a fixed time.
+    let saved = || rig.saved("sessions.json").to_string().contains(&made.id);
+    for _ in 0..400 {
+        if saved() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(saved());
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 
