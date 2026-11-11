@@ -13,7 +13,6 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 
 use crate::protocol::{BackgroundJob, WaitingOn};
-use crate::rpc::AgentKind;
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
@@ -320,9 +319,14 @@ fn wrapped_command(wrapper: &str) -> String {
 }
 
 impl App {
+    /// Whether the session's agent is asked for its background commands, rather than the bridge reading them.
+    fn agent_lists_jobs(&self, session: &Session) -> bool {
+        session.backend == Backend::Pi && self.agent(session.agent).lists_own_jobs()
+    }
+
     /// Newest first.
     pub async fn list_jobs(&self, session: &Session) -> Result<Vec<BackgroundJob>> {
-        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+        if self.agent_lists_jobs(session) {
             let data = self.command(session, "dsh_jobs", json!({})).await?;
             let mut jobs: Vec<BackgroundJob> = data["jobs"]
                 .as_array()
@@ -383,7 +387,7 @@ impl App {
     /// The last `lines` lines of a job's output.
     pub async fn job_output(&self, session: &Session, job_id: &str, lines: u32) -> Result<String> {
         let lines = lines.clamp(1, 200);
-        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+        if self.agent_lists_jobs(session) {
             let data = self
                 .command(session, "dsh_job_output", json!({ "jobId": job_id }))
                 .await?;
@@ -437,7 +441,7 @@ impl App {
     /// Terminates a running job (its whole process group). The agent then gets its `[bash-done]` notice, as when it
     /// stops the job itself.
     pub async fn kill_job(&self, session: &Session, job_id: &str) -> Result<bool> {
-        if session.agent == AgentKind::Deepseek && session.backend == Backend::Pi {
+        if self.agent_lists_jobs(session) {
             self.command(session, "dsh_kill_job", json!({ "jobId": job_id }))
                 .await?;
             return Ok(true);
