@@ -15,8 +15,7 @@ use std::time::Instant;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::ask::{Ask, Delivery};
@@ -30,8 +29,10 @@ const PLUGIN: &str = include_str!("../dsh/shed.mjs");
 const WEB_PLUGIN: &str = include_str!("../dsh/shed-web.mjs");
 pub const PROFILE: &str = "shed";
 
+type PipeWriter = std::pin::Pin<Box<dyn AsyncWrite + Send>>;
+
 pub struct Dsh {
-    stdin: tokio::sync::Mutex<ChildStdin>,
+    stdin: tokio::sync::Mutex<PipeWriter>,
     requests: Requests<u64>,
     next_id: AtomicU64,
     events: mpsc::UnboundedSender<ChildOutput>,
@@ -161,17 +162,21 @@ pub async fn list_models(store: &crate::store::Store) -> Result<Value> {
 
 impl Dsh {
     /// Read a freshly spawned `dsh --profile shed`, then open or resume the session once the plugin is up.
-    pub fn start(
+    pub fn start<W, R>(
         opts: &SpawnOptions,
-        stdin: ChildStdin,
-        stdout: ChildStdout,
+        stdin: W,
+        stdout: R,
         events: mpsc::UnboundedSender<ChildOutput>,
         exited: impl std::future::Future<Output = String> + Send + 'static,
-    ) -> Arc<Dsh> {
+    ) -> Arc<Dsh>
+    where
+        W: AsyncWrite + Send + 'static,
+        R: AsyncRead + Unpin + Send + 'static,
+    {
         let (ready_tx, ready) = watch::channel(None);
         let (up_tx, up) = oneshot::channel::<()>();
         let dsh = Arc::new(Dsh {
-            stdin: tokio::sync::Mutex::new(stdin),
+            stdin: tokio::sync::Mutex::new(Box::pin(stdin)),
             requests: Requests::default(),
             next_id: AtomicU64::new(0),
             events,
@@ -304,7 +309,7 @@ impl Dsh {
         opened.clone().unwrap().map_err(|e| anyhow!(e))
     }
 
-    pub async fn send(self: &Arc<Self>, ask: Ask) -> Result<Value> {
+    pub async fn send(&self, ask: Ask) -> Result<Value> {
         let limit = ask.limit();
         let session = self.session().await?;
         match ask {
@@ -532,10 +537,20 @@ impl Dsh {
         }
         match asked.answer(limit).await {
             Ok(Ok(result)) => Ok(result),
-            Ok(Err(e)) => Err(anyhow!(e)),
+            Ok(Err(e)) => Err(anyhow::Error::new(crate::agent::Refused(e))),
             Err(Unanswered::Gone) => Err(anyhow!("agent exited")),
             Err(Unanswered::Late(after)) => Err(crate::rpc::unanswered(method, after)),
         }
+    }
+}
+
+impl crate::agent::Live for Dsh {
+    fn send(&self, ask: Ask) -> futures_util::future::BoxFuture<'_, Result<Value>> {
+        Box::pin(Dsh::send(self, ask))
+    }
+
+    fn close(&self) -> futures_util::future::BoxFuture<'_, ()> {
+        Box::pin(Dsh::close(self))
     }
 }
 
