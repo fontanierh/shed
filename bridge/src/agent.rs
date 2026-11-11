@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use crate::agent_wire::PrimeRow;
 use crate::prime::PrimeDaemon;
 use crate::rpc::{AgentKind, ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
+use crate::store::Store;
 
 /// One kind of agent. An agent the bridge runs as a process starts its sessions here (`start`); one that keeps its
 /// sessions itself, as Prime's daemon does, hands out the ones it has (`session`).
@@ -76,10 +77,10 @@ pub struct Agents {
 
 impl Agents {
     /// The agents Shed ships with.
-    pub fn installed(prime: Arc<PrimeDaemon>) -> Agents {
+    pub fn installed(prime: Arc<PrimeDaemon>, store: Store) -> Agents {
         Agents::of(|kind| match kind {
-            AgentKind::Pi => Arc::new(Pi),
-            AgentKind::Deepseek => Arc::new(Deepseek),
+            AgentKind::Pi => Arc::new(Pi(store.clone())),
+            AgentKind::Deepseek => Arc::new(Deepseek(store.clone())),
             AgentKind::Prime => Arc::new(Prime(prime.clone())),
         })
     }
@@ -101,7 +102,7 @@ impl Agents {
     }
 }
 
-struct Pi;
+struct Pi(Store);
 
 impl Agent for Pi {
     fn start(&self, opts: &SpawnOptions) -> Result<Started> {
@@ -114,7 +115,7 @@ impl Agent for Pi {
         }
         args.extend([
             "--append-system-prompt".into(),
-            crate::guide::text(opts.agent),
+            crate::guide::text(opts.agent, &self.0),
         ]);
         if let Some(resume) = &opts.resume {
             args.extend(["--session".into(), resume.clone()]);
@@ -152,12 +153,12 @@ impl Agent for Pi {
 }
 
 /// DeepSeek Harness, driven through Shed's dsh plugin by `crate::dsh`.
-struct Deepseek;
+struct Deepseek(Store);
 
 impl Agent for Deepseek {
     fn start(&self, opts: &SpawnOptions) -> Result<Started> {
         // The session's model, reasoning effort and resumption go to the plugin once it starts.
-        let layer = crate::dsh::install_profile()
+        let layer = crate::dsh::install_profile(&self.0)
             .context("the Shed profile for dsh can't be written")?
             .to_string_lossy()
             .into_owned();
@@ -176,7 +177,7 @@ impl Agent for Deepseek {
     }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(crate::dsh::list_models())
+        Box::pin(crate::dsh::list_models(&self.0))
     }
 
     fn lists_own_jobs(&self) -> bool {

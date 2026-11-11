@@ -1,9 +1,9 @@
 //! Bridge state on disk, under ~/.agent-remote: the settings and the auth token in config.json, and the files the
 //! bridge keeps for itself.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -223,29 +223,6 @@ impl Kept {
     }
 }
 
-/// By folder, for the whole process: the readers that have no `Store` at hand share what the file last gave.
-static KEPT: Mutex<BTreeMap<PathBuf, Kept>> = Mutex::new(BTreeMap::new());
-
-fn keep(dir: &Path, read: Result<Config>) -> Config {
-    let (config, line) = KEPT
-        .lock()
-        .unwrap()
-        .entry(dir.to_path_buf())
-        .or_default()
-        .take(read);
-    if let Some(line) = line {
-        eprintln!("{line}");
-    }
-    config
-}
-
-/// The settings in `dir`'s config.json, read each time, so editing the file takes effect without a restart. A file
-/// that can't be read or understood changes nothing: an edit left half done must not turn back on what was turned
-/// off.
-pub fn config_in(dir: &Path) -> Config {
-    keep(dir, Config::load(dir))
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRecord {
@@ -257,8 +234,11 @@ pub struct SessionRecord {
     pub session_file: Option<String>,
 }
 
+/// The bridge's folder. Copies share what its config last gave.
+#[derive(Clone)]
 pub struct Store {
     dir: PathBuf,
+    kept: Arc<Mutex<Kept>>,
 }
 
 impl Store {
@@ -266,14 +246,22 @@ impl Store {
         let home = std::env::var("HOME").context("HOME is not set")?;
         let dir = PathBuf::from(home).join(".agent-remote");
         std::fs::create_dir_all(&dir)?;
-        Ok(Store { dir })
+        Ok(Store::at(dir))
+    }
+
+    /// The store in a folder that is there.
+    pub(crate) fn at(dir: PathBuf) -> Store {
+        Store {
+            dir,
+            kept: Default::default(),
+        }
     }
 
     pub fn token(&self) -> Result<String> {
         let path = self.dir.join("config.json");
         // An invalid file stops the bridge here, at its start. Read later, it keeps the settings of this read.
         let mut config = document(&path)?.unwrap_or_else(|| json!({}));
-        keep(&self.dir, Ok(Config::read(&config)?));
+        self.keep(Ok(Config::read(&config)?));
         if let Some(token) = config["token"].as_str() {
             return Ok(token.to_string());
         }
@@ -339,8 +327,19 @@ impl Store {
         )
     }
 
+    /// The settings in config.json, read each time, so editing the file takes effect without a restart. A file
+    /// that can't be read or understood changes nothing: an edit left half done must not turn back on what was
+    /// turned off.
     pub fn config(&self) -> Config {
-        config_in(&self.dir)
+        self.keep(Config::load(&self.dir))
+    }
+
+    fn keep(&self, read: Result<Config>) -> Config {
+        let (config, line) = self.kept.lock().unwrap().take(read);
+        if let Some(line) = line {
+            eprintln!("{line}");
+        }
+        config
     }
 
     /// `setup/install.sh` fills these in. `default_window` looks one model up in them.
@@ -445,15 +444,8 @@ impl Store {
         let dir = std::env::temp_dir().join(format!("shed-store-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        forget(&dir);
-        Store { dir }
+        Store::at(dir)
     }
-}
-
-/// Drops what `dir`'s config last gave, for a test that makes the folder anew.
-#[cfg(test)]
-pub(crate) fn forget(dir: &Path) {
-    KEPT.lock().unwrap().remove(dir);
 }
 
 #[cfg(test)]

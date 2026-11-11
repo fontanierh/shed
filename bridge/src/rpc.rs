@@ -1,7 +1,7 @@
 //! One agent subprocess speaking Pi's JSONL RPC protocol on stdin/stdout: Pi itself, or DeepSeek Harness through
 //! Shed's plugin (`crate::dsh`). Prime's sessions go through its daemon instead (`crate::prime`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -78,17 +78,15 @@ pub fn unanswered(kind: &str, after: std::time::Duration) -> anyhow::Error {
 }
 
 /// The models an agent can start a session on, as `[{provider, id, name}]`: what Pi and Prime list from their own
-/// settings, and the providers set up in DeepSeek Harness. Kept a minute, since listing starts the agent.
-pub async fn list_models(agents: &crate::agent::Agents, agent: AgentKind) -> Result<Value> {
-    static CACHE: Mutex<Option<HashMap<AgentKind, (std::time::Instant, Value)>>> = Mutex::new(None);
-    if let Some((at, models)) = CACHE.lock().unwrap().get_or_insert_default().get(&agent) {
-        if at.elapsed().as_secs() < 60 {
-            return Ok(models.clone());
-        }
-    }
+/// settings, and the providers set up in DeepSeek Harness.
+pub async fn list_models(
+    agents: &crate::agent::Agents,
+    agent: AgentKind,
+    store: &crate::store::Store,
+) -> Result<Value> {
     // With Open Codex, each agent offers exactly its catalog: written into the agent's configuration first, then
     // listed as the agent sees it.
-    let gateway = crate::opencodex::gateway();
+    let gateway = crate::opencodex::gateway(store);
     if let Some(gateway) = &gateway {
         if let Err(e) = crate::opencodex::sync(gateway).await {
             eprintln!("Open Codex catalog: {e}");
@@ -100,11 +98,6 @@ pub async fn list_models(agents: &crate::agent::Agents, agent: AgentKind) -> Res
             list.retain(|m| m["provider"] == crate::opencodex::PROVIDER);
         }
     }
-    CACHE
-        .lock()
-        .unwrap()
-        .get_or_insert_default()
-        .insert(agent, (std::time::Instant::now(), models.clone()));
     Ok(models)
 }
 

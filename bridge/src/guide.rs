@@ -5,9 +5,9 @@
 use crate::rpc::AgentKind;
 
 /// The guide for one kind of agent.
-pub fn text(agent: AgentKind) -> String {
+pub fn text(agent: AgentKind, store: &crate::store::Store) -> String {
     let mut text = format!("{MEDIA}\n\n{SITES}");
-    if crate::web::configured() {
+    if crate::web::configured(store) {
         text += "\n\n";
         text += &web(agent);
     }

@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
         let Ok(agent) = serde_json::from_value::<rpc::AgentKind>(name.into()) else {
             bail!("usage: agent-remote guide <agent>, by the name its sessions carry: pi, prime, deepseek");
         };
-        println!("{}", guide::text(agent));
+        println!("{}", guide::text(agent, &store::Store::open()?));
         return Ok(());
     }
 

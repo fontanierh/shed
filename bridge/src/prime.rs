@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use crate::agent_wire::{InactiveRow, PrimeRow};
 use crate::channel::Offer;
 use crate::protocol::SessionKind;
+use crate::store::Store;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
@@ -54,24 +55,8 @@ pub struct PrimeDaemon {
     next_id: AtomicU64,
     /// The top-level sessions this bridge has listed, by `sessionId`, so it can reopen them after a reboot.
     shown: Mutex<HashSet<String>>,
-}
-
-/// The sessions the bridge has listed, kept across restarts.
-fn load_shown() -> Option<HashSet<String>> {
-    match crate::store::Store::open() {
-        Ok(store) => Some(store.load_prime_sessions()),
-        Err(e) => {
-            eprintln!("failed to load the Prime session list: {e}");
-            None
-        }
-    }
-}
-
-fn save_shown(shown: &HashSet<String>) {
-    let saved = crate::store::Store::open().and_then(|store| store.save_prime_sessions(shown));
-    if let Err(e) = saved {
-        eprintln!("failed to save the Prime session list: {e}");
-    }
+    /// Where that list is kept across restarts.
+    store: Store,
 }
 
 /// The name of a top-level session in Prime's own list; a subagent has none worth keeping.
@@ -142,19 +127,23 @@ fn launch_env() -> Value {
 
 impl PrimeDaemon {
     /// A daemon nothing is connected to yet: every command is refused until `start` connects it.
-    pub(crate) fn unconnected(client_id: String) -> Arc<PrimeDaemon> {
+    pub(crate) fn unconnected(client_id: String, store: Store) -> Arc<PrimeDaemon> {
         Arc::new(PrimeDaemon {
             client_id,
             writer: tokio::sync::Mutex::new(None),
             requests: Requests::default(),
             next_id: AtomicU64::new(0),
             shown: Mutex::new(HashSet::new()),
+            store,
         })
     }
 
     /// Connects in the background and keeps reconnecting; events flow through the returned channel.
-    pub fn start(client_id: String) -> (Arc<PrimeDaemon>, mpsc::UnboundedReceiver<DaemonEvent>) {
-        let daemon = PrimeDaemon::unconnected(client_id);
+    pub fn start(
+        client_id: String,
+        store: Store,
+    ) -> (Arc<PrimeDaemon>, mpsc::UnboundedReceiver<DaemonEvent>) {
+        let daemon = PrimeDaemon::unconnected(client_id, store);
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(daemon.clone().run(tx));
         (daemon, rx)
@@ -366,7 +355,7 @@ impl PrimeDaemon {
             "cwd": cwd,
             "executionMode": "interactive",
             "sessionDir": format!("{home}/.prime/agent/sessions"),
-            "appendSystemPrompt": [crate::guide::text(crate::rpc::AgentKind::Prime)],
+            "appendSystemPrompt": [crate::guide::text(crate::rpc::AgentKind::Prime, &self.store)],
         });
         if let Some(model) = model {
             config["model"] = json!(model);
@@ -383,13 +372,19 @@ impl PrimeDaemon {
         PrimeRow::read(&created).ok_or_else(|| anyhow!("Prime returned no session id"))
     }
 
+    fn save_shown(&self, shown: &HashSet<String>) {
+        if let Err(e) = self.store.save_prime_sessions(shown) {
+            eprintln!("failed to save the Prime session list: {e}");
+        }
+    }
+
     /// Remembers top-level sessions that start while connected, so a reboot doesn't lose them either.
     fn note_shown(&self, rows: &[PrimeRow]) {
         let mut shown = self.shown.lock().unwrap();
         let before = shown.len();
         shown.extend(rows.iter().filter_map(top_level));
         if shown.len() != before {
-            save_shown(&shown);
+            self.save_shown(&shown);
         }
     }
 
@@ -411,7 +406,7 @@ impl PrimeDaemon {
             .filter_map(|row| Some((top_level(&row)?, row.id)))
             .collect();
         // The first run has no list yet: start it from what is running.
-        let before = load_shown().unwrap_or_default();
+        let before = self.store.load_prime_sessions();
         let asleep: Vec<&String> = before
             .iter()
             .filter(|id| !running.contains(*id))
@@ -422,7 +417,7 @@ impl PrimeDaemon {
             shown.extend(before.iter().filter(|id| live.contains_key(*id)).cloned());
             shown.extend(running.iter().cloned());
             shown.retain(|id| live.contains_key(id) || running.contains(id));
-            save_shown(&shown);
+            self.save_shown(&shown);
         }
         for id in asleep {
             match self.attach(id).await {

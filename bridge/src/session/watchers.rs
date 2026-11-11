@@ -84,7 +84,7 @@ impl App {
             HashMap::new();
         loop {
             ticker.tick().await;
-            let Some(gateway) = crate::opencodex::gateway() else {
+            let Some(gateway) = crate::opencodex::gateway(&self.store) else {
                 continue;
             };
             let sessions = self.sessions.read().await.clone();

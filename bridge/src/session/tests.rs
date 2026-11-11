@@ -180,9 +180,9 @@ impl Rig {
             std::fs::write(store.dir().join(file), text).unwrap();
         }
         let limits = store.load_limits();
-        let prime = PrimeDaemon::unconnected("test".into());
+        let prime = PrimeDaemon::unconnected("test".into(), store.clone());
         let script = Arc::new(Script::default());
-        let installed = Agents::installed(prime.clone());
+        let installed = Agents::installed(prime.clone(), store.clone());
         let agents = Agents::of(|kind| {
             Arc::new(Scripted {
                 script: script.clone(),

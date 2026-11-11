@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
-use crate::store::{Addresses, Routing};
+use crate::store::{Addresses, Routing, Store};
 
 pub const PROVIDER: &str = "opencodex";
 /// Open Codex trusts its loopback listener, so the agents' key is a placeholder; dsh reads it from this variable.
@@ -34,8 +34,8 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
-pub fn gateway() -> Option<Gateway> {
-    gateway_in(&home())
+pub fn gateway(store: &Store) -> Option<Gateway> {
+    gateway_in(store, &home())
 }
 
 // The readers in this file take what they can of what comes from outside: a part that is missing, or of another
@@ -49,8 +49,8 @@ fn list(value: &Value) -> &[Value] {
     value.as_array().map(Vec::as_slice).unwrap_or_default()
 }
 
-fn gateway_in(home: &Path) -> Option<Gateway> {
-    let ours = match crate::store::config_in(&home.join(".agent-remote")).opencodex {
+fn gateway_in(store: &Store, home: &Path) -> Option<Gateway> {
+    let ours = match store.config().opencodex {
         Routing::Off => return None,
         Routing::Unset if !home.join(".opencodex").is_dir() => return None,
         Routing::Unset => Addresses::default(),
@@ -445,8 +445,8 @@ fn write_if_changed(path: &PathBuf, bytes: &[u8]) -> Result<()> {
 
 /// The `llm-pi-ai` patch for dsh's `shed` profile: Open Codex as its one provider, from the catalog the last sync
 /// kept. None when Open Codex isn't in use or hasn't been listed yet.
-pub fn dsh_layer() -> Option<String> {
-    let gateway = gateway()?;
+pub fn dsh_layer(store: &Store) -> Option<String> {
+    let gateway = gateway(store)?;
     let models: Value =
         serde_json::from_slice(&std::fs::read(dsh_catalog_file(&home())).ok()?).ok()?;
     let providers = json!({
@@ -658,11 +658,14 @@ mod tests {
     }
 
     /// A home folder with this `config.json`, where Open Codex is installed or not.
+    /// The gateway as a bridge whose folder is in `home` sees it.
+    fn at(home: &Path) -> Option<Gateway> {
+        gateway_in(&Store::at(home.join(".agent-remote")), home)
+    }
+
     fn home_with(config: Option<&str>, installed: bool) -> PathBuf {
         let home = scratch("gateway");
         std::fs::create_dir_all(home.join(".agent-remote")).unwrap();
-        // A new home each time, under the same name: nothing is kept from the one before.
-        crate::store::forget(&home.join(".agent-remote"));
         if let Some(config) = config {
             std::fs::write(home.join(".agent-remote/config.json"), config).unwrap();
         }
@@ -683,7 +686,7 @@ mod tests {
     fn the_gateway_is_off_unset_or_on() {
         for installed in [false, true] {
             let home = home_with(Some(r#"{ "opencodex": false }"#), installed);
-            assert!(gateway_in(&home).is_none());
+            assert!(at(&home).is_none());
         }
 
         // Unset, or a config that can't be read and never could: on only where Open Codex is installed.
@@ -699,9 +702,9 @@ mod tests {
             Some(r#"{ "opencodex": ["http://gateway.test:1"] }"#),
             Some(r#"{ "opencodex": { "url": 7 } }"#),
         ] {
-            assert!(gateway_in(&home_with(config, false)).is_none());
+            assert!(at(&home_with(config, false)).is_none());
             let home = home_with(config, true);
-            assert_defaults(&gateway_in(&home).unwrap(), &home);
+            assert_defaults(&at(&home).unwrap(), &home);
         }
 
         // `true` or an object is on, with the default for whatever it doesn't give.
@@ -711,7 +714,7 @@ mod tests {
             r#"{ "opencodex": { "managementUrl": null } }"#,
         ] {
             let home = home_with(Some(config), false);
-            assert_defaults(&gateway_in(&home).unwrap(), &home);
+            assert_defaults(&at(&home).unwrap(), &home);
         }
 
         let home = home_with(
@@ -725,7 +728,7 @@ mod tests {
             ),
             false,
         );
-        let gateway = gateway_in(&home).unwrap();
+        let gateway = at(&home).unwrap();
         assert_eq!(gateway.url, "http://gateway.test:1");
         assert_eq!(gateway.management, "http://gateway.test:2");
         assert_eq!(gateway.token_file, PathBuf::from("/keys/admin"));
@@ -738,10 +741,12 @@ mod tests {
         std::fs::create_dir_all(home.join(".agent-remote")).unwrap();
         std::fs::create_dir_all(home.join(".opencodex")).unwrap();
         let config = home.join(".agent-remote/config.json");
+        // One bridge reads the file twice: its store remembers what the file last gave.
+        let store = Store::at(home.join(".agent-remote"));
         std::fs::write(&config, r#"{ "opencodex": false }"#).unwrap();
-        assert!(gateway_in(&home).is_none());
+        assert!(gateway_in(&store, &home).is_none());
         std::fs::write(&config, r#"{ "opencodex": false, }"#).unwrap();
-        assert!(gateway_in(&home).is_none());
+        assert!(gateway_in(&store, &home).is_none());
         let _ = std::fs::remove_dir_all(&home);
     }
 

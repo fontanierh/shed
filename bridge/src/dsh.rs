@@ -43,7 +43,7 @@ pub struct Dsh {
 /// a question nobody answers within two minutes lets the agent carry on, and the answer still reaches it later. The
 /// profile's own `cordis.patch.yml` is the user's and is created only when missing. With Open Codex, the layer also
 /// makes it dsh's one model provider, replacing the providers configured in `cordis.patch.yml`. Returns the layer.
-pub fn install_profile() -> Result<PathBuf> {
+pub fn install_profile(store: &crate::store::Store) -> Result<PathBuf> {
     let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".dsh/profiles")
         .join(PROFILE);
@@ -78,23 +78,28 @@ pub fn install_profile() -> Result<PathBuf> {
     let plugin = dir.join("shed.mjs");
     let persona = format!(
         "You are a coding agent powered by the {{{{model}}}} model.\n\n{}",
-        crate::guide::text(crate::rpc::AgentKind::Deepseek)
+        crate::guide::text(crate::rpc::AgentKind::Deepseek, store)
     );
     let layer = format!(
         "- id: sdk-jsonrpc-server\n  disabled: true\n- id: system-prompt\n  config:\n    personaPrefix: {}\n- insert:\n    - id: tool-ask-user\n      name: '@deepseek-ai/dsh-tool-ask-user'\n      config:\n        mode: timed\n    - id: shed\n      name: {}\n      inject: [sdkAppStartup]\n",
         json!(persona),
         json!(plugin.to_string_lossy()),
     );
-    let layer =
-        layer + &web_layer(&dir, &write)? + &crate::opencodex::dsh_layer().unwrap_or_default();
+    let layer = layer
+        + &web_layer(store, &dir, &write)?
+        + &crate::opencodex::dsh_layer(store).unwrap_or_default();
     write("shed.patch.yml", &layer)?;
     Ok(dir.join("shed.patch.yml"))
 }
 
 /// With a web provider set up here, the plugin that registers it in dsh's web service, and the service pinned to it
 /// for both search and fetch. Without one, dsh's own defaults stay.
-fn web_layer(dir: &std::path::Path, write: &impl Fn(&str, &str) -> Result<()>) -> Result<String> {
-    if !crate::web::configured() {
+fn web_layer(
+    store: &crate::store::Store,
+    dir: &std::path::Path,
+    write: &impl Fn(&str, &str) -> Result<()>,
+) -> Result<String> {
+    if !crate::web::configured(store) {
         return Ok(String::new());
     }
     write("shed-web.mjs", WEB_PLUGIN)?;
@@ -107,8 +112,8 @@ fn web_layer(dir: &std::path::Path, write: &impl Fn(&str, &str) -> Result<()>) -
 
 /// The models the `shed` profile has set up, as `[{provider, id, name}]`, for choosing one before a session starts:
 /// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session.
-pub async fn list_models() -> Result<Value> {
-    let layer = install_profile()?;
+pub async fn list_models(store: &crate::store::Store) -> Result<Value> {
+    let layer = install_profile(store)?;
     let home = std::env::var("HOME").unwrap_or_default();
     let mut child = tokio::process::Command::new("dsh")
         .args(["--profile", PROFILE, "--patch"])
@@ -1225,7 +1230,12 @@ pub(crate) mod tests {
     #[test]
     #[ignore = "writes the real dsh profile; run by hand, then check it with dsh --profile shed --patch <layer> --dump-config"]
     fn writes_the_shed_profile() {
-        println!("{}", install_profile().unwrap().display());
+        println!(
+            "{}",
+            install_profile(&crate::store::Store::open().unwrap())
+                .unwrap()
+                .display()
+        );
     }
 
     /// What the plugin sent in a real session asked to start a background job, have a subagent read a file, then

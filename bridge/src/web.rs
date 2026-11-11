@@ -111,8 +111,8 @@ async fn run(args: Vec<String>) -> Result<String> {
 }
 
 /// Whether a provider is set up here: the guide tells the agents about the web only then.
-pub fn configured() -> bool {
-    Provider::from_config(crate::store::config_in(&state_dir())).is_ok()
+pub fn configured(store: &crate::store::Store) -> bool {
+    Provider::from_config(store.config()).is_ok()
 }
 
 /// Link `shed-web` to the running binary in its folder, and write the Python module, for agents started from here.
