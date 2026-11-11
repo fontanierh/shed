@@ -17,6 +17,16 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
 
     public static func newId() -> String { String(UUID().uuidString.prefix(8)).lowercased() }
 
+    /// A saved computer needs its id, which drafts and the open session are filed under, and its address. Anything
+    /// else that is missing takes a default, so a list saved by another version of the app is still read.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        url = try c.decode(String.self, forKey: .url)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? Self.name(for: url)
+        token = try c.decodeIfPresent(String.self, forKey: .token) ?? ""
+    }
+
     /// The bridge on this machine, whose token Shed can read from its config.
     public var isLocal: Bool {
         let host = URLComponents(string: url.trimmingCharacters(in: .whitespaces))?.host
@@ -30,11 +40,26 @@ public struct BridgeEnvironment: Codable, Identifiable, Hashable, Sendable {
     }
 }
 
+/// The saved list of computers, as far as it could be read.
+struct SavedEnvironments: Equatable {
+    var environments: [BridgeEnvironment]
+    /// Whether that is all of them.
+    var complete: Bool
+}
+
 extension SessionStore {
+    /// Nil when no list was ever saved.
+    static func readEnvironments(_ data: Data?) -> SavedEnvironments? {
+        guard let data else { return nil }
+        guard let list = try? JSONDecoder().decode(Readable<BridgeEnvironment>.self, from: data) else {
+            return SavedEnvironments(environments: [], complete: false)
+        }
+        return SavedEnvironments(environments: list.values, complete: list.skipped == 0)
+    }
+
     /// From the single bridge Shed used to know: it becomes the first environment, and on the Mac this Mac's own bridge
     /// is always there. Drafts were keyed by bare session ids; they belong to that first environment.
     func migrate() {
-        let defaults = UserDefaults.standard
         let url = defaults.string(forKey: "bridgeURL").map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
         let token = defaults.string(forKey: "bridgeToken") ?? ""
         var found: [BridgeEnvironment] = []
@@ -54,7 +79,11 @@ extension SessionStore {
     }
 
     private func saveEnvironments() {
-        UserDefaults.standard.set(try? JSONEncoder().encode(environments), forKey: "environments")
+        if let unreadEnvironments {
+            defaults.set(unreadEnvironments, forKey: "environmentsUnread")
+            self.unreadEnvironments = nil
+        }
+        defaults.set(try? JSONEncoder().encode(environments), forKey: "environments")
     }
 
     /// Adds an environment, or updates one already there, and (re)connects it.
@@ -170,9 +199,9 @@ extension SessionStore {
         }
     }
 
-    /// Waits for an environment's bridge connection to come back, up to `timeout`.
-    func reconnected(_ env: String, timeout: Duration = .seconds(60)) async -> Bool {
-        let deadline = ContinuousClock.now + timeout
+    /// Waits for an environment's bridge connection to come back, up to `reconnectWait`.
+    func reconnected(_ env: String) async -> Bool {
+        let deadline = ContinuousClock.now + reconnectWait
         while connection(of: env) != .connected {
             guard ContinuousClock.now < deadline else { return false }
             try? await Task.sleep(for: .milliseconds(250))

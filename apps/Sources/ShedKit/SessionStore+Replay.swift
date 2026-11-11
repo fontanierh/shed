@@ -5,12 +5,10 @@ extension SessionStore {
     /// `-replay YES` (and `-replayCount N`, 30 by default): each session opened holds its last items back and streams
     /// them in again, through the same deltas the bridge sends, as if the agent were writing them now. Nothing is sent
     /// to the agent: it's for measuring a streaming conversation in the simulator.
-    private static let replays = UserDefaults.standard.bool(forKey: "replay")
-
     func holdForReplay(_ snapshot: inout [Item], of sessionId: String) -> [Item] {
-        guard Self.replays, !replayedIds.contains(sessionId), replaying == nil else { return [] }
+        guard defaults.bool(forKey: "replay"), !replayedIds.contains(sessionId), replaying == nil else { return [] }
         replayedIds.insert(sessionId)
-        let count = UserDefaults.standard.integer(forKey: "replayCount")
+        let count = defaults.integer(forKey: "replayCount")
         let held = Array(snapshot.suffix(count > 0 ? count : 30))
         snapshot.removeLast(held.count)
         return held

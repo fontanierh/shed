@@ -41,7 +41,7 @@ public final class SessionStore {
     /// lists, and what mentions them in a conversation stops leading anywhere.
     public internal(set) var ended: Set<String> = []
     /// Unsent composer text per session, kept while switching between sessions and across launches.
-    public internal(set) var drafts: [String: String] = UserDefaults.standard.dictionary(forKey: "drafts") as? [String: String] ?? [:]
+    public internal(set) var drafts: [String: String] = [:]
 
     public func setDraft(_ text: String, for id: String) {
         // The Mac's text field writes its text back on every update. Writing the same draft would still count as a
@@ -49,13 +49,21 @@ public final class SessionStore {
         let draft = text.isEmpty ? nil : text
         guard drafts[id] != draft else { return }
         drafts[id] = draft
-        UserDefaults.standard.set(drafts, forKey: "drafts")
+        defaults.set(drafts, forKey: "drafts")
     }
 
     /// Moves on every half minute, so subagents left idle drop out of the lists.
     public private(set) var clock = Date.now
 
+    @ObservationIgnored let defaults: UserDefaults
+    /// The saved list of computers as found, when not all of it could be read. The first save of the list files it
+    /// under a key of its own, so that what replaces it holds less but nothing is lost.
+    @ObservationIgnored var unreadEnvironments: Data?
     @ObservationIgnored var clients: [String: BridgeClient] = [:]
+    /// What answers a computer's requests in place of its client, in tests.
+    @ObservationIgnored var standIns: [String: any BridgeCalling] = [:]
+    /// How long a request cut off waits for its connection to come back.
+    @ObservationIgnored var reconnectWait = Duration.seconds(60)
     @ObservationIgnored var itemIndex: [String: Int] = [:]
     /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
     @ObservationIgnored var patched: [Int: Item] = [:]
@@ -70,11 +78,16 @@ public final class SessionStore {
     @ObservationIgnored var replaying: String?
     @ObservationIgnored var replayedIds: Set<String> = []
 
-    public init() {
-        let defaults = UserDefaults.standard
-        if let data = defaults.data(forKey: "environments"),
-           let saved = try? JSONDecoder().decode([BridgeEnvironment].self, from: data) {
-            environments = saved
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        drafts = defaults.dictionary(forKey: "drafts") as? [String: String] ?? [:]
+        let saved = defaults.data(forKey: "environments")
+        if let read = Self.readEnvironments(saved) {
+            environments = read.environments
+            if !read.complete {
+                unreadEnvironments = saved
+                errorMessage = "Some of the computers saved in Shed could not be read, and are not listed. What was saved has been kept."
+            }
         } else {
             migrate()
         }
@@ -91,7 +104,7 @@ public final class SessionStore {
             }
         }
         // `open -a Shed --args -select <session id>` opens a session directly (untagged: in the first environment).
-        if let id = UserDefaults.standard.string(forKey: "select") { select(id) }
+        if let id = defaults.string(forKey: "select") { select(id) }
     }
 
     // MARK: Session ids

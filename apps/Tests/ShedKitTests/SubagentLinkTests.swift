@@ -18,7 +18,7 @@ final class SubagentLinkTests: XCTestCase {
 
     /// A session may name one subagent after another the same: the time of the mention tells which one it means.
     @MainActor func testMentionLeadsToTheSubagentOfItsTime() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([
             summary("p"),
             summary("first", parent: "p", name: "scout", createdAt: 10_000),
@@ -37,7 +37,7 @@ final class SubagentLinkTests: XCTestCase {
 
     /// A subagent nobody lists is on its way while its call runs, and gone once that is long past.
     @MainActor func testUnlistedSubagentIsPendingThenEnded() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("p")]), from: "test")
         let old = date(1000)
         XCTAssertEqual(store.link(of: "test:p", to: SubagentMention(name: "scout", date: old, spawning: true, running: true)), .pending)
@@ -48,7 +48,7 @@ final class SubagentLinkTests: XCTestCase {
     /// Opening a subagent the bridge can't attach to marks it ended without an alert; it leaves the lists, its
     /// mentions lead nowhere, and it comes back if it works again.
     @MainActor func testSubagentThatCannotBeOpenedEnds() async {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("p"), summary("c", parent: "p", name: "scout", createdAt: 10_000, lastActiveAt: 10_000)]), from: "test")
         let mention = SubagentMention(name: "scout", date: date(60))
         XCTAssertEqual(store.link(of: "test:p", to: mention), .open("test:c"))

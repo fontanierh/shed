@@ -56,6 +56,8 @@ extension SessionStore {
             let sessionId = Self.tag(env, sessionId)
             guard sessionId == selectedId, let index = itemIndex[itemId] else { return }
             var item = patched[index] ?? items[index]
+            // The patch is for the item the note stands for, and none of it is the note's.
+            guard !item.isUnreadable else { return }
             set?.apply(to: &item)
             if let text = append?.text { item.text += text }
             if let args = append?.args { item.args = (item.args ?? "") + args }
@@ -100,12 +102,12 @@ extension SessionStore {
     /// The page of history before the first loaded item.
     public func loadEarlier() async {
         flush()
-        guard let id = selectedId, let (env, raw) = Self.split(id), let client = clients[env],
+        guard let id = selectedId, let (env, raw) = Self.split(id),
               let first = items.first, earlier > 0, !loadingEarlier else { return }
         loadingEarlier = true
         defer { loadingEarlier = false }
         do {
-            let page = try await client.call(.loadEarlier(sessionId: raw, before: first.id), as: EarlierItems.self)
+            let page = try await call(env, .loadEarlier(sessionId: raw, before: first.id), as: EarlierItems.self)
             // A snapshot may have replaced the transcript meanwhile.
             guard selectedId == id, items.first?.id == first.id else { return }
             let older = page.items.filter { itemIndex[$0.id] == nil }

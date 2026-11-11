@@ -14,8 +14,18 @@ public struct ConnectionLost: Error, Sendable {
     public let maybeDelivered: Bool
 }
 
+/// What the store asks of a connection, so a test can answer in its place.
 @MainActor
-public final class BridgeClient {
+protocol BridgeCalling: AnyObject {
+    /// Send an operation and wait for its reply; returns the raw reply JSON.
+    @discardableResult
+    func call(_ op: ClientOp) async throws -> Data
+}
+
+struct Reply<T: Decodable>: Decodable { let data: T }
+
+@MainActor
+public final class BridgeClient: BridgeCalling {
     public enum State: Equatable, Sendable {
         case disconnected(String?)
         case connecting
@@ -76,7 +86,6 @@ public final class BridgeClient {
         onState(.disconnected(nil))
     }
 
-    /// Send an operation and wait for its reply; returns the raw reply JSON.
     @discardableResult
     func call(_ op: ClientOp) async throws -> Data {
         guard let task, connected else { throw ConnectionLost(maybeDelivered: false) }
@@ -91,13 +100,6 @@ public final class BridgeClient {
             }
         }
     }
-
-    func call<T: Decodable>(_ op: ClientOp, as type: T.Type) async throws -> T {
-        let data = try await call(op)
-        return try JSONDecoder().decode(Reply<T>.self, from: data).data
-    }
-
-    private struct Reply<T: Decodable>: Decodable { let data: T }
 
     private struct Head: Decodable {
         let type: String

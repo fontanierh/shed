@@ -31,7 +31,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testAListReplacesOnlyItsOwnComputersSessions() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("a"), summary("b", parent: "a")]), from: "one")
         store.apply(.sessions([summary("a")]), from: "two")
         XCTAssertEqual(Set(store.sessions.keys), ["one:a", "one:b", "two:a"])
@@ -49,7 +49,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testTheTreeHasNewestRootsFirstAndSubagentsInTheOrderTheyStarted() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([
             summary("old", createdAt: 1),
             summary("new", createdAt: 2),
@@ -76,7 +76,7 @@ final class SessionStoreTests: XCTestCase {
 
     /// A subagent idle for long is taken to be gone, unless it is the one open.
     @MainActor func testASubagentLongIdleLeavesTheListUnlessOpen() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([
             summary("p"),
             summary("idle", parent: "p", createdAt: 1),
@@ -88,7 +88,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testAnOpenSubagentThatIsRemovedGivesWayToItsParent() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("p"), summary("c", parent: "p", status: .running)]), from: "one")
         store.select("one:c")
         store.apply(.sessionRemoved("c"), from: "one")
@@ -99,7 +99,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testAListWithoutTheOpenSessionClosesIt() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("a")]), from: "one")
         store.select("one:a")
         // Another computer's list says nothing about this one's sessions.
@@ -110,7 +110,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testTheTranscriptIsTheOpenSessionsAlone() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([summary("s"), summary("other")]), from: "one")
         store.select("one:s")
         XCTAssertFalse(store.transcriptLoaded)
@@ -153,7 +153,7 @@ final class SessionStoreTests: XCTestCase {
     }
 
     @MainActor func testEverySiteNewestSessionFirstThenByPort() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.apply(.sessions([
             summary("old", createdAt: 1, sites: [site(9000, published: true)]),
             summary("new", createdAt: 2, sites: [site(8001, published: false), site(8000, published: true)]),

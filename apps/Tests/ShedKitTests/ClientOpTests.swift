@@ -98,4 +98,12 @@ final class ClientOpTests: XCTestCase {
         XCTAssertEqual(repeatable, ["attach", "abort", "stop_tool", "set_thinking", "set_auto_compaction", "set_context_limit", "set_model",
                                     "resume_session", "close_session", "clear_goal"])
     }
+
+    /// Cut off, these leave nothing in doubt. Every other operation changes something, and one that may not have
+    /// happened has to be said.
+    func testOnlyTheseChangeNothing() {
+        let reads = Set(examples.filter(\.reads).map(\.name.rawValue))
+        XCTAssertEqual(reads, ["ping", "list_models", "list_jobs", "job_output", "load_earlier", "list_agent_models", "list_dir",
+                               "git_branch", "github_overview"])
+    }
 }

@@ -1,6 +1,14 @@
 // What the app asks of the bridges: the actions on the open session, new sessions, and what the sheets and panels list.
 import Foundation
 
+/// The connection dropped under an operation that changes something, and it was not sent again, or not again with
+/// success. Unlike `ConnectionLost`, this one is shown: the user asked for something and cannot tell if it was done.
+struct Unconfirmed: LocalizedError {
+    var errorDescription: String? {
+        "The connection to that computer dropped, so this may not have been done. Check before trying again."
+    }
+}
+
 extension SessionStore {
     func report(_ error: Error) {
         // A dropped connection shows as the connection state, and the client is already reconnecting.
@@ -8,26 +16,39 @@ extension SessionStore {
         errorMessage = error.localizedDescription
     }
 
-    /// `op`, sent again once the connection is back if a drop cut it off: when it can't have arrived, or when
-    /// doing it twice is harmless.
-    private func call(_ env: String, _ op: ClientOp) async throws {
+    /// Asks a computer's bridge for `op`. Every request goes this way but two: `send`, which looks at the transcript
+    /// to tell whether a message arrived, and the `detach` of a session being left, which sent late could detach a
+    /// session opened again since. Cut off by a dropped connection, an operation that changes something is sent
+    /// again once the connection is back, when it can't have arrived or when doing it twice is harmless. If it
+    /// can't be, or is cut off again, it throws `Unconfirmed` unless the operation is one to repeat. A read is never
+    /// sent again: whoever asked gets the `ConnectionLost`.
+    @discardableResult
+    func call(_ env: String, _ op: ClientOp) async throws -> Data {
         do {
-            try await client(env).call(op)
-        } catch let lost as ConnectionLost where !lost.maybeDelivered || op.repeatable {
-            guard await reconnected(env) else { throw lost }
-            try await client(env).call(op)
+            return try await client(env).call(op)
+        } catch let lost as ConnectionLost where !op.reads {
+            do {
+                guard !lost.maybeDelivered || op.repeatable, await reconnected(env) else { throw lost }
+                return try await client(env).call(op)
+            } catch is ConnectionLost where !op.repeatable {
+                throw Unconfirmed()
+            }
         }
     }
 
-    private func client(_ env: String) throws -> BridgeClient {
-        guard let client = clients[env] else { throw BridgeError("That computer is no longer in Shed") }
+    func call<T: Decodable>(_ env: String, _ op: ClientOp, as type: T.Type) async throws -> T {
+        try JSONDecoder().decode(Reply<T>.self, from: try await call(env, op)).data
+    }
+
+    private func client(_ env: String) throws -> any BridgeCalling {
+        guard let client = standIns[env] ?? clients[env] else { throw BridgeError("That computer is no longer in Shed") }
         return client
     }
 
-    /// The client a session's ops go to, and the id its bridge knows it by.
-    private func route(_ sessionId: String) throws -> (client: BridgeClient, env: String, raw: String) {
-        guard let (env, raw) = Self.split(sessionId) else { throw BridgeError("Unknown session") }
-        return (try client(env), env, raw)
+    /// The computer a session's ops go to, and the id its bridge knows it by.
+    private func route(_ sessionId: String) throws -> (env: String, raw: String) {
+        guard let route = Self.split(sessionId) else { throw BridgeError("Unknown session") }
+        return route
     }
 
     /// Asks the open session's bridge for `op`, which is given the id that bridge knows the session by.
@@ -68,15 +89,14 @@ extension SessionStore {
 
     /// Throws to the sheet that asked, which shows why: an alert behind a sheet never appears on the Mac.
     public func createSession(in env: String, agent: AgentKind, cwd: String, model: String?, thinking: String?, firstMessage: String? = nil) async throws {
-        let client = try client(env)
         let create = ClientOp.createSession(agent: agent, cwd: cwd, model: model?.isEmpty == false ? model : nil,
                                             thinking: thinking?.isEmpty == false ? thinking : nil)
-        let created = try await client.call(create, as: SessionSummary.self)
+        let created = try await call(env, create, as: SessionSummary.self)
         let summary = tagged(created, env)
         sessions[summary.id] = summary
         select(summary.id)
         if let firstMessage, !firstMessage.isEmpty {
-            do { try await client.call(.send(sessionId: created.id, text: firstMessage)) } catch { report(error) }
+            do { try await call(env, .send(sessionId: created.id, text: firstMessage)) } catch { report(error) }
         }
     }
 
@@ -135,7 +155,7 @@ extension SessionStore {
         Task {
             do {
                 let to = try route(id)
-                try await to.client.call(.renameSession(sessionId: to.raw, name: name))
+                try await call(to.env, .renameSession(sessionId: to.raw, name: name))
             } catch { report(error) }
         }
     }
@@ -147,7 +167,7 @@ extension SessionStore {
         Task {
             do {
                 let to = try route(id)
-                try await to.client.call(.deleteSession(sessionId: to.raw))
+                try await call(to.env, .deleteSession(sessionId: to.raw))
             } catch { report(error) }
         }
     }
@@ -158,43 +178,43 @@ extension SessionStore {
             struct Model: Decodable { let provider: String; let id: String }
             let models: [Model]
         }
-        let listed = try await client(env).call(.listAgentModels(agent: agent), as: Listed.self)
+        let listed = try await call(env, .listAgentModels(agent: agent), as: Listed.self)
         return listed.models.map { "\($0.provider)/\($0.id)" }
     }
 
     /// Folders on an environment's computer; nil path means the home folder.
     public func listDir(in env: String, _ path: String?, hidden: Bool = false) async throws -> DirListing {
-        try await client(env).call(.listDir(path: path, hidden: hidden), as: DirListing.self)
+        try await call(env, .listDir(path: path, hidden: hidden), as: DirListing.self)
     }
 
     /// The GitHub account signed in with `gh` on that computer: contributions and open pull requests.
     public func githubOverview(in env: String) async throws -> GitHubOverview {
-        try await client(env).call(.githubOverview, as: GitHubOverview.self)
+        try await call(env, .githubOverview, as: GitHubOverview.self)
     }
 
     /// The branch of the repository `folder` is in on that computer, read with its `git`. Nil when it is detached or in
     /// no repository.
     public func gitBranch(in env: String, of folder: String) async throws -> String? {
         struct Reply: Decodable { let branch: String? }
-        return try await client(env).call(.gitBranch(path: folder), as: Reply.self).branch
+        return try await call(env, .gitBranch(path: folder), as: Reply.self).branch
     }
 
     public func listJobs(_ sessionId: String) async throws -> [BackgroundJob] {
         let to = try route(sessionId)
-        return try await to.client.call(.listJobs(sessionId: to.raw), as: [BackgroundJob].self)
+        return try await call(to.env, .listJobs(sessionId: to.raw), as: [BackgroundJob].self)
     }
 
     public func jobOutput(_ sessionId: String, _ jobId: String, lines: Int = 200) async throws -> String {
         struct Tail: Decodable { let tail: String }
         let to = try route(sessionId)
-        return try await to.client.call(.jobOutput(sessionId: to.raw, jobId: jobId, lines: lines), as: Tail.self).tail
+        return try await call(to.env, .jobOutput(sessionId: to.raw, jobId: jobId, lines: lines), as: Tail.self).tail
     }
 
     /// Labels picked per question id; no answers dismisses the question.
     public func answerQuestion(_ sessionId: String, _ questionId: String, picked: [String: [String]]) async {
         do {
             let to = try route(sessionId)
-            try await to.client.call(.answerQuestion(sessionId: to.raw, questionId: questionId, picked: picked))
+            try await call(to.env, .answerQuestion(sessionId: to.raw, questionId: questionId, picked: picked))
         } catch {
             report(error)
         }
@@ -203,7 +223,7 @@ extension SessionStore {
     public func killJob(_ sessionId: String, _ jobId: String) async {
         do {
             let to = try route(sessionId)
-            try await to.client.call(.killJob(sessionId: to.raw, jobId: jobId))
+            try await call(to.env, .killJob(sessionId: to.raw, jobId: jobId))
         } catch {
             report(error)
         }
@@ -213,7 +233,7 @@ extension SessionStore {
         guard let id = selectedId else { return }
         do {
             let to = try route(id)
-            models = try await to.client.call(.listModels(sessionId: to.raw), as: [ModelInfo].self)
+            models = try await call(to.env, .listModels(sessionId: to.raw), as: [ModelInfo].self)
         } catch {
             report(error)
         }
