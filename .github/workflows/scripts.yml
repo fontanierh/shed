@@ -1,14 +1,15 @@
 name: scripts
 
-# The parts of Shed that are neither Rust nor Swift: the installer, the DeepSeek Harness plugins, the web module for
-# Prime. Nothing here runs them. It checks that each file still parses, and that the shell scripts have no error
-# shellcheck is sure of.
+# The parts of Shed that are neither Rust nor Swift: the installer and what it installs, the DeepSeek Harness
+# plugins, Pi's extensions, the web module for Prime. Nothing here runs them. It checks that each file still parses,
+# and that the shell scripts have no error shellcheck is sure of. Pi's extensions are checked for syntax only, not
+# for types: the packages they import are Pi's.
 on:
   pull_request:
-    paths: ["**.sh", "**.mjs", "**.py", ".github/workflows/scripts.yml"]
+    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
   push:
     branches: [main]
-    paths: ["**.sh", "**.mjs", "**.py", ".github/workflows/scripts.yml"]
+    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
 
 concurrency:
   group: scripts-${{ github.ref }}
@@ -30,3 +31,12 @@ jobs:
         run: git ls-files -z '*.mjs' | xargs -0 -n1 node --check
       - name: Python files parse
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: TypeScript files parse
+        run: git ls-files -z '*.ts' | xargs -0 node --no-warnings .github/scripts/ts-syntax.mjs
+      - name: The installer's JSON files parse
+        run: git ls-files -z 'setup/*.json' 'setup/**/*.json' | xargs -0 -n1 python3 -m json.tool >/dev/null
+      - name: The Open Codex patches are patches
+        run: git ls-files -z '*.patch' | xargs -0 -n1 git apply --numstat

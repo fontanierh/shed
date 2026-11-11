@@ -54,7 +54,7 @@ struct Unanswered: LocalizedError {
 protocol BridgeConnection: AnyObject {
     var onMessage: (ServerMessage) -> Void { get set }
     var onState: (BridgeClient.State) -> Void { get set }
-    func connect(to url: URL)
+    func connect(to url: URL, token: String)
     func disconnect()
     func checkAlive()
     /// Send an operation and wait for its reply; returns the raw reply JSON.
@@ -78,6 +78,7 @@ public final class BridgeClient: BridgeConnection {
     private let urlSession = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
     private var endpoint: URL?
+    private var token = ""
     private var generation = 0
     private var connected = false
     private var nextId = 0
@@ -87,7 +88,9 @@ public final class BridgeClient: BridgeConnection {
 
     public init() {}
 
-    public func connect(to url: URL) {
+    /// The token goes in a header, as for media and uploads: a URL is what proxies and logs keep.
+    public func connect(to url: URL, token: String) {
+        self.token = token
         generation += 1
         let gen = generation
         task?.cancel(with: .goingAway, reason: nil)
@@ -95,7 +98,9 @@ public final class BridgeClient: BridgeConnection {
         endpoint = url
         connected = false
         onState(.connecting)
-        let task = urlSession.webSocketTask(with: url)
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let task = urlSession.webSocketTask(with: request)
         task.maximumMessageSize = 64 << 20
         self.task = task
         task.resume()
@@ -114,7 +119,7 @@ public final class BridgeClient: BridgeConnection {
             Task { _ = try? await call(.ping) }
             try? await Task.sleep(for: .seconds(10))
             guard gen == generation, connected, lastHeard < asked else { continue }
-            connect(to: endpoint)
+            connect(to: endpoint, token: token)
         }
     }
 
@@ -165,7 +170,7 @@ public final class BridgeClient: BridgeConnection {
             connected = false
             onState(.disconnected(error.localizedDescription))
             try? await Task.sleep(for: .seconds(2))
-            if gen == generation, let endpoint { connect(to: endpoint) }
+            if gen == generation, let endpoint { connect(to: endpoint, token: token) }
         }
     }
 
@@ -178,7 +183,7 @@ public final class BridgeClient: BridgeConnection {
             guard error != nil else { return }
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
-                self.connect(to: endpoint)
+                self.connect(to: endpoint, token: self.token)
             }
         }
     }

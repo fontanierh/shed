@@ -26,10 +26,25 @@ if [ -n "$ts" ] && [ -f "$sites" ]; then
     /"port" =>/ { port = $3 }
     /"served" =>/ { served = $3 }
     /^  }/ { if (served != "") print served; else if (port != "") print port; port = served = "" }')"
+  # `off` also fails for a route that is already gone, so what is still published is read from the status, not
+  # from how `off` ended. A route that stays, or a status that can't be read, keeps the record: it is the only
+  # place that says which routes are Shed's, and running this again tries them again.
   for port in $ports; do
     "$ts" serve --https="$port" off 2>/dev/null && echo "removed the site route on port $port"
   done
-  rm -f "$sites"
+  left=""
+  if status="$("$ts" serve status 2>/dev/null)"; then
+    for port in $ports; do
+      printf '%s\n' "$status" | grep -Eq "^https://[^/ ]+:$port( |/|$)" && left="$left $port"
+    done
+  else
+    left=" (unknown: tailscale gave no status)"
+  fi
+  if [ -z "$left" ]; then
+    rm -f "$sites"
+  else
+    echo "still published:$left. Kept $sites; running this again tries them again." >&2
+  fi
 fi
 
 # What keeps other Macs in step with this checkout.

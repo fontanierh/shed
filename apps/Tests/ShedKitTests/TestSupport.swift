@@ -52,7 +52,7 @@ final class ScriptedBridge: BridgeConnection {
 
     func count(_ name: ClientOp.Name) -> Int { sent.filter { $0 == name }.count }
 
-    func connect(to url: URL) { onState(reachable ? .connected : .disconnected("Out of reach")) }
+    func connect(to url: URL, token: String) { onState(reachable ? .connected : .disconnected("Out of reach")) }
     func disconnect() { onState(.disconnected(nil)) }
     func checkAlive() {}
 
