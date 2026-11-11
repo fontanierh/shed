@@ -267,4 +267,24 @@ final class SessionStoreTests: XCTestCase {
             )
         )
     }
+
+    @MainActor func testSwitchingSessionsReplacesAllOpenSessionStateIncludingLoadingEarlier() async {
+        let gate = AsyncStream<Void>.makeStream()
+        let bridge = ScriptedBridge([.loadEarlier: [.reply(["items": [], "earlier": 0])]])
+        bridge.gates[.loadEarlier] = gate.stream
+        let store = SessionStore(on: bridge)
+        store.apply(.sessions([summary("a"), summary("b")]), from: "one")
+
+        store.select("one:a")
+        store.apply(.snapshot(sessionId: "a", items: [Item(id: "i1", kind: .user, text: "hi")], earlier: 5), from: "one")
+        let loadingA = Task { await store.loadEarlier() }
+        _ = await eventually { store.loadingEarlier }
+        XCTAssertTrue(store.loadingEarlier)
+
+        store.select("one:b")
+        XCTAssertFalse(store.loadingEarlier)
+
+        gate.continuation.finish()
+        await loadingA.value
+    }
 }

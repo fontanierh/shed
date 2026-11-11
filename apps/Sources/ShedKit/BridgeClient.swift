@@ -64,6 +64,46 @@ protocol BridgeConnection: AnyObject {
 
 struct Reply<T: Decodable>: Decodable { let data: T }
 
+/// One WebSocket connection, so `BridgeClient` can be driven over a scripted fake in tests.
+@MainActor
+protocol WebSocketTransport: AnyObject {
+    func send(_ text: String, completion: @escaping @Sendable (Error?) -> Void)
+    func receive() async throws -> Data
+    func sendPing(completion: @escaping @Sendable (Error?) -> Void)
+    func cancel()
+}
+
+@MainActor
+private final class LiveWebSocket: WebSocketTransport {
+    private let task: URLSessionWebSocketTask
+
+    init(_ task: URLSessionWebSocketTask) {
+        task.maximumMessageSize = 64 << 20
+        self.task = task
+        task.resume()
+    }
+
+    func send(_ text: String, completion: @escaping @Sendable (Error?) -> Void) {
+        self.task.send(.string(text), completionHandler: completion)
+    }
+
+    func receive() async throws -> Data {
+        switch try await self.task.receive() {
+        case .string(let text): return Data(text.utf8)
+        case .data(let data): return data
+        @unknown default: return Data()
+        }
+    }
+
+    func sendPing(completion: @escaping @Sendable (Error?) -> Void) {
+        self.task.sendPing(pongReceiveHandler: completion)
+    }
+
+    func cancel() {
+        self.task.cancel(with: .goingAway, reason: nil)
+    }
+}
+
 @MainActor
 public final class BridgeClient: BridgeConnection {
     public enum State: Equatable, Sendable {
@@ -75,37 +115,51 @@ public final class BridgeClient: BridgeConnection {
     public var onMessage: (ServerMessage) -> Void = { _ in }
     public var onState: (State) -> Void = { _ in }
 
-    private let urlSession = URLSession(configuration: .default)
-    private var task: URLSessionWebSocketTask?
+    private let makeSocket: @MainActor (URLRequest) -> any WebSocketTransport
+    private let pause: @MainActor (Duration) async throws -> Void
+    private var socket: (any WebSocketTransport)?
     private var endpoint: URL?
     private var token = ""
     private var generation = 0
     private var connected = false
     private var nextId = 0
-    private let replies = PendingReplies()
+    private let replies: PendingReplies
     /// When the bridge last sent anything, for telling a quiet connection from a dead one.
     private var lastHeard = ContinuousClock.now
 
-    public init() {}
+    public convenience init() {
+        let session = URLSession(configuration: .default)
+        self.init(
+            socket: { LiveWebSocket(session.webSocketTask(with: $0)) },
+            pause: { try await Task.sleep(for: $0) }
+        )
+    }
+
+    init(
+        socket: @escaping @MainActor (URLRequest) -> any WebSocketTransport,
+        pause: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
+        self.makeSocket = socket
+        self.pause = pause
+        self.replies = PendingReplies(pause: pause)
+    }
 
     /// The token goes in a header, as for media and uploads: a URL is what proxies and logs keep.
     public func connect(to url: URL, token: String) {
         self.token = token
         generation += 1
         let gen = generation
-        task?.cancel(with: .goingAway, reason: nil)
+        socket?.cancel()
         failPending(ConnectionLost(maybeDelivered: true))
         endpoint = url
         connected = false
         onState(.connecting)
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let task = urlSession.webSocketTask(with: request)
-        task.maximumMessageSize = 64 << 20
-        self.task = task
-        task.resume()
-        Task { await receiveLoop(task, gen) }
-        Task { await heartbeat(gen) }
+        let socket = makeSocket(request)
+        self.socket = socket
+        Task { await self.receiveLoop(socket, gen) }
+        Task { await self.heartbeat(gen) }
     }
 
     /// A connection can die without an error (a network change, a Mac asleep behind Tailscale): the socket stays open
@@ -113,11 +167,11 @@ public final class BridgeClient: BridgeConnection {
     /// replaced, which also brings a fresh snapshot of the open session.
     private func heartbeat(_ gen: Int) async {
         while gen == generation {
-            try? await Task.sleep(for: .seconds(5))
+            guard (try? await pause(.seconds(5))) != nil else { return }
             guard gen == generation, connected, let endpoint, ContinuousClock.now - lastHeard > .seconds(15) else { continue }
             let asked = ContinuousClock.now
-            Task { _ = try? await call(.ping) }
-            try? await Task.sleep(for: .seconds(10))
+            Task { _ = try? await self.call(.ping) }
+            guard (try? await pause(.seconds(10))) != nil else { return }
             guard gen == generation, connected, lastHeard < asked else { continue }
             connect(to: endpoint, token: token)
         }
@@ -125,20 +179,21 @@ public final class BridgeClient: BridgeConnection {
 
     public func disconnect() {
         generation += 1
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
+        socket?.cancel()
+        socket = nil
+        connected = false
         failPending(ConnectionLost(maybeDelivered: true))
         onState(.disconnected(nil))
     }
 
     @discardableResult
     func call(_ op: ClientOp) async throws -> Data {
-        guard let task, connected else { throw ConnectionLost(maybeDelivered: false) }
+        guard let socket, connected else { throw ConnectionLost(maybeDelivered: false) }
         nextId += 1
         let id = "c\(nextId)"
         let text = try op.message(id: id)
         return try await replies.reply(to: id, within: op.replyLimit) {
-            task.send(.string(text)) { [weak self] error in
+            socket.send(text) { [weak self] error in
                 guard error != nil else { return }
                 Task { @MainActor in self?.replies.settle(id, .failure(ConnectionLost(maybeDelivered: false))) }
             }
@@ -153,23 +208,19 @@ public final class BridgeClient: BridgeConnection {
         let code: String?
     }
 
-    private func receiveLoop(_ task: URLSessionWebSocketTask, _ gen: Int) async {
+    private func receiveLoop(_ socket: any WebSocketTransport, _ gen: Int) async {
         do {
             while true {
-                let message = try await task.receive()
+                let data = try await socket.receive()
                 guard gen == generation else { return }
-                switch message {
-                case .string(let text): handle(Data(text.utf8))
-                case .data(let data): handle(data)
-                @unknown default: break
-                }
+                handle(data)
             }
         } catch {
             guard gen == generation else { return }
             failPending(ConnectionLost(maybeDelivered: true))
             connected = false
             onState(.disconnected(error.localizedDescription))
-            try? await Task.sleep(for: .seconds(2))
+            guard (try? await pause(.seconds(2))) != nil else { return }
             if gen == generation, let endpoint { connect(to: endpoint, token: token) }
         }
     }
@@ -177,9 +228,9 @@ public final class BridgeClient: BridgeConnection {
     /// After the app was suspended: a socket that no longer answers a ping is replaced at once, rather than when the
     /// next request fails on it.
     public func checkAlive() {
-        guard let task, let endpoint else { return }
+        guard let socket, let endpoint else { return }
         let gen = generation
-        task.sendPing { [weak self] error in
+        socket.sendPing { [weak self] error in
             guard error != nil else { return }
             Task { @MainActor in
                 guard let self, gen == self.generation else { return }
