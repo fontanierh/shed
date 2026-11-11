@@ -80,7 +80,8 @@ extension SessionStore {
 
     private func saveEnvironments() {
         if let unreadEnvironments {
-            defaults.set(unreadEnvironments, forKey: "environmentsUnread")
+            // A copy kept before stays: this list was saved from what could be read then, so that one holds more.
+            if defaults.data(forKey: "environmentsUnread") == nil { defaults.set(unreadEnvironments, forKey: "environmentsUnread") }
             self.unreadEnvironments = nil
         }
         defaults.set(try? JSONEncoder().encode(environments), forKey: "environments")
