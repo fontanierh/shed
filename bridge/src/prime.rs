@@ -184,7 +184,10 @@ impl PrimeDaemon {
         let mut buf = Vec::new();
 
         // The server greets first; refuse a protocol we haven't verified.
-        lines.read_until(b'\n', &mut buf).await?;
+        // Under a limit: a daemon that accepts and never greets would hold this connection, and its retries, forever.
+        tokio::time::timeout(Duration::from_secs(10), lines.read_until(b'\n', &mut buf))
+            .await
+            .map_err(|_| anyhow!("Prime daemon did not greet within 10 s"))??;
         let hello: Value = serde_json::from_slice(&buf)?;
         let version = hello["protocol"]["version"].as_u64().unwrap_or(0);
         if hello["type"] != "daemon_hello" || version != PROTOCOL_VERSION {
@@ -208,7 +211,14 @@ impl PrimeDaemon {
             })
         };
 
-        let roster = self.supervisor("roster_subscribe", json!({})).await?;
+        let roster = match self.supervisor("roster_subscribe", json!({})).await {
+            Ok(roster) => roster,
+            Err(e) => {
+                // The next attempt opens its own connection and reader: this one goes with it.
+                reader.abort();
+                return Err(e);
+            }
+        };
         let rows: Vec<PrimeRow> = roster["roster"]
             .as_array()
             .into_iter()

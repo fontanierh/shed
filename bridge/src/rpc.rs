@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -115,6 +115,15 @@ pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
         .await
         .map_err(|_| anyhow!("{program} took too long to list its models"))?
         .map_err(|e| anyhow!("failed to run {program}: {e}"))?;
+    // A listing that failed is not an empty one: said, not cached as "no models".
+    if !output.status.success() {
+        let said = String::from_utf8_lossy(&output.stderr);
+        let said = said.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        bail!(
+            "{program} could not list its models ({}): {said}",
+            output.status
+        );
+    }
     let text = String::from_utf8_lossy(&output.stdout);
     let models: Vec<Value> = text
         .lines()

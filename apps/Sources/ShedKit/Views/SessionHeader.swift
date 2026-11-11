@@ -101,9 +101,13 @@ struct SessionHeader: View {
             }
         }
         .confirmRestartKernel($restartingKernel) { store.restartKernel() }
-        .task(id: session.cwd) {
-            guard let env = store.environment(of: session.id)?.id,
-                  let found = try? await store.gitBranch(in: env, of: session.cwd) else { return }
+        // Keyed on the session too: the header stays the same view across sessions, and what it found for one is
+        // never shown for the next. Cleared at once, and set to what was found, no branch included.
+        .task(id: "\(session.id)\n\(session.cwd)") {
+            branch = nil
+            guard let env = store.environment(of: session.id)?.id else { return }
+            let found = (try? await store.gitBranch(in: env, of: session.cwd)) ?? nil
+            guard !Task.isCancelled else { return }
             withAnimation(.easeOut(duration: 0.2)) { branch = found }
         }
         .padding(.leading, 20)

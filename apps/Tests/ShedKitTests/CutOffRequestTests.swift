@@ -299,4 +299,36 @@ final class CutOffRequestTests: XCTestCase {
         let ids = sendIds(bridge)
         XCTAssertNotEqual(ids[0], ids[1])
     }
+
+    /// The same words sent earlier are in the transcript already: they are not this message, which never got there.
+    @MainActor func testAMessageWithTheWordsOfAnEarlierOneIsSentAgainWhenOnlyTheEarlierOneIsThere() async {
+        let bridge = ScriptedBridge([.send: [.lost(maybeDelivered: true)]])
+        let store = open(bridge, level: 1)
+        let earlier = [Item(id: "u1", kind: .user, text: "continue")]
+        store.apply(.snapshot(sessionId: "s", items: earlier, earlier: 0), from: "one")
+        store.send("continue")
+        store.apply(.snapshot(sessionId: "s", items: earlier, earlier: 0), from: "one")
+        let again = await eventually { bridge.count(.send) == 2 }
+        XCTAssertTrue(again)
+    }
+
+    /// Before a computer's first list, its sessions are unknown, not ended: one opened while it is out of reach stays
+    /// open, to be attached when the connection is back.
+    @MainActor func testASessionOpenedBeforeItsComputerIsReachedStaysOpen() async {
+        let store = SessionStore(on: ScriptedBridge(reachable: false))
+        store.select("one:later")
+        await store.attachFailed("one:later", Unreached())
+        XCTAssertEqual(store.selectedId, "one:later")
+        XCTAssertNil(store.errorMessage)
+    }
+
+    @MainActor func testAStopThatFoundNothingToStopSaysSo() async {
+        let bridge = ScriptedBridge([.killJob: [.reply(["killed": false])]])
+        let store = open(bridge, level: 2)
+        await store.killJob("one:s", "job1")
+        XCTAssertEqual(store.errorMessage, "Nothing was stopped: that command had already ended.")
+        let worked = open(ScriptedBridge([.killJob: [.reply(["killed": true])]]), level: 2)
+        await worked.killJob("one:s", "job1")
+        XCTAssertNil(worked.errorMessage)
+    }
 }

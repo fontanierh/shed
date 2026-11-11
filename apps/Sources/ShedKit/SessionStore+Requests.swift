@@ -81,6 +81,10 @@ extension SessionStore {
     }
 
     func attachFailed(_ id: String, _ error: Error) async {
+        // A computer out of reach shows as the connection state, and the open session is attached again when its
+        // connection is back: nothing the user asked for was given up. First, since before that computer's first
+        // list every one of its sessions is unknown here, and unknown is not ended.
+        if error is Unreached || error is Unconfirmed { return }
         // The session ended while the app was away (e.g. the one it reopens at launch): just leave it.
         if sessions[id] == nil {
             if selectedId == id { select(nil) }
@@ -95,9 +99,6 @@ extension SessionStore {
             if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
             return
         }
-        // A computer out of reach shows as the connection state, and the open session is attached again when its
-        // connection is back: nothing the user asked for was given up.
-        if error is Unreached || error is Unconfirmed { return }
         report(error)
     }
 
@@ -120,17 +121,17 @@ extension SessionStore {
 
     /// Sends a message, the composer's or the first of a new session. Cut off by a dropped connection, it goes again
     /// once the connection is back. A bridge that takes a message once per id is simply sent it again. An older one
-    /// would run it twice if it had arrived, so there `landed` says whether it did, and with nothing to tell by the
-    /// message is not sent again. A message given up throws what to show, as `call` does.
-    private func deliver(_ message: ClientOp, to env: String, landed: (() async -> Bool)? = nil) async throws {
+    /// would run it twice if it had arrived, so there `landed` says whether it did; when it can't tell (nil), or
+    /// there is no `landed`, the message is not sent again. A message given up throws what to show, as `call` does.
+    private func deliver(_ message: ClientOp, to env: String, landed: (() async -> Bool?)? = nil) async throws {
         do {
             try await client(env).call(message)
         } catch let lost as ConnectionLost {
             do {
                 guard await reconnected(env) else { throw lost }
                 if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
-                    guard let landed else { throw lost }
-                    if await landed() { return }
+                    guard let landed, let arrived = await landed() else { throw lost }
+                    if arrived { return }
                 }
                 try await client(env).call(message)
             } catch let again as ConnectionLost {
@@ -147,14 +148,23 @@ extension SessionStore {
         let local = Item(id: "sending-\(UUID().uuidString)", kind: .user, text: text, status: .pending, at: Date.now.timeIntervalSince1970 * 1000)
         if !busy { sending[id, default: []].append(local) }
         let message = ClientOp.send(sessionId: raw, text: text, sendId: UUID().uuidString)
+        // How many times the open transcript already holds this text: the same words sent earlier must not be taken
+        // for this message having arrived.
+        let said = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let copies = { [self] in items.filter { $0.kind == .user && $0.text.trimmingCharacters(in: .whitespacesAndNewlines) == said }.count }
+        let before = copies()
         Task {
             do {
                 try await deliver(message, to: env) { [self] in
                     // The session's transcript, sent afresh on reconnecting, says whether it arrived after all.
                     await pause(.seconds(2))
-                    let queued = sessions[id]?.queue
-                    return busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
-                                : sending[id]?.contains { $0.id == local.id } != true
+                    if busy {
+                        let queued = sessions[id]?.queue
+                        return queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true
+                    }
+                    // Another session open by now: this one's transcript is not here to tell.
+                    guard selectedId == id else { return nil }
+                    return copies() > before
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
                 await pause(.seconds(60))
@@ -255,7 +265,12 @@ extension SessionStore {
     public func killJob(_ sessionId: String, _ jobId: String) async {
         do {
             let to = try route(sessionId)
-            try await call(to.env, .killJob(sessionId: to.raw, jobId: jobId))
+            // `killed` is false when there was nothing left to stop: said, so a stop that did nothing is not taken
+            // for one that worked.
+            let answer = try await call(to.env, .killJob(sessionId: to.raw, jobId: jobId), as: Killed.self)
+            if answer.killed == false {
+                errorMessage = "Nothing was stopped: that command had already ended."
+            }
         } catch {
             report(error)
         }
@@ -265,9 +280,17 @@ extension SessionStore {
         guard let id = selectedId else { return }
         do {
             let to = try route(id)
-            models = try await call(to.env, .listModels(sessionId: to.raw), as: [ModelInfo].self)
+            let listed = try await call(to.env, .listModels(sessionId: to.raw), as: [ModelInfo].self)
+            // Another session may be open by now: its picker shows its own agent's models, not these.
+            guard selectedId == id else { return }
+            models = listed
         } catch {
             report(error)
         }
     }
+}
+
+/// The answer to `kill_job`.
+struct Killed: Decodable {
+    let killed: Bool?
 }
