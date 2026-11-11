@@ -272,7 +272,7 @@ impl RpcChild {
         Ok((rpc, rx))
     }
 
-    pub async fn send(&self, ask: crate::ask::Ask) -> Result<Value> {
+    async fn send(&self, ask: crate::ask::Ask) -> Result<Value> {
         if let Some(dsh) = &self.dsh {
             return dsh.send(ask).await;
         }
@@ -311,13 +311,13 @@ impl RpcChild {
     }
 
     /// The agent process's pid, while it is running.
-    pub fn pid(&self) -> Option<u32> {
+    fn pid(&self) -> Option<u32> {
         self.child.lock().ok()?.as_ref().and_then(|c| c.id())
     }
 
     /// Close stdin for an orderly shutdown; kill if the agent hasn't exited after 3 seconds. Returns once the process
     /// is gone, so a resume after it can never run a second agent on the same session file.
-    pub async fn close(&self) {
+    async fn close(&self) {
         match &self.dsh {
             Some(dsh) => dsh.close().await,
             None => {
@@ -366,6 +366,20 @@ impl RpcChild {
         } else {
             format!("agent exited{code}: {}", tail.join("\n"))
         }
+    }
+}
+
+impl crate::agent::Live for RpcChild {
+    fn send(&self, ask: crate::ask::Ask) -> futures_util::future::BoxFuture<'_, Result<Value>> {
+        Box::pin(RpcChild::send(self, ask))
+    }
+
+    fn pid(&self) -> Option<u32> {
+        RpcChild::pid(self)
+    }
+
+    fn close(&self) -> futures_util::future::BoxFuture<'_, ()> {
+        Box::pin(RpcChild::close(self))
     }
 }
 

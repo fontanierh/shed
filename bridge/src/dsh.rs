@@ -13,25 +13,163 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use futures_util::future::BoxFuture;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::agent::{file_stem, Agent, JobsFrom, Sessions, Started, Starts, SubagentsFrom, Verbs};
+use crate::agent_wire::ConversationId;
 use crate::ask::{Ask, Delivery};
 use crate::channel::Offer;
 use crate::requests::{Requests, Unanswered, QUICK};
-use crate::rpc::{ChildOutput, SpawnOptions};
+use crate::rpc::{ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
+use crate::store::Store;
 
 /// The plugin and the profile layer that loads it, kept with the bridge so both always match.
 const PLUGIN: &str = include_str!("../dsh/shed.mjs");
 /// dsh's web_search and web_fetch through Shed's web provider, loaded when one is set up here.
 const WEB_PLUGIN: &str = include_str!("../dsh/shed-web.mjs");
-pub const PROFILE: &str = "shed";
+const PROFILE: &str = "shed";
+
+pub fn agent(store: Store) -> Arc<dyn Agent> {
+    Arc::new(Deepseek(store))
+}
+
+struct Deepseek(Store);
+
+impl Agent for Deepseek {
+    fn sessions(&self) -> Sessions<'_> {
+        Sessions::Started(self)
+    }
+
+    fn models(&self) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(list_models(&self.0))
+    }
+
+    fn jobs(&self) -> JobsFrom {
+        JobsFrom::Agent
+    }
+
+    fn subagents(&self) -> SubagentsFrom {
+        SubagentsFrom::Events
+    }
+
+    fn gateway_session(
+        &self,
+        session_file: Option<&str>,
+        _conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        Some(file_stem(session_file)?.to_string())
+    }
+
+    fn cost(&self, _session_file: Option<&str>, reported: f64, _before: f64) -> f64 {
+        reported
+    }
+
+    fn spend_includes_subagents(&self) -> bool {
+        false
+    }
+
+    fn verbs(&self) -> &'static dyn Verbs {
+        &DshVerbs
+    }
+}
+
+impl Starts for Deepseek {
+    fn start(&self, opts: &SpawnOptions) -> Result<Started> {
+        // The session's model, reasoning effort and resumption go to the plugin once it starts.
+        let layer = install_profile(&self.0)
+            .context("the Shed profile for dsh can't be written")?
+            .to_string_lossy()
+            .into_owned();
+        let launch = Launch {
+            program: "dsh".into(),
+            args: ["--profile", PROFILE, "--patch", &layer]
+                .iter()
+                .map(|a| a.to_string())
+                .collect(),
+            // Shed runs its agents without asking or a sandbox, as it does Pi and Prime.
+            env: vec![("DSH_PERMISSION_MODE".into(), "danger-full-access".into())],
+            protocol: Protocol::Dsh,
+        };
+        let (child, output) = RpcChild::spawn(launch, opts)?;
+        Ok((child, output))
+    }
+}
+
+/// DeepSeek Harness's commands: it compacts on its own, opens one conversation per session, and asks questions.
+struct DshVerbs;
+
+impl Verbs for DshVerbs {
+    fn message(&self, text: String, busy: bool) -> Ask {
+        match busy {
+            true => Ask::Steer(text),
+            false => Ask::Prompt {
+                message: text,
+                delivery: Delivery::Turn,
+            },
+        }
+    }
+
+    fn follow_up(&self, text: String) -> Option<Ask> {
+        Some(Ask::FollowUp(text))
+    }
+
+    fn abort(&self) -> Ask {
+        Ask::Abort
+    }
+
+    fn compact(&self, instructions: Option<String>) -> Ask {
+        Ask::Compact { instructions }
+    }
+
+    fn auto_compaction(&self, _: bool) -> Option<Ask> {
+        None
+    }
+
+    fn new_session(&self) -> Option<Ask> {
+        None
+    }
+
+    fn clear_goal(&self) -> Option<Ask> {
+        None
+    }
+
+    fn stop_tool(&self) -> Ask {
+        Ask::Abort
+    }
+
+    fn interrupt(&self, note: String) -> [Ask; 2] {
+        [
+            Ask::Abort,
+            Ask::Prompt {
+                message: note,
+                delivery: Delivery::Turn,
+            },
+        ]
+    }
+
+    fn restart_kernel(&self, _: Option<String>) -> Option<BoxFuture<'static, Result<Value>>> {
+        None
+    }
+
+    fn answer(&self, question_id: String, answers: Vec<Value>) -> Option<Ask> {
+        Some(Ask::Answer {
+            question_id,
+            answers,
+        })
+    }
+
+    fn thinking_levels(&self) -> Option<Ask> {
+        Some(Ask::ThinkingLevels)
+    }
+}
 
 type PipeWriter = std::pin::Pin<Box<dyn AsyncWrite + Send>>;
 
-pub struct Dsh {
+pub(crate) struct Dsh {
     stdin: tokio::sync::Mutex<PipeWriter>,
     requests: Requests<u64>,
     next_id: AtomicU64,
@@ -46,7 +184,7 @@ pub struct Dsh {
 /// a question nobody answers within two minutes lets the agent carry on, and the answer still reaches it later. The
 /// profile's own `cordis.patch.yml` is the user's and is created only when missing. With Open Codex, the layer also
 /// makes it dsh's one model provider, replacing the providers configured in `cordis.patch.yml`. Returns the layer.
-pub fn install_profile(store: &crate::store::Store) -> Result<PathBuf> {
+fn install_profile(store: &Store) -> Result<PathBuf> {
     let dir = crate::host::home().join(".dsh/profiles").join(PROFILE);
     std::fs::create_dir_all(&dir)?;
     let package = json!({
@@ -113,7 +251,7 @@ fn web_layer(
 
 /// The models the `shed` profile has set up, as `[{provider, id, name}]`, for choosing one before a session starts:
 /// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session.
-pub async fn list_models(store: &crate::store::Store) -> Result<Value> {
+async fn list_models(store: &Store) -> Result<Value> {
     let layer = install_profile(store)?;
     let home = crate::host::home_text();
     let mut child = tokio::process::Command::new("dsh")
