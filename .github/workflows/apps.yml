@@ -26,3 +26,16 @@ jobs:
       - run: swift --version
       - run: swift test
         working-directory: apps
+
+  # The phone app and its Live Activity extension: `swift test` builds the package for the Mac only, so code under
+  # `#if os(iOS)` and the Xcode project itself are compiled nowhere else. Unsigned, for the simulator.
+  ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version
+      - run: >
+          xcodebuild -project apps/iOS/Shed.xcodeproj -scheme Shed
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/derived"
+          CODE_SIGNING_ALLOWED=NO build

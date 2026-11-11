@@ -105,7 +105,7 @@ The rules the bridge keeps to:
 Known limits:
 
 - **A transcript reloaded while its agent streams.** After a compaction, a new conversation or a resume, the bridge asks the agent for its whole list of messages and replaces the transcript with it. The agent's events keep arriving meanwhile, on another path, and the bridge cannot tell whether an event came before or after the answer was written. A reply or a tool call that ends after the reload comes out whole (`transcript.rs`, the `reload` tests). A complete message that lands in that moment can be missing, or shown twice, until the next reload. Closing it needs the position of the answer among the events from each of the three drivers.
-- **The token.** The apps send the bridge's token in the address they connect to and keep it in their preferences, not in the keychain.
+- **The token.** The apps keep the bridge's token in their preferences, not in the keychain. They send it in a header; the bridge also takes it in the address (`?token=`), which apps built before that change still use.
 
 The apps, in `apps/Sources/ShedKit`:
 
@@ -117,7 +117,7 @@ The apps, in `apps/Sources/ShedKit`:
 | `SessionStore+….swift` | What changes that state, by job: the computers and their connections, messages coming in, requests going out, the session tree. |
 | `Views/` | The SwiftUI views. `SessionView.swift` is the session screen; its header, composer, model picker and cards are each in their own file. |
 
-Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing. Replies to operations are not covered.
+Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing. Of a reply, the envelope and its error codes are covered; what each operation answers with in `data` is not.
 
 ## Adding an agent
 

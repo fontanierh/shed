@@ -159,13 +159,13 @@ extension SessionStore {
     public func connect(_ envId: String) {
         guard let env = environments.first(where: { $0.id == envId }) else { return }
         let client = clients[env.id] ?? makeClient(env.id)
-        guard var components = URLComponents(string: env.url.trimmingCharacters(in: .whitespaces)), components.host != nil else {
+        guard let components = URLComponents(string: env.url.trimmingCharacters(in: .whitespaces)), components.host != nil,
+              let url = components.url
+        else {
             connections[env.id] = .disconnected("Invalid bridge URL")
             return
         }
-        components.queryItems = [URLQueryItem(name: "token", value: token(of: env, fresh: true))]
-        guard let url = components.url else { return }
-        client.connect(to: url)
+        client.connect(to: url, token: token(of: env, fresh: true))
     }
 
     private func makeClient(_ env: String) -> any BridgeConnection {
