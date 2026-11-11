@@ -28,11 +28,12 @@ pub enum AgentKind {
 
 pub struct SpawnOptions {
     pub agent: AgentKind,
+    /// The bridge's id for the session.
+    pub session_id: String,
     pub cwd: String,
     pub model: Option<String>,
     pub thinking: Option<String>,
     pub resume: Option<String>,
-    pub env: Vec<(String, String)>,
 }
 
 /// The process to run for a session.
@@ -159,7 +160,6 @@ impl RpcChild {
         let mut child = Command::new(&program)
             .args(&args)
             .current_dir(&opts.cwd)
-            .envs(opts.env.iter().cloned())
             .envs(env)
             .env(crate::opencodex::KEY_ENV, crate::opencodex::KEY)
             // `shed-web`, the web command the guide tells the agents about.
@@ -387,11 +387,11 @@ mod tests {
         };
         let opts = SpawnOptions {
             agent: AgentKind::Pi,
+            session_id: "s1".into(),
             cwd: "/".into(),
             model: None,
             thinking: None,
             resume: None,
-            env: Vec::new(),
         };
         let (child, _output) = RpcChild::spawn(launch, &opts).unwrap();
         let pid = child.pid().expect("it runs").to_string();

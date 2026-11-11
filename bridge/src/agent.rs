@@ -1,5 +1,6 @@
-//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it and giving it
-//! its place in `Agents`; `docs/architecture.md` says what else a new agent needs.
+//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it (with its
+//! `Verbs`, and `Starts` or `Keeps`) and giving it its place in `Agents`; `docs/architecture.md` says what else a
+//! new agent needs.
 
 use std::sync::Arc;
 
@@ -60,6 +61,10 @@ pub trait Verbs: Send + Sync {
         &self,
         session_file: Option<String>,
     ) -> Option<BoxFuture<'static, Result<Value>>>;
+
+    /// Asking which thinking levels the session's model takes, for an agent that answers it. Otherwise they are read
+    /// from the model list, where a level the model lacks is null.
+    fn thinking_levels(&self) -> Option<Ask>;
 }
 
 /// Pi's RPC protocol, which DeepSeek Harness also speaks through Shed's plugin.
@@ -102,6 +107,10 @@ impl Verbs for PiRpc {
 
     fn restart_kernel(&self, _: Option<String>) -> Option<BoxFuture<'static, Result<Value>>> {
         None
+    }
+
+    fn thinking_levels(&self) -> Option<Ask> {
+        Some(Ask::ThinkingLevels)
     }
 }
 
@@ -162,6 +171,11 @@ impl Verbs for PrimeVerbs {
         session_file: Option<String>,
     ) -> Option<BoxFuture<'static, Result<Value>>> {
         Some(Box::pin(crate::prime::restart_kernel(session_file)))
+    }
+
+    /// Prime has no levels command.
+    fn thinking_levels(&self) -> Option<Ask> {
+        None
     }
 }
 
@@ -288,10 +302,32 @@ impl Starts for Pi {
         if let Some(resume) = &opts.resume {
             args.extend(["--session".into(), resume.clone()]);
         }
+        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
+        let guide = self.0.dir().join("guide.md");
+        if let Err(e) = std::fs::write(&guide, crate::guide::text(AgentKind::Pi, &self.0)) {
+            eprintln!(
+                "can't write the guide for Pi's subagents to {}: {e}",
+                guide.display()
+            );
+        }
+        let env = vec![
+            // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
+            (
+                "AGENT_REMOTE_JOBS_DIR".to_string(),
+                crate::jobs::pi_dir(&opts.session_id)
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            // Read by Pi's subagent extension.
+            (
+                "AGENT_REMOTE_GUIDE".to_string(),
+                guide.to_string_lossy().into_owned(),
+            ),
+        ];
         let launch = Launch {
             program: "pi".into(),
             args,
-            env: Vec::new(),
+            env,
             protocol: Protocol::Pi,
         };
         let (child, output) = RpcChild::spawn(launch, opts)?;

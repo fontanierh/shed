@@ -673,7 +673,7 @@ impl App {
         let state = SessionState::new(summary, None, starting);
         let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
-        if let Err(e) = self.start_pi(&session, None, model, thinking).await {
+        if let Err(e) = self.start_process(&session, None, model, thinking).await {
             // Nothing to come back to: it has no transcript, and whoever asked is told why.
             self.remove(&session.id).await;
             return Err(e);
@@ -715,49 +715,26 @@ impl App {
             st.own = BackendState::Started(Process::Starting { closed: false });
             resume
         };
-        self.start_pi(session, Some(resume), None, None).await?;
+        self.start_process(session, Some(resume), None, None)
+            .await?;
         let summary = session.state.lock().await.summary.clone();
         Ok(summary)
     }
 
-    async fn start_pi(
+    async fn start_process(
         self: &Arc<Self>,
         session: &Arc<Session>,
         resume: Option<String>,
         model: Option<String>,
         thinking: Option<String>,
     ) -> Result<()> {
-        // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
-        let guide = self.store.dir().join("guide.md");
-        if let Err(e) = std::fs::write(
-            &guide,
-            crate::guide::text(crate::rpc::AgentKind::Pi, &self.store),
-        ) {
-            eprintln!(
-                "can't write the guide for Pi's subagents to {}: {e}",
-                guide.display()
-            );
-        }
-        let env = vec![
-            // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
-            (
-                "AGENT_REMOTE_JOBS_DIR".to_string(),
-                crate::jobs::pi_dir(&session.id)
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
-            (
-                "AGENT_REMOTE_GUIDE".to_string(),
-                guide.to_string_lossy().into_owned(),
-            ),
-        ];
         let opts = SpawnOptions {
             agent: session.agent,
+            session_id: session.id.clone(),
             cwd: session.cwd.clone(),
             model,
             thinking,
             resume,
-            env,
         };
         let spawned = match self.agents.get(session.agent).sessions() {
             Sessions::Started(agent) => agent.start(&opts),
