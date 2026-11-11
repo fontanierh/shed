@@ -1,6 +1,7 @@
 //! Watchers: what the bridge keeps an eye on for every session without being asked. What each has spent, the
 //! background commands it has running, and whether it is stuck waiting on one.
 
+use crate::agent::JobsFrom;
 use crate::ask::Ask;
 use crate::host::now_ms;
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use serde_json::Value;
 
 use super::{App, Backend, Session, SessionState};
 use crate::agent_wire;
-use crate::protocol::{SessionStatus, Spend, WaitingOn};
+use crate::protocol::{SessionStatus, Spend, StuckKind, WaitingOn};
 use crate::transcript::Transcript;
 
 /// What the stall check is told about a suspect target.
@@ -248,14 +249,11 @@ impl App {
             // Also tells a command stuck on macOS's permission prompt, Pi's included.
             let tree = crate::jobs::ProcessTree::snapshot().await;
             for session in sessions {
-                // An agent that lists its own background commands reports them as events.
-                if self.agent(session.agent).jobs() == crate::agent::JobsFrom::Agent {
-                    continue;
-                }
-                let (jobs, waiting) = match session.backend {
-                    Backend::Started => crate::jobs::pi_running(&session.id, tree.as_ref()),
-                    Backend::Subagent => continue,
-                    Backend::Prime => {
+                let (jobs, waiting) = match (session.backend, self.agent(session.agent).jobs()) {
+                    // Reported by the agent as events.
+                    (_, JobsFrom::Agent) | (Backend::Subagent, _) => continue,
+                    (_, JobsFrom::Files) => crate::jobs::pi_running(&session.id, tree.as_ref()),
+                    (_, JobsFrom::Kernel) => {
                         let worker = session.state.lock().await.worker_pid();
                         let (Some(worker), Some(tree)) = (worker, &tree) else {
                             continue;
@@ -291,7 +289,7 @@ impl App {
         let (target, age) = match (tool, waiting) {
             (Some(((calls, since), kernel)), _) => (
                 Some(Target {
-                    kind: "tool",
+                    kind: StuckKind::Tool,
                     pid: kernel,
                     id: format!("call {calls}"),
                 }),
@@ -307,7 +305,7 @@ impl App {
                 }),
             ) => (
                 Some(Target {
-                    kind: "command",
+                    kind: StuckKind::Command,
                     pid: *pid,
                     id: command.clone(),
                 }),
@@ -326,7 +324,7 @@ impl App {
         };
         // What can be told from here: a process stuck on a protected folder it names.
         let folder = tree.permission_prompt(target.pid, home);
-        let lone_kernel = target.kind == "tool" && !tree.has_children(target.pid);
+        let lone_kernel = target.kind == StuckKind::Tool && !tree.has_children(target.pid);
         let processes = tree.processes(target.pid);
         let cwd = st.summary.cwd.clone();
         let started_at = now_ms().saturating_sub(age.as_millis() as u64);
@@ -412,7 +410,7 @@ impl App {
                 })
                 .unwrap_or_default()
         };
-        if target.kind == "tool" {
+        if target.kind == StuckKind::Tool {
             // The call running now is the last one.
             let call = items
                 .iter()

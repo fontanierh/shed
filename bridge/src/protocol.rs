@@ -296,7 +296,8 @@ pub struct BackgroundJob {
     pub started_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
-    /// running, finished, or lost (Pi stopped without recording the exit).
+    /// running, finished, or lost (Pi stopped without recording the exit). The agent's own word where it has one,
+    /// passed on as it came, which is why it is not an enum.
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i64>,
@@ -330,11 +331,20 @@ pub struct Site {
 
 /// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission
 /// prompt, or the verdict of a model asked about it (`stallCheck` in config.json).
+/// What a session is stuck on.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StuckKind {
+    /// The agent's current tool call.
+    Tool,
+    /// A background command.
+    Command,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stuck {
-    /// "tool": the agent's current tool call. "command": a background command.
-    pub kind: &'static str,
+    pub kind: StuckKind,
     pub command: String,
     /// One sentence for the reader: "macOS is probably asking for permission to read Documents".
     pub reason: String,
@@ -710,7 +720,7 @@ mod tests {
                 pid: Some(4242),
             }),
             stuck: Some(Stuck {
-                kind: "command",
+                kind: StuckKind::Command,
                 command: "cargo test".into(),
                 reason: "It has printed nothing for ten minutes.".into(),
                 probability: Some(0.75),
