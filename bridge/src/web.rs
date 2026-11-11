@@ -29,8 +29,8 @@ const SCRAPED_PREVIEW: usize = 1_500;
 const FIRECRAWL: &str = "https://api.firecrawl.dev";
 
 const USAGE: &str = "\
-usage: shed-web search <query> [options]
-       shed-web fetch <url> [options]
+usage: shed-web search [options] [--] <query>
+       shed-web fetch [options] [--] <url>
 
 Search the web, or read a page as Markdown, through Shed's web provider (Firecrawl).
 
@@ -212,8 +212,14 @@ impl Request {
                 .map(|s| json!(s))
                 .collect()
         };
+        // After `--`, every word is the query or the URL, even one that starts with `--`: a model's query is text.
+        let mut ended = false;
         while let Some(arg) = args.next() {
-            let flag = arg.clone();
+            if !ended && arg == "--" {
+                ended = true;
+                continue;
+            }
+            let flag = if ended { String::new() } else { arg.clone() };
             let mut value = |name: &str| args.next().ok_or_else(|| anyhow!("{name} needs a value"));
             let number = |name: &str, v: String| -> Result<Value> {
                 v.parse::<u64>()
@@ -1065,6 +1071,23 @@ mod tests {
         assert!(r.json);
         let r = Request::parse("search", args(&["q"])).unwrap();
         assert_eq!(r.body["limit"], 5);
+    }
+
+    #[test]
+    fn after_a_double_dash_a_query_may_start_with_dashes() {
+        let r = Request::parse(
+            "search",
+            args(&["--limit", "2", "--", "--locked", "flag", "meaning"]),
+        )
+        .unwrap();
+        assert_eq!(r.body["query"], "--locked flag meaning");
+        assert_eq!(r.body["limit"], 2);
+        let Err(unended) = Request::parse("search", args(&["--locked", "flag"])) else {
+            panic!("an option it does not know, before any `--`, is refused");
+        };
+        assert!(unended.to_string().contains("isn't a search option"));
+        let r = Request::parse("fetch", args(&["--", "example.com"])).unwrap();
+        assert_eq!(r.body["url"], "https://example.com");
     }
 
     #[test]

@@ -3,12 +3,16 @@
 # the sites it published, every `setup/sync-remote.sh --watch` agent, and the Mac app.
 #
 # Left in place: Pi, Prime Agent and DeepSeek Harness with their configuration and sessions (Open Codex stays
-# their default provider); ~/.agent-remote (token, registry); and Open Codex with its own login service
-# (com.opencodex.proxy).
+# their default provider), including what the installer added to them: Pi's subagent and background-jobs
+# extensions, its agents and prompts, and the model lists; ~/.agent-remote (token, registry); and Open Codex with
+# its own login service (com.opencodex.proxy) and the fixes the installer patched into it.
 set -uo pipefail
 
-PORT="${AGENT_REMOTE_PORT:-7878}"
 LABEL="dev.agentremote.bridge"
+# The port the service was installed with, read from its plist before the plist goes; the environment only when
+# there is none. Taking the environment's word would take down another route and leave the bridge's up.
+PORT="$(plutil -extract ProgramArguments json -o - "$HOME/Library/LaunchAgents/$LABEL.plist" 2>/dev/null | sed -n 's/.*"--port","\([0-9]*\)".*/\1/p' || true)"
+PORT="${PORT:-${AGENT_REMOTE_PORT:-7878}}"
 
 launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null && echo "stopped $LABEL"
 rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"

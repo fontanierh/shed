@@ -51,7 +51,7 @@ export function apply(ctx, config = {}) {
     available: () => true,
     async search(request, signal) {
       const limit = String(request.maxResults ?? 8);
-      const result = await run(["search", request.query, "--limit", limit], signal);
+      const result = await run(["search", "--limit", limit, "--", request.query], signal);
       const sources = (result.sources ?? []).map((s) => ({
         url: s.url,
         ...(s.title ? { title: s.title } : {}),
@@ -66,7 +66,7 @@ export function apply(ctx, config = {}) {
     id: ID,
     available: () => true,
     async fetch(request, signal) {
-      const page = await run(["fetch", request.url], signal);
+      const page = await run(["fetch", "--", request.url], signal);
       let content = page.markdown ?? "";
       if (page.markdownFile) {
         content += `\n\n[The page is longer: only its beginning is above. All of it, as Markdown: ${page.markdownFile}]`;

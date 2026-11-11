@@ -94,21 +94,25 @@ node="$(command -v node || echo "$HOME/.local/share/pi-node/current/bin/node")"
 # The same code signed again differs only in its signing time: compare the code's hash.
 cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
 new="$(cdhash target/release/agent-remote)"
+# The port its service was registered with (install.sh's AGENT_REMOTE_PORT on that Mac).
+port="$(plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/dev.agentremote.bridge.plist 2>/dev/null | sed -n 's/.*"--port","\([0-9]*\)".*/\1/p' || true)"
+port="${port:-7878}"
+answers() { curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; }
 if [ -n "$new" ] && [ "$new" = "$(cdhash ~/.agent-remote/bin/agent-remote)" ]; then
-  echo "  bridge unchanged"
+  done="bridge unchanged"
 else
   install -m 755 target/release/agent-remote ~/.agent-remote/bin/agent-remote
   launchctl kickstart -k "gui/$(id -u)/dev.agentremote.bridge"
-  # The port its service was registered with (install.sh's AGENT_REMOTE_PORT on that Mac).
-  port="$(plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/dev.agentremote.bridge.plist 2>/dev/null | sed -n 's/.*"--port","\([0-9]*\)".*/\1/p' || true)"
-  port="${port:-7878}"
-  for _ in $(seq 20); do curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1 && break; sleep 0.5; done
-  if curl -fsS "http://127.0.0.1:$port/health" >/dev/null 2>&1; then
-    echo "  bridge updated and restarted"
-  else
-    echo "  bridge updated, but it doesn't answer on port $port: see ~/.agent-remote/logs/bridge.log on that Mac" >&2
-    exit 1
-  fi
+  done="bridge updated and restarted"
+fi
+# Checked either way: a bridge that failed to start on the last run is "unchanged" on this one, and the sync is
+# only recorded as done when the bridge answers.
+for _ in $(seq 20); do answers && break; sleep 0.5; done
+if answers; then
+  echo "  $done"
+else
+  echo "  $done, but it doesn't answer on port $port: see ~/.agent-remote/logs/bridge.log on that Mac" >&2
+  exit 1
 fi
 REMOTE
 mkdir -p "$(dirname "$STATE")"
