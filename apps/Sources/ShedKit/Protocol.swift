@@ -248,6 +248,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
     /// process, so their commands are the parent's.
     public var hasBackgroundCommands: Bool { !(agent != .prime && isSubagent) }
+    /// DeepSeek Harness has no fresh conversation in the same session: a new one is started from the app.
+    public var startsNewSessionInPlace: Bool { agent != .deepseek }
     /// DeepSeek Harness compacts on its own: it can compact now, but has no switch to stop it.
     public var controlsAutoCompaction: Bool { agent != .deepseek }
     /// A subagent left fully idle for five minutes, nothing waiting for it: taken to be gone, since Prime keeps

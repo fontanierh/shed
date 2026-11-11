@@ -157,6 +157,10 @@ impl App {
             }
         };
         let mut st = session.state.lock().await;
+        // A refresh that asked before this row came keeps its older status to itself.
+        if st.summary.status != row.status {
+            st.status_moves += 1;
+        }
         let s = &mut st.summary;
         s.kind = row.kind;
         s.parent_id = row.parent_id;
