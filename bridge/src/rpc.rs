@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::channel::Offer;
+use crate::requests::{Requests, Unanswered, QUICK, SLOW};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(test, derive(strum::EnumIter))]
@@ -40,16 +41,22 @@ pub enum ChildOutput {
     Exited(String),
 }
 
-type Pending = oneshot::Sender<Result<Value, String>>;
-
 pub struct RpcChild {
     /// Pi and Prime: commands go straight to stdin. DeepSeek: `dsh` owns stdin and answers them.
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     dsh: Option<Arc<crate::dsh::Dsh>>,
-    pending: Arc<Mutex<HashMap<String, Pending>>>,
+    requests: Arc<Requests<String>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     next_id: AtomicU64,
     child: Mutex<Option<Child>>,
+}
+
+/// What whoever asked is told when an agent is there and does not answer.
+pub fn unanswered(kind: &str, after: std::time::Duration) -> anyhow::Error {
+    anyhow!(
+        "the agent did not answer `{kind}` within {} seconds",
+        after.as_secs()
+    )
 }
 
 /// The models an agent can start a session on, as `[{provider, id, name}]`: what Pi and Prime list from their own
@@ -162,7 +169,7 @@ impl RpcChild {
         Arc::new(RpcChild {
             stdin: tokio::sync::Mutex::new(None),
             dsh: None,
-            pending: Arc::default(),
+            requests: Arc::default(),
             stderr_tail: Arc::default(),
             next_id: AtomicU64::new(0),
             child: Mutex::new(None),
@@ -229,7 +236,7 @@ impl RpcChild {
             RpcChild {
                 stdin: tokio::sync::Mutex::new(stdin),
                 dsh,
-                pending: Arc::new(Mutex::new(HashMap::new())),
+                requests: Arc::default(),
                 stderr_tail: Arc::new(Mutex::new(VecDeque::new())),
                 next_id: AtomicU64::new(0),
                 child: Mutex::new(Some(child)),
@@ -256,7 +263,7 @@ impl RpcChild {
         };
         // Read stdout continuously (a stalled reader stalls the agent) and split strictly on LF:
         // U+2028/U+2029 are valid inside JSON strings.
-        let pending = rpc.pending.clone();
+        let requests = rpc.requests.clone();
         let reader_rpc = Arc::downgrade(&rpc);
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout);
@@ -276,9 +283,6 @@ impl RpcChild {
                     let Some(id) = record["id"].as_str() else {
                         continue;
                     };
-                    let Some(waiter) = pending.lock().unwrap().remove(id) else {
-                        continue;
-                    };
                     let result = if record["success"] == true {
                         Ok(record.get("data").cloned().unwrap_or(Value::Null))
                     } else {
@@ -287,7 +291,7 @@ impl RpcChild {
                             .unwrap_or("command failed")
                             .to_string())
                     };
-                    waiter.offer(result);
+                    requests.answer(id, result);
                 } else {
                     tx.offer(ChildOutput::Event(record));
                 }
@@ -296,9 +300,7 @@ impl RpcChild {
                 Some(rpc) => rpc.wait_exit().await,
                 None => "agent exited".into(),
             };
-            for (_, waiter) in pending.lock().unwrap().drain() {
-                waiter.offer(Err(reason.clone()));
-            }
+            requests.refuse_all(&reason);
             tx.offer(ChildOutput::Exited(reason));
         });
 
@@ -314,14 +316,12 @@ impl RpcChild {
         if let (Some(obj), Value::Object(extra)) = (command.as_object_mut(), fields) {
             obj.extend(extra);
         }
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id.clone(), tx);
+        let asked = self.requests.ask(id);
         let mut line = serde_json::to_vec(&command)?;
         line.push(b'\n');
         {
             let mut guard = self.stdin.lock().await;
             let Some(stdin) = guard.as_mut() else {
-                self.pending.lock().unwrap().remove(&id);
                 return Err(anyhow!("agent is not running"));
             };
             if let Err(e) = async {
@@ -330,14 +330,16 @@ impl RpcChild {
             }
             .await
             {
-                self.pending.lock().unwrap().remove(&id);
                 return Err(anyhow!("agent is not running: {e}"));
             }
         }
-        match rx.await {
+        // Pi answers `compact` once the compaction is done, and everything else at once.
+        let limit = if kind == "compact" { SLOW } else { QUICK };
+        match asked.answer(limit).await {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(anyhow!(e)),
-            Err(_) => Err(anyhow!("agent exited")),
+            Err(Unanswered::Gone) => Err(anyhow!("agent exited")),
+            Err(Unanswered::Late(after)) => Err(unanswered(kind, after)),
         }
     }
 

@@ -17,7 +17,9 @@ use crate::protocol::SessionKind;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+
+use crate::requests::{Requests, Unanswered, QUICK};
 
 const PROTOCOL_VERSION: u64 = 7;
 
@@ -34,8 +36,6 @@ pub enum DaemonEvent {
     Disconnected(String),
 }
 
-type Pending = oneshot::Sender<Result<Value, String>>;
-
 /// The daemon answered a command and said no, as opposed to not being reachable.
 #[derive(Debug)]
 pub struct Refused(pub String);
@@ -51,7 +51,7 @@ impl std::error::Error for Refused {}
 pub struct PrimeDaemon {
     client_id: String,
     writer: tokio::sync::Mutex<Option<OwnedWriteHalf>>,
-    pending: Mutex<HashMap<String, Pending>>,
+    requests: Requests<String>,
     next_id: AtomicU64,
     /// The top-level sessions this bridge has listed, by `sessionId`, so it can reopen them after a reboot.
     shown: Mutex<HashSet<String>>,
@@ -149,7 +149,7 @@ impl PrimeDaemon {
         Arc::new(PrimeDaemon {
             client_id,
             writer: tokio::sync::Mutex::new(None),
-            pending: Mutex::new(HashMap::new()),
+            requests: Requests::default(),
             next_id: AtomicU64::new(0),
             shown: Mutex::new(HashSet::new()),
         })
@@ -180,7 +180,7 @@ impl PrimeDaemon {
             }
             *self.writer.lock().await = None;
             // Dropped, not answered: an answer here would read as the daemon refusing the command.
-            self.pending.lock().unwrap().clear();
+            self.requests.drop_all();
             tokio::time::sleep(delay).await;
             delay = (delay * 2).min(Duration::from_secs(30));
         }
@@ -262,9 +262,6 @@ impl PrimeDaemon {
                 let Some(id) = message["id"].as_str() else {
                     return;
                 };
-                let Some(waiter) = self.pending.lock().unwrap().remove(id) else {
-                    return;
-                };
                 let result = if message["success"] == true {
                     Ok(message.get("data").cloned().unwrap_or(Value::Null))
                 } else {
@@ -273,7 +270,7 @@ impl PrimeDaemon {
                         .unwrap_or("command failed")
                         .to_string())
                 };
-                waiter.offer(result);
+                self.requests.answer(id, result);
             }
             "session_event" => {
                 if let Some(id) = message["activeSessionId"].as_str() {
@@ -323,25 +320,23 @@ impl PrimeDaemon {
             "clientId": self.client_id,
             "command": command,
         });
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id.clone(), tx);
+        let asked = self.requests.ask(id);
         let mut line = serde_json::to_vec(&envelope)?;
         line.push(b'\n');
         {
             let mut writer = self.writer.lock().await;
             let Some(writer) = writer.as_mut() else {
-                self.pending.lock().unwrap().remove(&id);
                 bail!("Prime daemon is not connected");
             };
             if let Err(e) = writer.write_all(&line).await {
-                self.pending.lock().unwrap().remove(&id);
                 bail!("Prime daemon write failed: {e}");
             }
         }
-        match rx.await {
+        match asked.answer(QUICK).await {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(anyhow::Error::new(Refused(e))),
-            Err(_) => Err(anyhow!("Prime daemon disconnected")),
+            Err(Unanswered::Gone) => Err(anyhow!("Prime daemon disconnected")),
+            Err(Unanswered::Late(after)) => Err(crate::rpc::unanswered(kind, after)),
         }
     }
 

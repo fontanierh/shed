@@ -19,6 +19,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::channel::Offer;
+use crate::requests::{Requests, Unanswered, QUICK, SLOW};
 use crate::rpc::{ChildOutput, SpawnOptions};
 
 /// The plugin and the profile layer that loads it, kept with the bridge so both always match.
@@ -27,11 +28,9 @@ const PLUGIN: &str = include_str!("../dsh/shed.mjs");
 const WEB_PLUGIN: &str = include_str!("../dsh/shed-web.mjs");
 pub const PROFILE: &str = "shed";
 
-type Pending = oneshot::Sender<Result<Value, String>>;
-
 pub struct Dsh {
     stdin: tokio::sync::Mutex<ChildStdin>,
-    pending: Mutex<HashMap<u64, Pending>>,
+    requests: Requests<u64>,
     next_id: AtomicU64,
     events: mpsc::UnboundedSender<ChildOutput>,
     /// Set once the session is open: its id, or why it couldn't start.
@@ -168,7 +167,7 @@ impl Dsh {
         let (up_tx, up) = oneshot::channel::<()>();
         let dsh = Arc::new(Dsh {
             stdin: tokio::sync::Mutex::new(stdin),
-            pending: Mutex::new(HashMap::new()),
+            requests: Requests::default(),
             next_id: AtomicU64::new(0),
             events,
             ready,
@@ -204,9 +203,7 @@ impl Dsh {
                 if let Some(Err(e)) = dsh.ready.borrow().as_ref() {
                     reason = e.clone();
                 }
-                for (_, waiter) in dsh.pending.lock().unwrap().drain() {
-                    waiter.offer(Err(reason.clone()));
-                }
+                dsh.requests.refuse_all(&reason);
                 dsh.events.offer(ChildOutput::Exited(reason));
             }
         });
@@ -493,14 +490,11 @@ impl Dsh {
 
     fn receive(&self, message: Value) {
         if let Some(id) = message["id"].as_u64() {
-            let Some(waiter) = self.pending.lock().unwrap().remove(&id) else {
-                return;
-            };
             let result = match message.get("error") {
                 Some(error) => Err(error.as_str().unwrap_or("dsh request failed").to_string()),
                 None => Ok(message.get("result").cloned().unwrap_or(Value::Null)),
             };
-            waiter.offer(result);
+            self.requests.answer(&id, result);
             return;
         }
         let (events, queue_changed) = {
@@ -519,8 +513,7 @@ impl Dsh {
 
     async fn call(&self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        let asked = self.requests.ask(id);
         let mut line = json!({ "id": id, "method": method, "params": params })
             .to_string()
             .into_bytes();
@@ -530,13 +523,15 @@ impl Dsh {
             stdin.write_all(&line).await.is_ok() && stdin.flush().await.is_ok()
         };
         if !written {
-            self.pending.lock().unwrap().remove(&id);
             bail!("agent is not running");
         }
-        match rx.await {
+        // A slash command (`/compact`) is answered once it has run; everything else at once.
+        let limit = if method == "command" { SLOW } else { QUICK };
+        match asked.answer(limit).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => Err(anyhow!(e)),
-            Err(_) => Err(anyhow!("agent exited")),
+            Err(Unanswered::Gone) => Err(anyhow!("agent exited")),
+            Err(Unanswered::Late(after)) => Err(crate::rpc::unanswered(method, after)),
         }
     }
 }
