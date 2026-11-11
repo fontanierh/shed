@@ -401,47 +401,25 @@
       "refreshed": false
     },
     "compact": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "compact with blank instructions": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "compact with instructions": {
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {
-            "customInstructions": "keep the plan"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "new session": {
-      "asked": [
-        {
-          "command": "new_session",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
@@ -468,51 +446,25 @@
       "refreshed": false
     },
     "send": {
-      "asked": [
-        {
-          "command": "prompt",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "send while it works": {
-      "asked": [
-        {
-          "command": "steer",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "send, and the agent is already streaming": {
-      "asked": [
-        {
-          "command": "prompt",
-          "fields": {
-            "message": "Carry on"
-          }
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false
     },
     "stop the tool": {
-      "asked": [
-        {
-          "command": "abort",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {},
       "fails": "session is not running",
       "refreshed": false

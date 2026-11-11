@@ -59,10 +59,13 @@ impl Agent for Scripted {
     }
 
     fn session(&self, id: &str) -> Option<Arc<dyn Live>> {
+        // Only where the agent it stands for has one: a stopped session of an agent the bridge starts has nobody
+        // to ask.
+        let rest = self.real.session(id)?;
         Some(Arc::new(ScriptedSession {
             script: self.script.clone(),
             id: id.to_string(),
-            rest: self.real.session(id),
+            rest: Some(rest),
             absent: "session is not running",
         }))
     }
@@ -527,6 +530,8 @@ async fn pi_events() {
             { "role": "branchSummary", "summary": "From another branch", "timestamp": 1_700_000_206_000u64 },
         ] }),
     );
+    // Reading the conversation again asks the agent, so for this step the session has one, as a resumed one does.
+    pi.state.lock().await.own = own(&rig, "pi1", Backend::Pi, true);
     rig.events(
         &pi,
         &[
@@ -537,6 +542,7 @@ async fn pi_events() {
     .await;
     rig.settle("a compaction succeeds: the conversation is read again, subagents included")
         .await;
+    pi.state.lock().await.own = BackendState::pi();
 
     rig.events(
         &pi,
