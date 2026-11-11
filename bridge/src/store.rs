@@ -27,12 +27,11 @@ pub fn default_window(windows: &HashMap<String, u64>, provider: &str, id: &str) 
     windows.get(&format!("{namespace}/{model}")).copied()
 }
 
-/// config.json's settings. The installer and the user write the file, so it is read as `agent_wire.rs` reads an
-/// agent: a field that is missing, or of another type than expected, takes its default.
+/// config.json's settings. A field that is missing takes its default; one of another type than expected is a
+/// mistake, and the file is then refused like one that isn't JSON.
 #[derive(Clone)]
 pub struct Config {
-    /// `defaultContextWindows`: the window each model keeps to by default, by "provider/id". One entry that isn't a
-    /// number empties the whole table.
+    /// `defaultContextWindows`: the window each model keeps to by default, by "provider/id".
     pub default_context_windows: HashMap<String, u64>,
     /// `stallCheck`: the model asked whether a command that stopped moving is stuck, when the bridge is given an
     /// OpenAI key for it.
@@ -72,68 +71,110 @@ pub struct Web {
     pub firecrawl_url: Option<String>,
 }
 
-fn text(value: &Value) -> Option<String> {
-    value.as_str().map(str::to_string)
+/// A setting of the wrong type is a mistake in the file, not a setting left out: reading it as the default would,
+/// for one, publish the sites of someone who wrote `"publish": "no"`.
+fn mistyped(name: &str, wanted: &str) -> anyhow::Error {
+    anyhow!("config.json: `{name}` must be {wanted}")
+}
+
+/// The object under `name`, or nothing when it is left out.
+fn section<'a>(config: &'a Value, name: &str) -> Result<Option<&'a Value>> {
+    match &config[name] {
+        Value::Null => Ok(None),
+        section @ Value::Object(_) => Ok(Some(section)),
+        _ => Err(mistyped(name, "an object")),
+    }
+}
+
+fn text(section: Option<&Value>, of: &str, field: &str) -> Result<Option<String>> {
+    match section.map(|section| &section[field]) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(text)) => Ok(Some(text.clone())),
+        Some(_) => Err(mistyped(&format!("{of}.{field}"), "text")),
+    }
 }
 
 impl Config {
-    pub fn read(config: &Value) -> Config {
-        let check = &config["stallCheck"];
-        let web = &config["web"];
-        Config {
-            default_context_windows: serde_json::from_value(
-                config["defaultContextWindows"].clone(),
-            )
-            .unwrap_or_default(),
-            stall_check: check["openaiApiKey"]
-                .as_str()
-                .filter(|key| !key.is_empty())
-                .map(|key| crate::stall::Judge {
-                    key: key.to_string(),
-                    model: check["model"]
-                        .as_str()
-                        .unwrap_or(crate::stall::DEFAULT_MODEL)
-                        .to_string(),
-                    threshold: check["threshold"]
+    pub fn read(config: &Value) -> Result<Config> {
+        let default_context_windows = match &config["defaultContextWindows"] {
+            Value::Null => HashMap::new(),
+            windows => serde_json::from_value(windows.clone()).map_err(|_| {
+                mistyped(
+                    "defaultContextWindows",
+                    "an object of whole numbers by model",
+                )
+            })?,
+        };
+        let check = section(config, "stallCheck")?;
+        let stall_check = match text(check, "stallCheck", "openaiApiKey")? {
+            Some(key) if !key.is_empty() => Some(crate::stall::Judge {
+                key,
+                model: text(check, "stallCheck", "model")?
+                    .unwrap_or_else(|| crate::stall::DEFAULT_MODEL.to_string()),
+                threshold: match check.map(|check| &check["threshold"]) {
+                    None | Some(Value::Null) => crate::stall::DEFAULT_THRESHOLD,
+                    Some(threshold) => threshold
                         .as_f64()
-                        .unwrap_or(crate::stall::DEFAULT_THRESHOLD),
-                }),
-            // Published unless the file says not to: a site nobody can open from the phone is no use.
-            sites: Sites {
-                publish: config["sites"]["publish"].as_bool().unwrap_or(true),
-            },
-            // Anything but `false` and null turns routing on, an object or not.
-            opencodex: match &config["opencodex"] {
-                Value::Bool(false) => Routing::Off,
-                Value::Null => Routing::Unset,
-                on => Routing::On(Addresses {
-                    url: text(&on["url"]),
-                    management_url: text(&on["managementUrl"]),
-                    admin_token_file: text(&on["adminTokenFile"]),
-                }),
-            },
+                        .ok_or_else(|| mistyped("stallCheck.threshold", "a number"))?,
+                },
+            }),
+            _ => None,
+        };
+        // Published unless the file says not to: a site nobody can open from the phone is no use.
+        let publish = match section(config, "sites")?.map(|sites| &sites["publish"]) {
+            None | Some(Value::Null) => true,
+            Some(Value::Bool(publish)) => *publish,
+            Some(_) => return Err(mistyped("sites.publish", "true or false")),
+        };
+        let opencodex = match &config["opencodex"] {
+            Value::Bool(false) => Routing::Off,
+            Value::Null => Routing::Unset,
+            Value::Bool(true) => Routing::On(Addresses::default()),
+            on @ Value::Object(_) => Routing::On(Addresses {
+                url: text(Some(on), "opencodex", "url")?,
+                management_url: text(Some(on), "opencodex", "managementUrl")?,
+                admin_token_file: text(Some(on), "opencodex", "adminTokenFile")?,
+            }),
+            _ => return Err(mistyped("opencodex", "true, false or an object")),
+        };
+        let web = section(config, "web")?;
+        Ok(Config {
+            default_context_windows,
+            stall_check,
+            sites: Sites { publish },
+            opencodex,
             web: Web {
-                provider: text(&web["provider"]),
-                firecrawl_api_key: text(&web["firecrawlApiKey"]),
-                firecrawl_url: text(&web["firecrawlUrl"]),
+                provider: text(web, "web", "provider")?,
+                firecrawl_api_key: text(web, "web", "firecrawlApiKey")?,
+                firecrawl_url: text(web, "web", "firecrawlUrl")?,
             },
-        }
+        })
     }
 
     /// What config.json in `dir` says now: nothing when there is no file, an error when there is one that can't
     /// be read or isn't a JSON object. It keeps nothing and logs nothing; `config_in` does both.
     pub fn load(dir: &Path) -> Result<Config> {
-        Ok(document(&dir.join("config.json"))?
-            .as_ref()
-            .map(Config::read)
-            .unwrap_or_default())
+        match document(&dir.join("config.json"))? {
+            Some(config) => Config::read(&config),
+            None => Ok(Config::default()),
+        }
     }
 }
 
 impl Default for Config {
     /// What a config with nothing in it says.
     fn default() -> Config {
-        Config::read(&Value::Null)
+        Config {
+            default_context_windows: HashMap::new(),
+            stall_check: None,
+            sites: Sites { publish: true },
+            opencodex: Routing::Unset,
+            web: Web {
+                provider: None,
+                firecrawl_api_key: None,
+                firecrawl_url: None,
+            },
+        }
     }
 }
 
@@ -232,7 +273,7 @@ impl Store {
         let path = self.dir.join("config.json");
         // An invalid file stops the bridge here, at its start. Read later, it keeps the settings of this read.
         let mut config = document(&path)?.unwrap_or_else(|| json!({}));
-        keep(&self.dir, Ok(Config::read(&config)));
+        keep(&self.dir, Ok(Config::read(&config)?));
         if let Some(token) = config["token"].as_str() {
             return Ok(token.to_string());
         }
@@ -507,43 +548,34 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_or_mistyped_field_takes_its_default() {
+    fn a_missing_field_takes_its_default() {
         let store = store("config-defaults");
+        let read = |config: Value| Config::read(&config).unwrap();
         assert_defaults(&store.config());
         assert_defaults(&Config::default());
-        assert_defaults(&Config::read(&json!({})));
-        assert_defaults(&Config::read(&json!({ "token": "x", "other": 1 })));
-        assert_defaults(&Config::read(&json!({
-            "defaultContextWindows": { "a/b": 272000, "c/d": "wide" },
+        assert_defaults(&read(json!({})));
+        assert_defaults(&read(json!({ "token": "x", "other": 1 })));
+        assert_defaults(&read(json!({
+            "defaultContextWindows": {},
             "stallCheck": { "openaiApiKey": "", "model": "m" },
-            "sites": { "publish": "no" },
+            "sites": {},
             "opencodex": null,
-            "web": ["firecrawl"],
-        })));
-        assert_defaults(&Config::read(&json!({
-            "defaultContextWindows": [],
-            "stallCheck": "sk-test",
-            "sites": false,
-            "web": { "provider": 7, "firecrawlApiKey": 7, "firecrawlUrl": 7 },
+            "web": { "provider": null },
         })));
 
-        let judge = |check: Value| Config::read(&json!({ "stallCheck": check })).stall_check;
+        let judge = |check: Value| read(json!({ "stallCheck": check })).stall_check;
         let plain = judge(json!({ "openaiApiKey": "sk-test" })).unwrap();
         assert_eq!(plain.model, crate::stall::DEFAULT_MODEL);
         assert_eq!(plain.threshold, crate::stall::DEFAULT_THRESHOLD);
-        let mistyped =
-            judge(json!({ "openaiApiKey": "sk-test", "model": 7, "threshold": "high" })).unwrap();
-        assert_eq!(mistyped.model, crate::stall::DEFAULT_MODEL);
-        assert_eq!(mistyped.threshold, crate::stall::DEFAULT_THRESHOLD);
         let chosen =
             judge(json!({ "openaiApiKey": "sk-test", "model": "m", "threshold": 0.5 })).unwrap();
         assert_eq!((chosen.model.as_str(), chosen.threshold), ("m", 0.5));
 
-        let publish = |config: Value| Config::read(&config).sites.publish;
+        let publish = |config: Value| read(config).sites.publish;
         assert!(publish(json!({ "sites": { "publish": true } })));
         assert!(!publish(json!({ "sites": { "publish": false } })));
 
-        let routing = |entry: Value| Config::read(&json!({ "opencodex": entry })).opencodex;
+        let routing = |entry: Value| read(json!({ "opencodex": entry })).opencodex;
         assert!(matches!(routing(json!(false)), Routing::Off));
         let Routing::On(bare) = routing(json!(true)) else {
             panic!("`true` turns routing on")
@@ -552,6 +584,60 @@ mod tests {
             (bare.url, bare.management_url, bare.admin_token_file),
             (None, None, None)
         );
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    /// A setting of the wrong type is refused and named, not read as its default.
+    #[test]
+    fn a_mistyped_field_is_refused_by_name() {
+        let refused = |config: Value| match Config::read(&config) {
+            Ok(_) => panic!("{config} was read"),
+            Err(e) => e.to_string(),
+        };
+        assert_eq!(
+            refused(json!({ "sites": { "publish": "no" } })),
+            "config.json: `sites.publish` must be true or false"
+        );
+        for (config, named) in [
+            (json!({ "sites": false }), "`sites`"),
+            (
+                json!({ "defaultContextWindows": { "a/b": 272000, "c/d": "wide" } }),
+                "`defaultContextWindows`",
+            ),
+            (
+                json!({ "defaultContextWindows": [] }),
+                "`defaultContextWindows`",
+            ),
+            (json!({ "stallCheck": "sk-test" }), "`stallCheck`"),
+            (
+                json!({ "stallCheck": { "openaiApiKey": "k", "model": 7 } }),
+                "`stallCheck.model`",
+            ),
+            (
+                json!({ "stallCheck": { "openaiApiKey": "k", "threshold": "high" } }),
+                "`stallCheck.threshold`",
+            ),
+            (json!({ "opencodex": "on" }), "`opencodex`"),
+            (json!({ "opencodex": { "url": 7 } }), "`opencodex.url`"),
+            (json!({ "web": ["firecrawl"] }), "`web`"),
+            (
+                json!({ "web": { "firecrawlApiKey": 7 } }),
+                "`web.firecrawlApiKey`",
+            ),
+        ] {
+            assert!(refused(config.clone()).contains(named), "{config}");
+        }
+    }
+
+    /// And while the bridge runs, a file with such a mistake changes nothing.
+    #[test]
+    fn sites_stay_unpublished_when_a_setting_is_mistyped() {
+        let store = store("config-mistyped");
+        let path = store.dir.join("config.json");
+        std::fs::write(&path, r#"{"sites": {"publish": false}}"#).unwrap();
+        assert!(!store.config().sites.publish);
+        std::fs::write(&path, r#"{"sites": {"publish": "no"}}"#).unwrap();
+        assert!(!store.config().sites.publish);
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 
@@ -567,7 +653,7 @@ mod tests {
         );
         assert_eq!(kept.take(failed("a stray comma")).1, None);
 
-        let good = Config::read(&json!({ "sites": { "publish": false } }));
+        let good = Config::read(&json!({ "sites": { "publish": false } })).unwrap();
         assert_eq!(kept.take(Ok(good)).1, None);
         let (config, line) = kept.take(failed("a stray comma"));
         assert!(!config.sites.publish);

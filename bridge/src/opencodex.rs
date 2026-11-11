@@ -693,20 +693,22 @@ mod tests {
             Some(r#"{ "opencodex": null, "web": {} }"#),
             Some("not json"),
             Some("[]"),
+            // A mistyped entry is a broken file, not a way to turn routing on.
+            Some(r#"{ "opencodex": "yes" }"#),
+            Some(r#"{ "opencodex": 1 }"#),
+            Some(r#"{ "opencodex": ["http://gateway.test:1"] }"#),
+            Some(r#"{ "opencodex": { "url": 7 } }"#),
         ] {
             assert!(gateway_in(&home_with(config, false)).is_none());
             let home = home_with(config, true);
             assert_defaults(&gateway_in(&home).unwrap(), &home);
         }
 
-        // Anything else is on, with the default for whatever it doesn't give as text.
+        // `true` or an object is on, with the default for whatever it doesn't give.
         for config in [
             r#"{ "opencodex": true }"#,
-            r#"{ "opencodex": "yes" }"#,
-            r#"{ "opencodex": 1 }"#,
-            r#"{ "opencodex": ["http://gateway.test:1", "http://gateway.test:2", "/keys/admin"] }"#,
             r#"{ "opencodex": {} }"#,
-            r#"{ "opencodex": { "url": 7, "managementUrl": null, "adminTokenFile": false } }"#,
+            r#"{ "opencodex": { "managementUrl": null } }"#,
         ] {
             let home = home_with(Some(config), false);
             assert_defaults(&gateway_in(&home).unwrap(), &home);

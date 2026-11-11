@@ -1270,11 +1270,11 @@ mod tests {
 
     /// The config's `web` entry, read.
     fn settings(web: &Value) -> Web {
-        Config::read(&json!({ "web": web })).web
+        Config::read(&json!({ "web": web })).unwrap().web
     }
 
     fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
-        Provider::from(Config::read(config).web, env_key)
+        Provider::from(Config::read(config)?.web, env_key)
     }
 
     fn firecrawl_of(provider: Result<Provider>) -> (String, String) {
@@ -1283,11 +1283,10 @@ mod tests {
     }
 
     #[test]
-    fn the_web_config_s_mistyped_parts_fall_back() {
+    fn the_web_config_s_missing_parts_fall_back() {
         let both = |key: &str, base: &str| (key.to_string(), base.to_string());
-        // A provider that isn't text is Firecrawl, and an address loses its last slashes.
+        // No provider is Firecrawl, and an address loses its last slashes.
         let web = json!({
-            "provider": 7,
             "firecrawlApiKey": "fc-config",
             "firecrawlUrl": "http://firecrawl.test//",
             "extra": true,
@@ -1296,24 +1295,11 @@ mod tests {
             firecrawl_of(Provider::from(settings(&web), None)),
             both("fc-config", "http://firecrawl.test")
         );
-        // A key or an address that isn't text is as good as missing.
-        let web = json!({ "firecrawlApiKey": 7, "firecrawlUrl": 7 });
+        // Without a key or an address in the config, the environment's key and Firecrawl's own address.
         assert_eq!(
-            firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
+            firecrawl_of(Provider::from(settings(&json!({})), Some("fc-env".into()))),
             both("fc-env", FIRECRAWL)
         );
-        // So is a `web` that isn't an object.
-        for web in [
-            json!("other"),
-            json!(["other", "fc-config", "http://firecrawl.test"]),
-            json!(true),
-        ] {
-            assert_eq!(
-                firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
-                both("fc-env", FIRECRAWL),
-                "{web}"
-            );
-        }
         // A blank key is no key, and one in the config hides the environment's.
         assert!(Provider::from(settings(&Value::Null), Some(" ".into())).is_err());
         assert!(Provider::from(
