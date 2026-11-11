@@ -277,15 +277,15 @@ extension SessionStore {
     }
 
     public func loadModels() async {
-        guard let id = selectedId else { return }
+        guard let current = open else { return }
         do {
-            let to = try route(id)
+            let to = try route(current.id)
             let listed = try await call(to.env, .listModels(sessionId: to.raw), as: [ModelInfo].self)
             // Another session may be open by now: its picker shows its own agent's models, not these.
-            guard selectedId == id else { return }
-            models = listed
+            guard open === current else { return }
+            current.models = listed
         } catch {
-            report(error)
+            if open === current { report(error) }
         }
     }
 }

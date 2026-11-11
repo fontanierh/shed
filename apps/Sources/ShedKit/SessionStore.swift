@@ -15,27 +15,45 @@ public final class LiveText {
 @MainActor
 @Observable
 public final class SessionStore {
+    /// Everything kept for the single session currently open on screen, replaced whole when switching sessions.
+    @MainActor
+    @Observable
+    final class OpenSession {
+        let id: String
+        var items: [Item] = []
+        /// Older items of the open session not loaded yet (its history before the last compaction).
+        var earlier = 0
+        var loadingEarlier = false
+        /// Whether this open session's snapshot has arrived since it was opened.
+        var loaded = false
+        var models: [ModelInfo] = []
+        @ObservationIgnored var itemIndex: [String: Int] = [:]
+        /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
+        @ObservationIgnored var patched: [Int: Item] = [:]
+        @ObservationIgnored var flushing: Task<Void, Never>?
+
+        init(id: String) {
+            self.id = id
+        }
+    }
     public internal(set) var sessions: [String: SessionSummary] = [:]
     /// Full session lists received, one per (re)connection: totals may have been recounted since the last one.
     public internal(set) var snapshots = 0
-    public private(set) var selectedId: String?
-    public internal(set) var items: [Item] = []
-    /// Older items of the open session not loaded yet (its history before the last compaction).
-    public internal(set) var earlier = 0
-    public internal(set) var loadingEarlier = false
+    var open: OpenSession?
+    public var selectedId: String? { open?.id }
+    public var items: [Item] { open?.items ?? [] }
+    public var earlier: Int { open?.earlier ?? 0 }
+    public var loadingEarlier: Bool { open?.loadingEarlier ?? false }
+    public var transcriptLoaded: Bool { open?.loaded == true }
+    public var models: [ModelInfo] { open?.models ?? [] }
     /// Messages sent but not yet back from the agent, per session: shown at once, as sending, until the agent's own
     /// copy arrives.
     var sending: [String: [Item]] = [:]
-    /// The session whose transcript has arrived since it was opened. Until then an empty transcript means nothing yet,
-    /// not an empty conversation.
-    var loadedId: String?
-    public var transcriptLoaded: Bool { selectedId != nil && loadedId == selectedId }
     /// The open session's transcript with its messages still on their way.
     public var transcript: [Item] { items + (selectedId.flatMap { sending[$0] } ?? []) }
     public internal(set) var environments: [BridgeEnvironment] = []
     /// Each environment's connection to its bridge.
     var connections: [String: BridgeClient.State] = [:]
-    public internal(set) var models: [ModelInfo] = []
     public var errorMessage: String?
     /// Subagents the bridge still lists but that can't be opened any more, found out by trying. They leave the
     /// lists, and what mentions them in a conversation stops leading anywhere.
@@ -68,12 +86,8 @@ public final class SessionStore {
     static let reconnectWait = Duration.seconds(60)
     /// What each computer's bridge says it understands. From 2 on it takes a message once per id.
     @ObservationIgnored var bridgeLevel: [String: Int] = [:]
-    @ObservationIgnored var itemIndex: [String: Int] = [:]
-    /// Streamed changes not yet in `items`: applying each piece as it comes redraws the transcript dozens of times a second.
-    @ObservationIgnored var patched: [Int: Item] = [:]
     /// Where a reply already on screen grows while it streams; `items` catches up on transcript or state changes.
     public let live = LiveText()
-    @ObservationIgnored var flushing: Task<Void, Never>?
     @ObservationIgnored private var started = false
     #if os(macOS)
     @ObservationIgnored var localToken: String?
@@ -150,16 +164,9 @@ public final class SessionStore {
         if let old = selectedId, let (env, raw) = Self.split(old), let client = clients[env] {
             Task { try? await client.call(.detach(sessionId: raw)) }
         }
-        flushing?.cancel()
-        flushing = nil
-        selectedId = id
-        loadedId = nil
-        patched = [:]
+        open?.flushing?.cancel()
         live.texts = [:]
-        items = []
-        itemIndex = [:]
-        earlier = 0
-        models = []
+        open = id.map(OpenSession.init)
         if let id { Task { await attach(id) } }
     }
 }
