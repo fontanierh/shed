@@ -16,14 +16,14 @@ Shed has two halves: a **bridge** that runs next to the agents on each computer,
 
 It turns the three agents into one client protocol (`bridge/src/protocol.rs`, mirrored in `apps/Sources/ShedKit/Protocol.swift`):
 
-- one `SessionSummary` per session: status, model, effort, context usage, cost, queue, goal, background jobs, sites, a question waiting for an answer, parent and children;
+- one `SessionSummary` per session: status, model, effort, context usage, cost, queue, goal, background jobs, sites, capabilities, a question waiting for an answer, parent and children;
 - a normalized transcript of `user`, `text`, `thinking`, `tool`, `compaction`, `error` and `note` items, streamed as `snapshot`, `item_add` and `item_patch` messages to the clients attached to that session;
 - request/reply operations (`send`, `abort`, `compact`, `set_model`, `list_dir`, `list_jobs`, …), each answered by a `reply` with the request's `id`. A failed one carries the sentence to show (`error`) and, for the failures an app does something about, a `code` (`session_ended`, `no_such_directory`). Apps from before the codes compare the sentence, so those sentences are fixed (`bridge/src/protocol.rs`). An `attach` waits on the agent apart from the connection, so a slow one holds nothing else up; its snapshot is still taken on the connection's own loop, which is what keeps it in order with the events after it.
 
 How each agent is driven:
 
 - **Pi**: the bridge owns Pi sessions. It spawns `pi --mode rpc` per session, keeps a registry in `~/.agent-remote/sessions.json`, and resumes them with `--session <file>` after a restart.
-- **DeepSeek Harness**: the bridge runs `dsh --profile shed` per session, a dsh profile it writes on each start. The profile's one plugin (`bridge/dsh/shed.mjs`) answers the Pi commands the bridge sends and forwards dsh's events, which `bridge/src/dsh.rs` turns into Pi's, so the rest of the bridge runs these sessions as it runs Pi's: same registry, same resumption. dsh runs without its permission prompts, as Pi and Prime do.
+- **DeepSeek Harness**: the bridge runs `dsh --profile shed` per session, a dsh profile it writes on each start. `bridge/src/dsh.rs` translates `Ask` commands into calls to the profile's one plugin (`bridge/dsh/shed.mjs`) and turns dsh's forwarded events into Pi's, so the rest of the bridge runs these sessions as it runs Pi's: same registry, same resumption. dsh runs without its permission prompts, as Pi and Prime do.
 - **Prime Agent**: the bridge is a client of Prime's daemon, the same supervisor its TUI uses, and starts the daemon when none is running. Prime's RPC mode can't spawn subagents and ACP can't compact, report stats or steer, so the daemon is the only interface with everything. Sessions started in Prime's own TUI therefore show up in Shed too. The protocol is undocumented upstream; [prime-daemon-protocol.md](prime-daemon-protocol.md) records what the bridge relies on.
 
 **Open Codex** (`bridge/src/opencodex.rs`) is where every agent's models come from. The bridge writes its catalog into Pi's and Prime's configuration whenever a client asks for an agent's models (at most once a minute), makes it dsh's one provider in the `shed` profile, and reads its request history for what each session has spent and how fast it is spending.
@@ -38,18 +38,17 @@ A client can hold several **computers** at once, each a bridge URL and token. `S
 
 ## Features
 
-| Feature | Pi and DeepSeek Harness | Prime |
-|---|---|---|
-| Send / steer | `prompt` when idle, `steer` while running; `follow_up` queues | `prompt` with `streamingBehavior:"steer"`, `queueIfBusy` |
-| Stop | `abort` | `abort` |
-| Reasoning, tool calls | RPC events, normalized | daemon `session_event`s (same shapes; no `contentIndex` on deltas) |
-| Context window, cost | `get_session_stats` | roster usage + `get_session_stats` |
-| Compaction | `compact`, `set_auto_compaction` | a `/compact` prompt queued as a follow-up, since Prime's `compact` aborts the session first; `set_auto_compaction` |
-| Model, effort | `set_model`, `get_available_thinking_levels`, `set_thinking_level` | same, levels from `thinkingLevelMap`; `set_thinking_level` also changes Prime's saved default |
-| New session | `new_session` | same (`activeSessionId` stays) |
-| Resume | `--session <file>` | sessions live in the daemon |
-
-DeepSeek Harness shares Pi's column because its plugin answers the same commands. A question the agent asks through `ask_user_question` shows in the apps and is answered with `answer_question`; unanswered for two minutes, the agent carries on.
+| Feature | Pi | DeepSeek Harness | Prime |
+|---|---|---|---|
+| Send / steer | `prompt` when idle, `steer` while running; `follow_up` queues | plugin `prompt` (`followup` / `steer`) | `prompt` with `streamingBehavior:"steer"`, `queueIfBusy`; `follow_up` queues |
+| Stop | `abort` | plugin `cancel` | `abort` (`abort_and_send_queued` for stopping a tool) |
+| Reasoning, tool calls | RPC events, normalized | plugin events, normalized by `dsh.rs` | daemon `session_event`s (same shapes; no `contentIndex` on deltas) |
+| Context window, cost | `get_session_stats` | `Feed` state from plugin events | roster usage + `get_session_stats` + `cost.rs` |
+| Compaction | `compact`, `set_auto_compaction` | plugin `/compact` command (auto-compacts on its own) | a `/compact` prompt queued as a follow-up, since Prime's `compact` aborts the session first; `set_auto_compaction` |
+| Model, effort | `set_model`, `get_available_thinking_levels`, `set_thinking_level` | plugin `select`, efforts from `describe` | same, levels from `thinkingLevelMap`; `set_thinking_level` also changes Prime's saved default |
+| New session | `new_session` | started from the app instead | `new_session` (`activeSessionId` stays) |
+| Questions | — | `dsh_question` + `answer_question` (2-minute timed mode) | — |
+| Resume | `--session <file>` | plugin `open` with `resume: true` | sessions live in the daemon |
 
 ## Subagents
 
@@ -118,37 +117,33 @@ The apps, in `apps/Sources/ShedKit`:
 | `SessionStore+….swift` | What changes that state, by job: the computers and their connections, messages coming in, requests going out, the session tree. |
 | `Views/` | The SwiftUI views. `SessionView.swift` is the session screen; its header, composer, model picker and cards are each in their own file. |
 
-Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing. Of a reply, the envelope and its error codes are covered; what each operation answers with in `data` is not.
+Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing (`pi_job.json` and `pi_subagents.json` do the same between Pi's TypeScript extensions and the bridge). Of a reply, the envelope and its error codes are covered; what each operation answers with in `data` is not.
 
 ## Adding an agent
 
-An agent is one implementation of the `Agent` trait in `bridge/src/agent.rs`. The compiler asks for part of what a new agent needs and the rest is by hand; the two lists below say which is which. As the code stands, a new agent that speaks Pi's protocol is a day's work, and one that speaks its own is a new driver and an implementation of `Verbs`.
+An agent is one implementation of `Agent` (`bridge/src/agent.rs`), plus a `Live` driver if it speaks its own protocol. Every session command, time limit (`Ask::limit`) and client capability (`SessionSummary.capabilities`) flows from `Agent` and `Verbs`, so neither `server.rs` nor the apps' views branch on agent names for features.
 
 **What the compiler asks for.** Add a case to `AgentKind` in `bridge/src/rpc.rs` and to `AgentKind` in `apps/Sources/ShedKit/Protocol.swift`. Neither side builds until the new agent has:
 
 - its guide text in `bridge/src/guide.rs`;
 - its place in `Agents` in `agent.rs` (a field, and its line in `installed`, `of` and `get`), which needs an implementation of `Agent`;
-- in that implementation, the six answers, none with a default: `sessions` (how its sessions come about: `Started`, the bridge runs a process for each, or `Kept`, the agent keeps them itself), `models` (what a session can start on), `jobs` (where background commands are found), `gateway_session`, `spend_includes_subagents`, and `verbs`;
-- `verbs` is what a session's commands become in the agent's words: a message (prompt or steer), compacting, clearing a goal, stopping a tool call, stopping a looping reply, restarting a kernel, and asking for thinking levels. Each is answered, none has a default. An agent that speaks Pi's RPC returns `PiRpc`, as Pi and DeepSeek Harness do; Prime has `PrimeVerbs`. The tests' scripted agent hands back the real agent's verbs, so the pins check what each agent's commands really become;
-- `Starts::start` builds what the session runs, its arguments and environment with it (Pi's guide file and jobs folder are set there), and `Keeps` has `stop` beside `session` and `create`;
-- in the apps, its name (`Protocol.swift`), its colour (`Views/Theme.swift`), its glyph (`Views/Atmosphere.swift`) and the line on its card in the new-session sheet (`Views/NewSessionSheet.swift`).
+- in that implementation, the eight answers, none with a default: `sessions` (`Started`, the bridge runs a process per session, or `Kept`, the agent keeps them itself), `models`, `jobs` (`JobsFrom`), `subagents` (`SubagentsFrom`), `gateway_session`, `cost`, `spend_includes_subagents`, and `verbs`;
+- `verbs` (`Verbs`), with no defaults: `message`, `follow_up`, `abort`, `compact`, `auto_compaction`, `new_session`, `clear_goal`, `stop_tool`, `interrupt`, `restart_kernel`, `answer` and `thinking_levels` (`None` where the agent lacks a command). An agent that speaks Pi's RPC can reuse `PiRpc`; DeepSeek Harness uses `DshVerbs` and Prime uses `PrimeVerbs`. If the agent speaks its own protocol, its `Live::send(Ask)` matches on `Ask` directly (as `Dsh::send` does) and passes `ask.limit()` to its request matcher;
+- `Starts::start` for a started agent, or `Keeps` (`session`, `stop`, `create`) for a kept one;
+- in the apps, its name (`Protocol.swift`), its legacy fallback line in `SessionCapabilities.legacy` (`Protocol.swift`, used only when talking to a bridge older than `capabilities`), its colour (`Views/Theme.swift`), its glyph (`Views/Atmosphere.swift`) and its card title and description (`Views/NewSessionSheet.swift`).
 
-The `agent-remote guide <agent>` command and the cards in the new-session sheet follow the list of agents, so they need nothing.
+The `agent-remote guide <agent>` command, the cards in the new-session sheet, and every session action in the apps (kernel restart, goals, new session, auto-compaction switch, follow-up queue, questions, background commands, subagent spend) follow automatically from `Agent`, `Verbs` and `SessionSummary.capabilities`.
 
-**What the compiler does not ask for.** Each of these is silent: leave it out and the new agent gets another agent's behaviour, or none.
+**What the compiler does not ask for.**
 
-- *Following a roster.* One that keeps its sessions in its own daemon, as Prime does, implements `Keeps`, and needs code that follows its roster, which is written for Prime only (`session/prime.rs`, and `create` returns Prime's roster row). A Prime session's cost also reads Prime's own record of what its subagents spent (`context.rs`).
-- *The kind of session.* The session code still matches on `Backend` (a process the bridge runs, a session an agent keeps, a read-only subagent) for what follows from how a session lives: starting, resuming and closing it, saving it, whether it can be refreshed. That is by design: those are the three ways a session can exist, not three agents.
-- *Background commands.* `jobs` picks one of three: the folder Pi's background-jobs extension writes (`Files`), the processes under Prime's kernel (`Kernel`), or asking the agent with the DeepSeek plugin's commands `dsh_jobs`, `dsh_job_output`, `dsh_kill_job` (`Agent`). The first two are still tied to Pi and Prime in `jobs.rs`; a new agent fits `Agent` or needs a new way there.
-- *Events and wire names.* `agent_wire.rs` reads Pi's vocabulary, and jobs, questions and subagents from events named `dsh_…`. `Ask::wire` gives each question one name: Pi's, the DeepSeek plugin's or Prime's (`ask.rs`). An agent with a third vocabulary for the same question needs `wire` to take the driver. Answering a question sends `dsh_answer` whatever the agent.
-- *Subagents.* `session/subagents.rs` labels the child sessions it makes as Pi's or DeepSeek's.
-- *Models.* `rpc::listed_models` parses the table Pi and Prime print. With Open Codex, the catalogue is written to a hand-kept list of folders in `opencodex.rs`.
-- *Time limits.* Each driver decides its own. Pi's honours `Ask::limit` (`ask.rs`), where only `compact` gets the long limit. DeepSeek's gives the long one to its slash commands by method name (`dsh.rs`). Prime's daemon gives every command the short one, 2 minutes (`prime.rs`).
-- *Tests.* The scripted agent stands in for every kind, but `protocol/server_messages.json` lists the agents and fails both sides' tests until it is written again with `UPDATE_FIXTURES=1`. The commands pin runs every command against every agent there is (`session/tests.rs`), so a new agent fails it until the pin is written again with it.
-- *The apps' features.* These compare with one agent and need a look each: `hasBackgroundCommands` and `controlsAutoCompaction` in `Protocol.swift`; the default models and the split of models by name in `Views/NewSessionSheet.swift`; goals and the kernel restart in `Views/SessionHeader.swift`, `Views/PhoneSessionToolbar.swift` and `Views/SessionView.swift`; the empty list in `Views/BackgroundCommands.swift`. (The cost on the lock screen goes through `spendIncludesSubagents`, which the compiler asks for.)
-- *Setup.* Its install step in `setup/`.
+- *Following a roster.* An agent that keeps its sessions in its own daemon (`Keeps`) needs roster-following code alongside `session/prime.rs` (`Keeps::create` currently returns `PrimeRow`, and `Backend::Prime` holds `PrimeState`).
+- *The kind of session.* The session code matches on `Backend` (`Started`, `Prime`, `Subagent`) for what follows from how a session lives: starting, resuming and closing it, saving it, whether it can be refreshed. That is by design: those are the three ways a session can exist, not three agents.
+- *Events.* `agent_wire.rs` reads Pi's event vocabulary plus `dsh_jobs`, `dsh_question` and `dsh_subagent`. A driver for a new protocol either normalizes its stream into those events (as `dsh.rs` does) or extends `agent_wire.rs`.
+- *Background commands.* `JobsFrom::Agent` asks the driver with `Ask::Jobs`, `Ask::JobOutput` and `Ask::KillJob`, which fits any driver that lists its own jobs; `Files` and `Kernel` are Pi's job folder and Prime's REPL kernel tree (`jobs.rs`).
+- *Open Codex catalog sync.* If Open Codex should write its model catalog into a configuration file the new agent reads, add that path in `opencodex.rs`.
+- *Fixtures and setup.* Run `UPDATE_FIXTURES=1 cargo test` so `protocol/server_messages.json` and `bridge/src/session/pins/commands.json` include the new `AgentKind`, and add its install step in `setup/`.
 
-**Order of release.** The apps go first. An app from before the new agent leaves its sessions out of the list, and a bridge from before it cannot read a `sessions.json` that holds one of its sessions and sets the whole file aside. So: ship the apps, then the bridge, and do not go back to an older bridge once a session of the new agent is saved.
+**Order of release.** Either side can ship first without losing data: an older app skips sessions whose `agent` it does not recognize (`Readable` in `Protocol.swift`), and an older bridge keeps unknown-agent entries in `sessions.json` as raw JSON and writes them back on save (`store.rs`). Ship the apps before creating sessions of the new agent if those sessions should be visible on every device right away.
 
 ## Setup
 

@@ -590,4 +590,92 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
         assert_eq!(answer.unwrap(), json!({ "summary": "done" }));
     }
+
+    #[test]
+    fn prime_daemon_protocol_doc_lists_the_session_commands_the_bridge_sends() {
+        use std::collections::BTreeSet;
+
+        use crate::agent::{PrimeVerbs, Verbs};
+        use crate::ask::Ask;
+
+        let verbs = PrimeVerbs;
+        let mut asks = vec![
+            verbs.message("hi".into(), false),
+            verbs.message("hi".into(), true),
+            verbs.abort(),
+            verbs.compact(None),
+            verbs.stop_tool(),
+            Ask::State,
+            Ask::Stats,
+            Ask::Messages,
+            Ask::Models,
+            Ask::SetModel {
+                provider: "p".into(),
+                model_id: "m".into(),
+            },
+            Ask::SetThinkingLevel("high".into()),
+            Ask::SetName("n".into()),
+            Ask::Attach,
+            Ask::KernelBash,
+            Ask::PersistentShells,
+            Ask::TailKernelBash {
+                activity: "a".into(),
+                lines: 10,
+            },
+            Ask::TailPersistentShell {
+                shell: "s".into(),
+                lines: 10,
+            },
+            Ask::KillKernelBash("a".into()),
+            Ask::KillPersistentShell("s".into()),
+        ];
+        asks.extend(verbs.interrupt("loop".into()));
+        asks.extend(verbs.follow_up("later".into()));
+        asks.extend(verbs.auto_compaction(true));
+        asks.extend(verbs.new_session());
+        asks.extend(verbs.clear_goal());
+        asks.extend(verbs.answer("q".into(), vec![]));
+        asks.extend(verbs.thinking_levels());
+
+        let mut sent: BTreeSet<String> = asks
+            .iter()
+            .map(|ask| ask.wire().expect("Prime Ask has wire").0.to_string())
+            .collect();
+        sent.insert("detach".into());
+
+        let doc = include_str!("../../docs/prime-daemon-protocol.md");
+        let section = doc
+            .split("Session commands are Prime's RPC commands")
+            .nth(1)
+            .and_then(|s| s.split("Supervisor commands:").next())
+            .unwrap();
+        let mut documented = BTreeSet::new();
+        for part in section.split('`').skip(1).step_by(2) {
+            if part != "activeSessionId" && !part.starts_with('/') {
+                documented.insert(part.to_string());
+            }
+        }
+        // Unused / avoided commands explicitly called out in that paragraph.
+        for not_sent in [
+            "compact",
+            "steer",
+            "clear_queue",
+            "get_available_thinking_levels",
+            "thinkingLevelMap",
+        ] {
+            documented.remove(not_sent);
+        }
+        for cmd in [
+            "list_kernel_bash",
+            "tail_kernel_bash",
+            "kill_kernel_bash",
+            "list_persistent_shells",
+            "tail_persistent_shell",
+            "kill_persistent_shell",
+        ] {
+            assert!(doc.contains(&format!("`{cmd}`")), "doc missing {cmd}");
+            documented.insert(cmd.into());
+        }
+        assert_eq!(documented, sent);
+    }
 }
