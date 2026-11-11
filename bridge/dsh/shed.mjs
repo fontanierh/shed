@@ -322,7 +322,8 @@ export function apply(ctx) {
         request = JSON.parse(line);
       } catch (error) {
         // Answered when the line still shows its id, so the bridge is told now instead of waiting out its limit.
-        const id = /"id"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
+        const match = /"id"\s*:\s*(?:(\d+)|"((?:[^"\\]|\\.)*)")/.exec(line);
+        const id = match ? (match[1] !== undefined ? Number(match[1]) : match[2]) : undefined;
         process.stderr.write(`shed: a request that is not JSON: ${error.message}\n`);
         if (id !== undefined) write({ id, error: `the request is not JSON: ${error.message}` });
         continue;
