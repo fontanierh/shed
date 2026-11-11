@@ -1,8 +1,9 @@
 //! Subagents of Pi and DeepSeek Harness sessions, mirrored as read-only sessions of their own.
 
+use crate::host::now_ms;
 use std::sync::Arc;
 
-use super::{first_line, new_summary, now_ms, App, Backend, BackendState, Session, SessionState};
+use super::{first_line, new_summary, App, Backend, BackendState, Session, SessionState};
 use crate::agent_wire::{DshSubagent, PiSubagentCall, PiSubagents};
 use crate::protocol::{ContextUsage, SessionKind, SessionStatus};
 use crate::rpc::AgentKind;

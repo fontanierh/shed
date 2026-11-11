@@ -17,7 +17,7 @@ use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
 pub fn pi_dir(session_id: &str) -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
+    crate::host::home()
         .join(".agent-remote/jobs")
         .join(session_id)
 }
@@ -293,11 +293,6 @@ fn parse_cpu_time(time: &str) -> Option<f64> {
     })
 }
 
-/// The bridge's user's home folder, as commands spell it out.
-pub fn home() -> String {
-    std::env::var("HOME").unwrap_or_default()
-}
-
 /// The command inside Prime's wrapper: `exec 9>&0 …`, `read -r _prime_agent_gate …`, `{`, the command, `}`.
 fn wrapped_command(wrapper: &str) -> String {
     let script = wrapper
@@ -549,7 +544,7 @@ fn dsh_job(job: &Value) -> BackgroundJob {
 /// Running jobs that look stuck on macOS's permission prompt.
 fn mark_permission_prompts(jobs: &mut [BackgroundJob], tree: Option<&ProcessTree>) {
     let Some(tree) = tree else { return };
-    let home = home();
+    let home = crate::host::home_text();
     for job in jobs.iter_mut().filter(|job| job.status == "running") {
         job.stuck = job
             .pid
@@ -644,7 +639,7 @@ pub fn pi_running(session_id: &str, tree: Option<&ProcessTree>) -> (u32, Option<
         .into_iter()
         .filter(|job| job.status == "running")
         .collect();
-    let home = home();
+    let home = crate::host::home_text();
     let prompt = |job: &BackgroundJob| {
         tree.zip(job.pid)
             .and_then(|(tree, pid)| tree.permission_prompt(pid, &home))

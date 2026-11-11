@@ -13,6 +13,7 @@ mod git;
 mod github;
 mod guide;
 mod history;
+mod host;
 mod jobs;
 mod media;
 mod opencodex;

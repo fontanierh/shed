@@ -3,6 +3,7 @@
 //! files saved with a file in `pins/`. `UPDATE_FIXTURES=1 cargo test` rewrites the files: read the diff before
 //! committing it, since it is the change in behaviour.
 
+use crate::host::now_ms;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 

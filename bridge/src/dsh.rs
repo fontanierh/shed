@@ -6,6 +6,7 @@
 //! as a read-only session), `dsh_jobs` (how many background commands are running) and `dsh_question` (what the agent
 //! asks the user, or null once nothing is left to answer).
 
+use crate::host::now_ms;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,9 +45,7 @@ pub struct Dsh {
 /// profile's own `cordis.patch.yml` is the user's and is created only when missing. With Open Codex, the layer also
 /// makes it dsh's one model provider, replacing the providers configured in `cordis.patch.yml`. Returns the layer.
 pub fn install_profile(store: &crate::store::Store) -> Result<PathBuf> {
-    let dir = PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".dsh/profiles")
-        .join(PROFILE);
+    let dir = crate::host::home().join(".dsh/profiles").join(PROFILE);
     std::fs::create_dir_all(&dir)?;
     let package = json!({
         "name": "dsh-profile-shed",
@@ -114,7 +113,7 @@ fn web_layer(
 /// providers added in the profile's own patch layer are among them. Asks a short-lived dsh that opens no session.
 pub async fn list_models(store: &crate::store::Store) -> Result<Value> {
     let layer = install_profile(store)?;
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::host::home_text();
     let mut child = tokio::process::Command::new("dsh")
         .args(["--profile", PROFILE, "--patch"])
         .arg(&layer)
@@ -1213,13 +1212,6 @@ fn effort(level: &str) -> &str {
         "xhigh" => "max",
         other => other,
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

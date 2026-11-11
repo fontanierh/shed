@@ -350,7 +350,7 @@ impl PrimeDaemon {
         model: Option<&str>,
         thinking: Option<&str>,
     ) -> Result<PrimeRow> {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::host::home_text();
         let mut config = json!({
             "cwd": cwd,
             "executionMode": "interactive",

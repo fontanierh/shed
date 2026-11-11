@@ -2,9 +2,10 @@
 //! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
 //! read-only views of what their parent session reports about them.
 
+use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -191,8 +192,7 @@ fn log_loop(
         "reason": reason,
         "sample": sample,
     });
-    let path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".agent-remote/logs/loops.jsonl");
+    let path = crate::host::home().join(".agent-remote/logs/loops.jsonl");
     let written = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -201,13 +201,6 @@ fn log_loop(
     if let Err(e) = written {
         eprintln!("can't log the loop to {}: {e}", path.display());
     }
-}
-
-pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Parses `2026-10-30T09:49:57.304Z` into epoch milliseconds.
@@ -413,7 +406,7 @@ impl App {
     pub fn new(store: Store) -> Result<Arc<App>> {
         let (prime, prime_events) = PrimeDaemon::start(store.client_id()?, store.clone());
         let mut limits = store.load_limits();
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::host::home_text();
         if crate::store::adopt_stray_limits(
             &mut limits,
             std::path::Path::new(&format!("{home}/.prime/agent/daemon-workers")),
@@ -1139,7 +1132,7 @@ pub async fn attach_snapshot(session: &Session) -> (u64, SessionSummary, ServerM
 
 pub fn expand_dir(path: &str) -> Result<String> {
     let path = match path.strip_prefix("~") {
-        Some(rest) => format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest),
+        Some(rest) => format!("{}{}", crate::host::home_text(), rest),
         None => path.to_string(),
     };
     let canonical = std::fs::canonicalize(&path).map_err(|e| anyhow!("{path}: {e}"))?;

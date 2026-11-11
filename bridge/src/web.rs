@@ -147,12 +147,8 @@ pub fn install() {
 
 const PYTHON: &str = include_str!("../python/shed_web.py");
 
-fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
-}
-
 fn state_dir() -> PathBuf {
-    home().join(".agent-remote")
+    crate::host::home().join(".agent-remote")
 }
 
 /// Where the `shed_web` Python module is, for Prime's PYTHONPATH.
@@ -165,7 +161,7 @@ pub fn bin_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| home().join(".agent-remote/bin"))
+        .unwrap_or_else(|| crate::host::home().join(".agent-remote/bin"))
 }
 
 /// `dir` ahead of the folders in `path`, once.
@@ -536,7 +532,7 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
         "pid": std::process::id(),
         "outcome": outcome,
     });
-    let dir = home().join(".agent-remote/logs");
+    let dir = crate::host::home().join(".agent-remote/logs");
     #[expect(
         clippy::let_underscore_must_use,
         reason = "this runs inside an agent's tool call, where stderr is the agent's reading: a log line lost is not \

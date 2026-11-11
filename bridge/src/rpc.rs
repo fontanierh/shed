@@ -103,7 +103,7 @@ pub async fn list_models(
 
 /// A model table as Pi and Prime print it: a header, then a provider and a model id leading each row.
 pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::host::home_text();
     let run = Command::new(program)
         .args(args)
         .current_dir(if home.is_empty() { "/".into() } else { home })

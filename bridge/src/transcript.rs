@@ -1,5 +1,6 @@
 //! Normalizes Pi/Prime messages and streaming events into a flat list of transcript items.
 
+use crate::host::now_ms;
 use std::collections::HashMap;
 
 use serde_json::Value;
@@ -574,13 +575,6 @@ impl Transcript {
             _ => {}
         }
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -19,8 +19,6 @@ pub const PROVIDER: &str = "opencodex";
 /// Open Codex trusts its loopback listener, so the agents' key is a placeholder; dsh reads it from this variable.
 pub const KEY: &str = "unused";
 pub const KEY_ENV: &str = "SHED_OPENCODEX_KEY";
-/// Pi's thinking levels, lowest first.
-const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Where Open Codex listens: `opencodex` in ~/.agent-remote/config.json, `{url, managementUrl, adminTokenFile}`, else
 /// its defaults when it's installed (~/.opencodex). `"opencodex": false` turns routing off.
@@ -30,12 +28,8 @@ pub struct Gateway {
     token_file: PathBuf,
 }
 
-fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
-}
-
 pub fn gateway(store: &Store) -> Option<Gateway> {
-    gateway_in(store, &home())
+    gateway_in(store, &crate::host::home())
 }
 
 // The readers in this file take what they can of what comes from outside: a part that is missing, or of another
@@ -226,7 +220,7 @@ fn level_map(model: &Model) -> Option<Value> {
     if efforts.is_empty() {
         return None;
     }
-    let map: serde_json::Map<String, Value> = LEVELS
+    let map: serde_json::Map<String, Value> = crate::agent_wire::THINKING_LEVELS
         .iter()
         .map(|level| {
             let wire = if *level == "off" { "none" } else { level };
@@ -323,7 +317,7 @@ fn dsh_catalog_file(home: &Path) -> PathBuf {
 /// Open Codex also serves onto it. Other providers are left as they are, for the agents' own use and their older
 /// sessions.
 pub async fn sync(gateway: &Gateway) -> Result<()> {
-    write(&home(), &gateway.url, &catalog(gateway).await?)
+    write(&crate::host::home(), &gateway.url, &catalog(gateway).await?)
 }
 
 /// What `sync` writes, in the agents' folders under `home`.
@@ -448,7 +442,8 @@ fn write_if_changed(path: &PathBuf, bytes: &[u8]) -> Result<()> {
 pub fn dsh_layer(store: &Store) -> Option<String> {
     let gateway = gateway(store)?;
     let models: Value =
-        serde_json::from_slice(&std::fs::read(dsh_catalog_file(&home())).ok()?).ok()?;
+        serde_json::from_slice(&std::fs::read(dsh_catalog_file(&crate::host::home())).ok()?)
+            .ok()?;
     let providers = json!({
         PROVIDER: {
             "displayName": "Open Codex",
