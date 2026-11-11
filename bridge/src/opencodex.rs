@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 
 use crate::store::{Addresses, Routing, Store};
 
@@ -67,38 +66,24 @@ fn gateway_in(store: &Store, home: &Path) -> Option<Gateway> {
     })
 }
 
-/// GET a JSON document. The admin token goes in on stdin, never in the arguments, where `ps` would show it.
 async fn get(url: &str, token: Option<&str>) -> Result<Value> {
-    let mut child = tokio::process::Command::new("/usr/bin/curl")
-        .args([
-            "-sS",
-            "--fail-with-body",
-            "--max-time",
-            "15",
-            "-K",
-            "-",
-            url,
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| anyhow!("no stdin"))?;
+    let mut req = crate::host::http()
+        .get(url)
+        .timeout(Duration::from_secs(15));
     if let Some(token) = token {
-        stdin
-            .write_all(format!("header = \"Authorization: Bearer {token}\"\n").as_bytes())
-            .await?;
+        req = req.bearer_auth(token);
     }
-    drop(stdin);
-    let out = child.wait_with_output().await?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "Open Codex: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+    let response = req.send().await.map_err(|e| anyhow!("Open Codex: {e}"))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| anyhow!("Open Codex: {e}"))?;
+    if !status.is_success() {
+        let detail = String::from_utf8_lossy(&body);
+        return Err(anyhow!("Open Codex ({status}): {}", detail.trim()));
     }
-    Ok(serde_json::from_slice(&out.stdout)?)
+    Ok(serde_json::from_slice(&body)?)
 }
 
 /// Open Codex's provider for a Claude Pro or Max login. Its models stay out of Shed: a Claude subscription is
@@ -478,12 +463,15 @@ pub fn conversation(session_id: &str) -> String {
 
 /// What a conversation has spent: dollars where Open Codex has a price for the model, tokens either way, and the
 /// time of the latest request counted, from which the next count carries on.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct Tally {
     pub cost: f64,
     pub priced: bool,
     pub tokens: u64,
     pub through: u64,
+    /// When a window spans >100 pages (newest-first), holds `(since, next_cursor, newest_seen)` until drained so
+    /// `through` never advances past unread older pages.
+    pending: Option<(u64, String, u64)>,
 }
 
 impl Tally {
@@ -492,16 +480,20 @@ impl Tally {
         let token = std::fs::read_to_string(&gateway.token_file)
             .map_err(|e| anyhow!("Open Codex admin token: {e}"))?;
         let token = token.trim();
-        let since = if self.through == 0 {
-            0
-        } else {
-            self.through + 1
+        let (since, mut cursor, mut newest) = match self.pending.clone() {
+            Some((since, cursor, newest)) => (since, Some(cursor), newest),
+            None => (
+                if self.through == 0 {
+                    0
+                } else {
+                    self.through + 1
+                },
+                None,
+                self.through,
+            ),
         };
-        let mut cursor: Option<String> = None;
-        // Added up apart and kept only when every page came: a failed page leaves the tally as it was, so the next
-        // try doesn't count the first pages twice.
-        let mut counted = *self;
-        // Pages of 100, newest first: a long session's whole history the first time, a few requests after that.
+        let mut counted = self.clone();
+        let mut more = false;
         for _ in 0..100 {
             let mut url = format!(
                 "{}/api/request-history?limit=100&from={since}&conversationId={conversation}",
@@ -517,10 +509,27 @@ impl Tally {
                     }
                 }
             }
-            match counted.add(Page::read(&get(&url, Some(token)).await?)) {
-                Some(next) => cursor = Some(next),
-                None => break,
+            let before = counted.through;
+            counted.through = newest;
+            let next = counted.add(Page::read(&get(&url, Some(token)).await?));
+            newest = newest.max(counted.through);
+            counted.through = before;
+            match next {
+                Some(next) => {
+                    cursor = Some(next);
+                    more = true;
+                }
+                None => {
+                    more = false;
+                    break;
+                }
             }
+        }
+        if more {
+            counted.pending = cursor.map(|c| (since, c, newest));
+        } else {
+            counted.pending = None;
+            counted.through = newest;
         }
         *self = counted;
         Ok(())

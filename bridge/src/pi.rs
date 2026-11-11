@@ -6,10 +6,11 @@ use anyhow::Result;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 
+use crate::agent::AgentKind;
 use crate::agent::{file_stem, Agent, JobsFrom, Sessions, Started, Starts, SubagentsFrom, Verbs};
 use crate::agent_wire::ConversationId;
 use crate::ask::{Ask, Delivery};
-use crate::rpc::{AgentKind, Launch, Protocol, RpcChild, SpawnOptions};
+use crate::rpc::{Launch, RpcChild, SpawnOptions};
 use crate::store::Store;
 
 pub fn agent(store: Store) -> Arc<dyn Agent> {
@@ -104,7 +105,6 @@ impl Starts for Pi {
             program: "pi".into(),
             args,
             env,
-            protocol: Protocol::Pi,
         };
         let (child, output) = RpcChild::spawn(launch, opts)?;
         Ok((child, output))

@@ -6,14 +6,24 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::agent_wire::{ConversationId, PrimeRow};
+use crate::agent_wire::{ConversationId, KeptRow};
 use crate::ask::Ask;
 use crate::prime::PrimeDaemon;
-use crate::rpc::{AgentKind, ChildOutput, SpawnOptions};
+use crate::rpc::{ChildOutput, SpawnOptions};
 use crate::store::Store;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+#[serde(rename_all = "lowercase")]
+pub enum AgentKind {
+    Pi,
+    Prime,
+    Deepseek,
+}
 
 /// One kind of agent.
 pub trait Agent: Send + Sync {
@@ -120,7 +130,7 @@ pub trait Keeps {
         cwd: String,
         model: Option<String>,
         thinking: Option<String>,
-    ) -> BoxFuture<'_, Result<PrimeRow>>;
+    ) -> BoxFuture<'_, Result<KeptRow>>;
 }
 
 /// An agent answered a command and said no, in its own words: as opposed to not being there, or not answering.
@@ -138,6 +148,8 @@ impl std::error::Error for Refused {}
 /// Where a session's background commands are found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobsFrom {
+    #[allow(dead_code)]
+    None,
     /// The files Pi's background-command extension keeps for each session.
     Files,
     /// The processes under the session's Python kernel, with what Prime lists of them.
@@ -149,6 +161,8 @@ pub enum JobsFrom {
 /// How a session's subagents reach the bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubagentsFrom {
+    #[allow(dead_code)]
+    None,
     /// Streamed inside the parent's `subagent` tool call (`details.results`).
     PiTool,
     /// Sent as events of their own (`dsh_subagent`).
@@ -186,7 +200,7 @@ pub fn capabilities(agent: &dyn Agent, read_only: bool) -> crate::protocol::Capa
         auto_compaction_switch: verbs.auto_compaction(true).is_some(),
         follow_up: verbs.follow_up(String::new()).is_some(),
         answer: verbs.answer(String::new(), Vec::new()).is_some(),
-        background_commands: true,
+        background_commands: agent.jobs() != JobsFrom::None,
         spend_includes_subagents: agent.spend_includes_subagents(),
     }
 }
@@ -241,6 +255,23 @@ impl Agents {
     }
 }
 
+/// The models an agent can start a session on, as `[{provider, id, name}]`, synced from Open Codex when configured.
+pub async fn list_models(agents: &Agents, agent: AgentKind, store: &Store) -> Result<Value> {
+    let gateway = crate::opencodex::gateway(store);
+    if let Some(gateway) = &gateway {
+        if let Err(e) = crate::opencodex::sync(store, gateway).await {
+            eprintln!("Open Codex catalog: {e}");
+        }
+    }
+    let mut models = agents.get(agent).models().await?;
+    if gateway.is_some() {
+        if let Some(list) = models.as_array_mut() {
+            list.retain(|m| m["provider"] == crate::opencodex::PROVIDER);
+        }
+    }
+    Ok(models)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -252,7 +283,7 @@ mod tests {
         let store = Store::temporary("agent-gateway");
         let prime = PrimeDaemon::unconnected("test".into(), store.clone());
         let agents = Agents::installed(prime, store.clone());
-        let conv = PrimeRow::read(&json!({ "activeSessionId": "a1", "sessionId": "conv-1" }))
+        let conv = KeptRow::read(&json!({ "activeSessionId": "a1", "sessionId": "conv-1" }))
             .unwrap()
             .conversation
             .unwrap();

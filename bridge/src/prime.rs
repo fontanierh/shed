@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 use futures_util::future::BoxFuture;
 use serde_json::{json, Value};
 
 use crate::agent::{Agent, JobsFrom, Keeps, Live, Sessions, SubagentsFrom, Verbs};
-use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
+use crate::agent_wire::{ConversationId, InactiveRow, KeptRow};
 use crate::ask::{Ask, Delivery};
 use crate::channel::Offer;
 use crate::protocol::SessionKind;
@@ -28,8 +28,8 @@ const PROTOCOL_VERSION: u64 = 7;
 
 pub enum DaemonEvent {
     /// (Re)connected; carries the full roster from `roster_subscribe`.
-    Roster(Vec<PrimeRow>),
-    RosterUpdate(Vec<PrimeRow>),
+    Roster(Vec<KeptRow>),
+    RosterUpdate(Vec<KeptRow>),
     SessionEvent {
         active_session_id: String,
         event: Value,
@@ -104,7 +104,7 @@ impl Keeps for Prime {
         cwd: String,
         model: Option<String>,
         thinking: Option<String>,
-    ) -> BoxFuture<'_, Result<PrimeRow>> {
+    ) -> BoxFuture<'_, Result<KeptRow>> {
         Box::pin(async move {
             self.daemon
                 .create(&cwd, model.as_deref(), thinking.as_deref())
@@ -212,7 +212,7 @@ impl Verbs for PrimeVerbs {
         &self,
         session_file: Option<String>,
     ) -> Option<BoxFuture<'static, Result<Value>>> {
-        Some(Box::pin(restart_kernel(session_file)))
+        Some(Box::pin(crate::jobs::kill_prime_kernel(session_file)))
     }
 
     fn answer(&self, _: String, _: Vec<Value>) -> Option<Ask> {
@@ -258,7 +258,7 @@ pub struct PrimeDaemon {
 }
 
 /// The name of a top-level session in Prime's own list; a subagent has none worth keeping.
-fn top_level(row: &PrimeRow) -> Option<String> {
+fn top_level(row: &KeptRow) -> Option<String> {
     (row.kind != SessionKind::Subagent)
         .then(|| row.listed_as.clone())
         .flatten()
@@ -434,11 +434,11 @@ impl PrimeDaemon {
                 return Err(e);
             }
         };
-        let rows: Vec<PrimeRow> = roster["roster"]
+        let rows: Vec<KeptRow> = roster["roster"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|row| PrimeRow::read(&row["summary"]))
+            .filter_map(|row| KeptRow::read(&row["summary"]))
             .collect();
         let running: HashSet<String> = rows.iter().filter_map(top_level).collect();
         tx.offer(DaemonEvent::Roster(rows));
@@ -482,7 +482,7 @@ impl PrimeDaemon {
                             tx.offer(DaemonEvent::Inactive(row));
                         }
                     } else {
-                        rows.extend(PrimeRow::read(&row["summary"]));
+                        rows.extend(KeptRow::read(&row["summary"]));
                     }
                 }
                 self.note_shown(&rows);
@@ -558,7 +558,7 @@ impl PrimeDaemon {
         cwd: &str,
         model: Option<&str>,
         thinking: Option<&str>,
-    ) -> Result<PrimeRow> {
+    ) -> Result<KeptRow> {
         let home = crate::host::home_text();
         let mut config = json!({
             "cwd": cwd,
@@ -579,7 +579,7 @@ impl PrimeDaemon {
                 QUICK,
             )
             .await?;
-        PrimeRow::read(&created).ok_or_else(|| anyhow!("Prime returned no session id"))
+        KeptRow::read(&created).ok_or_else(|| anyhow!("Prime returned no session id"))
     }
 
     fn save_shown(&self, shown: &HashSet<String>) {
@@ -589,7 +589,7 @@ impl PrimeDaemon {
     }
 
     /// Remembers top-level sessions that start while connected, so a reboot doesn't lose them either.
-    fn note_shown(&self, rows: &[PrimeRow]) {
+    fn note_shown(&self, rows: &[KeptRow]) {
         let mut shown = self.shown.lock().unwrap();
         let before = shown.len();
         shown.extend(rows.iter().filter_map(top_level));
@@ -612,7 +612,7 @@ impl PrimeDaemon {
             .into_iter()
             .flatten()
             .filter(|s| s["lifecycle"] == "live")
-            .filter_map(PrimeRow::read)
+            .filter_map(KeptRow::read)
             .filter_map(|row| Some((top_level(&row)?, row.id)))
             .collect();
         // The first run has no list yet: start it from what is running.
@@ -669,74 +669,6 @@ fn start_daemon() -> Result<()> {
     Ok(())
 }
 
-/// Prime offers no command for this (its terminal asks the user itself, and never asks a remote client), but its
-/// kernels run on this machine: kill the session's own kernel, found by the session id in its environment, along with
-/// whatever it started. Prime notices the kernel is gone and starts a fresh one on the next Python call.
-async fn restart_kernel(session_file: Option<String>) -> Result<Value> {
-    let file = session_file.context("Prime hasn't reported this session's file yet")?;
-    let rlm_session = std::path::Path::new(&file)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or_default()
-        .to_string();
-    let output = tokio::process::Command::new("/bin/ps")
-        .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
-        .output()
-        .await?;
-    if !output.status.success() {
-        bail!("the processes on this computer can't be listed");
-    }
-    let table = String::from_utf8_lossy(&output.stdout);
-    let processes: Vec<(u32, u32, &str)> = table
-        .lines()
-        .filter_map(|line| {
-            let mut parts = line.split_whitespace();
-            let pid = parts.next()?.parse().ok()?;
-            let ppid = parts.next()?.parse().ok()?;
-            Some((pid, ppid, line))
-        })
-        .collect();
-    let marker = format!("RLM_SESSION_ID={rlm_session}");
-    let kernels: Vec<u32> = processes
-        .iter()
-        .filter(|(_, _, line)| {
-            line.contains(" -m rlm.repl") && line.split_whitespace().any(|word| word == marker)
-        })
-        .map(|(pid, _, _)| *pid)
-        .collect();
-    if kernels.is_empty() {
-        bail!("No Python kernel is running for this session");
-    }
-    // The kernels and everything under them: a hung shell command would otherwise outlive its kernel.
-    let mut doomed = kernels.clone();
-    let mut i = 0;
-    while i < doomed.len() {
-        let parent = doomed[i];
-        let children: Vec<u32> = processes
-            .iter()
-            .filter(|(pid, ppid, _)| *ppid == parent && !doomed.contains(pid))
-            .map(|(pid, _, _)| *pid)
-            .collect();
-        doomed.extend(children);
-        i += 1;
-    }
-    let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
-    let killed = tokio::process::Command::new("/bin/kill")
-        .arg("-9")
-        .args(&pids)
-        .output()
-        .await?;
-    // Some of them may have gone on their own meanwhile, which `kill` also reports as a failure: said, not
-    // answered as an error, since the kernel it was asked to end is ended either way.
-    if !killed.status.success() {
-        eprintln!(
-            "restarting the kernel of {rlm_session}: kill said {}",
-            String::from_utf8_lossy(&killed.stderr).trim()
-        );
-    }
-    Ok(json!({ "killed": doomed.len() }))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -750,7 +682,7 @@ mod tests {
             row.as_object_mut()
                 .unwrap()
                 .extend(more.as_object().unwrap().clone());
-            PrimeRow::read(&row).unwrap()
+            KeptRow::read(&row).unwrap()
         };
         assert_eq!(top_level(&row(json!({}))).as_deref(), Some("s1"));
         assert_eq!(top_level(&row(json!({ "runtimeKind": "subagent" }))), None);

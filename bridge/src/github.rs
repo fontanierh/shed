@@ -2,7 +2,6 @@
 //! over the last year, across every repository, and their open pull requests with review and check status, for the
 //! apps' home page.
 
-use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -125,21 +124,8 @@ async fn gh_graphql(query: &str, vars: &[(&str, &str)]) -> Result<Value> {
     Ok(serde_json::from_slice(&out.stdout)?)
 }
 
-/// `gh` on PATH, else where Homebrew puts it: a launchd service's PATH is short.
-fn gh_binary() -> &'static str {
-    static FOUND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    FOUND.get_or_init(|| {
-        let mut candidates: Vec<String> = std::env::var("PATH")
-            .unwrap_or_default()
-            .split(':')
-            .map(|dir| format!("{dir}/gh"))
-            .collect();
-        candidates.extend(["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].map(String::from));
-        candidates
-            .into_iter()
-            .find(|path| Path::new(path).is_file())
-            .unwrap_or_else(|| "gh".to_string())
-    })
+fn gh_binary() -> String {
+    crate::host::find_binary("gh", &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"])
 }
 
 #[cfg(test)]

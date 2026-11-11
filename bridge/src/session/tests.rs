@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 
 use super::*;
 use crate::agent::{Agent, Keeps, Sessions, Started, Starts};
-use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
+use crate::agent_wire::{ConversationId, InactiveRow, KeptRow};
 use crate::prime::DaemonEvent;
 use crate::protocol::{Goal, ModelInfo};
 
@@ -237,9 +237,9 @@ impl Keeps for Scripted {
         cwd: String,
         model: Option<String>,
         thinking: Option<String>,
-    ) -> BoxFuture<'_, Result<PrimeRow>> {
+    ) -> BoxFuture<'_, Result<KeptRow>> {
         let made = self.script.made.lock().unwrap().clone();
-        match made.as_ref().and_then(PrimeRow::read) {
+        match made.as_ref().and_then(KeptRow::read) {
             Some(row) => Box::pin(async move { Ok(row) }),
             None => Box::pin(async move {
                 let Sessions::Kept(real) = self.real.sessions() else {
@@ -771,8 +771,8 @@ async fn pi_events() {
     rig.check("pi").await;
 }
 
-fn rows(rows: Vec<Value>) -> Vec<PrimeRow> {
-    rows.iter().filter_map(PrimeRow::read).collect()
+fn rows(rows: Vec<Value>) -> Vec<KeptRow> {
+    rows.iter().filter_map(KeptRow::read).collect()
 }
 
 fn roster(all: Vec<Value>) -> DaemonEvent {
@@ -1189,11 +1189,11 @@ async fn malformed_prime_rows() {
     leniency("prime-rows-malformed", base, |row| async move {
         let mut seen = serde_json::Map::new();
         for (case, before) in [("new", None), ("known", Some(earlier))] {
-            if let Some(before) = before.and_then(PrimeRow::read) {
-                rig.app.apply_prime_row(before).await;
+            if let Some(before) = before.and_then(KeptRow::read) {
+                rig.app.apply_kept_row(AgentKind::Prime, before).await;
             }
-            let kept = match PrimeRow::read(&row) {
-                Some(row) => kept(rig, &*rig.app.apply_prime_row(row).await).await,
+            let kept = match KeptRow::read(&row) {
+                Some(row) => kept(rig, &*rig.app.apply_kept_row(AgentKind::Prime, row).await).await,
                 None => json!("not listed"),
             };
             seen.insert(case.into(), kept);

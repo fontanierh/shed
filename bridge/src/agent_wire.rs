@@ -120,7 +120,7 @@ fn queue(owner: &Value) -> Option<Queue> {
 }
 
 /// One session in Prime's roster.
-pub struct PrimeRow {
+pub struct KeptRow {
     pub id: String,
     pub cwd: String,
     pub created_at: Option<u64>,
@@ -148,11 +148,11 @@ pub struct PrimeRow {
     pub message_count: u64,
 }
 
-impl PrimeRow {
+impl KeptRow {
     /// `None` for a row without an `activeSessionId`: a session nobody can address.
-    pub fn read(row: &Value) -> Option<PrimeRow> {
+    pub fn read(row: &Value) -> Option<KeptRow> {
         let conversation = text(&row["sessionId"]).map(ConversationId);
-        Some(PrimeRow {
+        Some(KeptRow {
             id: text(&row["activeSessionId"])?,
             cwd: text(&row["cwd"]).unwrap_or_default(),
             created_at: row["created"].as_str().and_then(parse_iso_ms),
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn a_prime_row_is_listed_by_its_session_id_then_its_id() {
-        let listed = |row: Value| PrimeRow::read(&row).and_then(|row| row.listed_as);
+        let listed = |row: Value| KeptRow::read(&row).and_then(|row| row.listed_as);
         assert_eq!(
             listed(json!({ "activeSessionId": "a1", "sessionId": "s1", "id": "i1" })).as_deref(),
             Some("s1")

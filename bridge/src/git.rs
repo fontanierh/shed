@@ -1,6 +1,5 @@
 //! The branch a session's folder is on, read with the machine's own `git`, for the session header in the apps.
 
-use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -22,28 +21,15 @@ pub async fn branch(folder: &str) -> Value {
     json!({ "branch": branch })
 }
 
-/// The installed `git`, from the PATH or where macOS and Homebrew put it: launchd starts the bridge with a short PATH.
-fn git_binary() -> &'static str {
-    static FOUND: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    FOUND.get_or_init(|| {
-        let mut candidates: Vec<String> = std::env::var("PATH")
-            .unwrap_or_default()
-            .split(':')
-            .map(|dir| format!("{dir}/git"))
-            .collect();
-        candidates.extend(
-            [
-                "/opt/homebrew/bin/git",
-                "/usr/local/bin/git",
-                "/usr/bin/git",
-            ]
-            .map(String::from),
-        );
-        candidates
-            .into_iter()
-            .find(|path| Path::new(path).is_file())
-            .unwrap_or_else(|| "git".to_string())
-    })
+fn git_binary() -> String {
+    crate::host::find_binary(
+        "git",
+        &[
+            "/opt/homebrew/bin/git",
+            "/usr/local/bin/git",
+            "/usr/bin/git",
+        ],
+    )
 }
 
 /// A git command's output, or None when it fails or takes too long.
