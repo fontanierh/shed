@@ -5,36 +5,99 @@
 
 use std::time::Duration;
 
+use futures_util::future::BoxFuture;
+use strum::IntoEnumIterator;
+
 use super::*;
+use crate::agent::{Agent, Started};
 use crate::agent_wire::{ConversationId, InactiveRow, PrimeRow};
 use crate::prime::DaemonEvent;
 use crate::protocol::{Goal, ModelInfo};
 
-/// Stands in for the agents: answers the bridge's commands from a script and keeps what it was asked.
+/// What the tests answer for the agents, and what the bridge asked them.
 #[derive(Default)]
-pub struct Agents {
+pub struct Script {
     answers: std::sync::Mutex<HashMap<String, Value>>,
     /// Commands the agent refuses, and what it says.
     refusals: std::sync::Mutex<HashMap<String, String>>,
     asked: std::sync::Mutex<Vec<Value>>,
 }
 
-impl Agents {
-    /// The scripted answer to a command, or none to let it go to the agent, which no test has.
-    pub fn answer(&self, session: &str, kind: &str, fields: &Value) -> Option<Result<Value>> {
-        self.asked
-            .lock()
-            .unwrap()
-            .push(json!({ "session": session, "command": kind, "fields": fields }));
-        if let Some(refusal) = self.refusals.lock().unwrap().get(kind) {
-            return Some(Err(anyhow!("{refusal}")));
-        }
-        self.answers.lock().unwrap().get(kind).cloned().map(Ok)
+/// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
+struct Scripted {
+    script: Arc<Script>,
+    /// Who answers what the script does not: Prime's daemon, which no test has connected.
+    rest: Option<Arc<dyn Agent>>,
+}
+
+struct ScriptedSession {
+    script: Arc<Script>,
+    id: String,
+    rest: Option<Arc<dyn Live>>,
+    /// What it says to a command nobody answers.
+    absent: &'static str,
+}
+
+impl Agent for Scripted {
+    fn start(&self, _opts: &SpawnOptions) -> Result<Started> {
+        let (_events, output) = mpsc::unbounded_channel();
+        Ok((self.live("started"), output))
+    }
+
+    fn session(&self, id: &str) -> Option<Arc<dyn Live>> {
+        Some(Arc::new(ScriptedSession {
+            script: self.script.clone(),
+            id: id.to_string(),
+            rest: self.rest.as_ref().and_then(|rest| rest.session(id)),
+            absent: "session is not running",
+        }))
+    }
+
+    fn models(&self) -> BoxFuture<'_, Result<Value>> {
+        Box::pin(async { Ok(json!([])) })
+    }
+}
+
+impl Scripted {
+    fn live(&self, id: &str) -> Arc<dyn Live> {
+        Arc::new(ScriptedSession {
+            script: self.script.clone(),
+            id: id.to_string(),
+            rest: None,
+            absent: "agent is not running",
+        })
+    }
+}
+
+impl Live for ScriptedSession {
+    fn send(&self, kind: &str, fields: Value) -> BoxFuture<'_, Result<Value>> {
+        let kind = kind.to_string();
+        Box::pin(async move {
+            self.script
+                .asked
+                .lock()
+                .unwrap()
+                .push(json!({ "session": self.id, "command": kind, "fields": fields }));
+            if let Some(refusal) = self.script.refusals.lock().unwrap().get(&kind) {
+                return Err(anyhow!("{refusal}"));
+            }
+            let scripted = self.script.answers.lock().unwrap().get(&kind).cloned();
+            match (scripted, &self.rest) {
+                (Some(answer), _) => Ok(answer),
+                (None, Some(rest)) => rest.send(&kind, fields).await,
+                (None, None) => Err(anyhow!("{}", self.absent)),
+            }
+        })
+    }
+
+    fn close(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
     }
 }
 
 struct Rig {
     app: Arc<App>,
+    agents: Arc<Script>,
     hub: broadcast::Receiver<Arc<Envelope>>,
     prime: mpsc::UnboundedSender<DaemonEvent>,
     started: u64,
@@ -55,12 +118,23 @@ impl Rig {
         }
         let limits = store.load_limits();
         let prime = PrimeDaemon::unconnected("test".into());
-        let app = App::assemble(store, prime, limits).unwrap();
+        let script = Arc::new(Script::default());
+        let agents = Agents::of(AgentKind::iter().map(|kind| {
+            let rest = (kind == AgentKind::Prime)
+                .then(|| Agents::installed(prime.clone()).get(kind).unwrap().clone());
+            let agent = Scripted {
+                script: script.clone(),
+                rest,
+            };
+            (kind, Arc::new(agent) as Arc<dyn Agent>)
+        }));
+        let app = App::assemble(store, prime, limits, agents).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(app.clone().run_prime(rx));
         Rig {
             hub: app.hub.subscribe(),
             app,
+            agents: script,
             prime: tx,
             started: now_ms(),
             last: HashMap::new(),
@@ -70,8 +144,7 @@ impl Rig {
     }
 
     fn script(&self, command: &str, answer: Value) {
-        self.app
-            .agents
+        self.agents
             .answers
             .lock()
             .unwrap()
@@ -149,7 +222,7 @@ impl Rig {
     async fn check(self, pin: &str) {
         let mut sessions = json!(self.app.summaries().await);
         self.steady(&mut sessions);
-        let mut asked = json!(*self.app.agents.asked.lock().unwrap());
+        let mut asked = json!(*self.agents.asked.lock().unwrap());
         self.steady(&mut asked);
         let mut seen = json!({
             "steps": self.steps,
@@ -873,7 +946,7 @@ async fn malformed_state_and_stats() {
         ("answers-malformed-pi", AgentKind::Pi, Backend::Pi),
     ] {
         leniency(pin, base.clone(), |answers| async move {
-            *rig.app.agents.answers.lock().unwrap() =
+            *rig.agents.answers.lock().unwrap() =
                 serde_json::from_value(answers).unwrap_or_default();
             // What an earlier refresh left, so a part the agent leaves out shows as kept.
             let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
@@ -890,7 +963,11 @@ async fn malformed_state_and_stats() {
                 reasoning: true,
             });
             let file = Some("/work/sessions/earlier.jsonl".into());
-            let mut state = SessionState::new(summary, file, own(backend, backend == Backend::Pi));
+            let mut state = SessionState::new(
+                summary,
+                file,
+                own(rig, "s1", backend, backend == Backend::Pi),
+            );
             state.levels_for = Some("example/model-0".into());
             let session = Arc::new(Session::new(
                 "s1".into(),
@@ -902,7 +979,7 @@ async fn malformed_state_and_stats() {
                 Ok(()) => kept(rig, &session).await,
                 Err(error) => json!({ "fails": error.to_string() }),
             };
-            let asked: Vec<Value> = std::mem::take(&mut *rig.app.agents.asked.lock().unwrap())
+            let asked: Vec<Value> = std::mem::take(&mut *rig.agents.asked.lock().unwrap())
                 .into_iter()
                 .map(|asked| asked["command"].clone())
                 .collect();
@@ -915,10 +992,17 @@ async fn malformed_state_and_stats() {
 
 /// What a session of this backend starts with. One that is `live` has its agent: a Pi process that does nothing, or
 /// Prime's daemon attached.
-fn own(backend: Backend, live: bool) -> BackendState {
+fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
     match backend {
         Backend::Pi => BackendState::Pi {
-            child: live.then(crate::rpc::RpcChild::inert),
+            child: live.then(|| {
+                Arc::new(ScriptedSession {
+                    script: rig.agents.clone(),
+                    id: id.to_string(),
+                    rest: None,
+                    absent: "agent is not running",
+                }) as Arc<dyn Live>
+            }),
         },
         Backend::Prime => BackendState::Prime(PrimeState {
             attached: live,
@@ -1108,11 +1192,11 @@ async fn commands() {
     for (kind, agent, backend, answering) in kinds {
         let mut of_kind = serde_json::Map::new();
         for case in cases {
-            *rig.app.agents.answers.lock().unwrap() = match answering {
+            *rig.agents.answers.lock().unwrap() = match answering {
                 true => serde_json::from_value(answers.clone()).unwrap(),
                 false => HashMap::new(),
             };
-            *rig.app.agents.refusals.lock().unwrap() = match case {
+            *rig.agents.refusals.lock().unwrap() = match case {
                 "send, and the agent is already streaming" if answering => HashMap::from([(
                     "prompt".to_string(),
                     "Agent is already streaming".to_string(),
@@ -1124,7 +1208,7 @@ async fn commands() {
             if case == "send while it works" {
                 summary.status = SessionStatus::Running;
             }
-            let state = SessionState::new(summary, None, own(backend, answering));
+            let state = SessionState::new(summary, None, own(rig, "s1", backend, answering));
             let session = &Arc::new(Session::new(
                 "s1".into(),
                 agent,
@@ -1163,7 +1247,7 @@ async fn commands() {
             if let Some(items) = changed.get_mut("items") {
                 *items = json!(items.as_array().map(Vec::len));
             }
-            let asked: Vec<Value> = std::mem::take(&mut *app.agents.asked.lock().unwrap())
+            let asked: Vec<Value> = std::mem::take(&mut *rig.agents.asked.lock().unwrap())
                 .into_iter()
                 .map(|mut asked| {
                     asked.as_object_mut().unwrap().remove("session");

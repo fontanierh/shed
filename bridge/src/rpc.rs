@@ -6,7 +6,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -35,6 +35,24 @@ pub struct SpawnOptions {
     pub env: Vec<(String, String)>,
 }
 
+/// The process to run for a session.
+pub struct Launch {
+    pub program: String,
+    pub args: Vec<String>,
+    /// On top of what every agent gets.
+    pub env: Vec<(String, String)>,
+    pub protocol: Protocol,
+}
+
+/// What the process speaks on its stdin and stdout.
+#[derive(PartialEq)]
+pub enum Protocol {
+    /// Pi's JSONL RPC.
+    Pi,
+    /// Shed's dsh plugin, which `crate::dsh` translates.
+    Dsh,
+}
+
 /// What the child's stdout produces besides command responses.
 pub enum ChildOutput {
     Event(Value),
@@ -61,7 +79,7 @@ pub fn unanswered(kind: &str, after: std::time::Duration) -> anyhow::Error {
 
 /// The models an agent can start a session on, as `[{provider, id, name}]`: what Pi and Prime list from their own
 /// settings, and the providers set up in DeepSeek Harness. Kept a minute, since listing starts the agent.
-pub async fn list_models(agent: AgentKind) -> Result<Value> {
+pub async fn list_models(agents: &crate::agent::Agents, agent: AgentKind) -> Result<Value> {
     static CACHE: Mutex<Option<HashMap<AgentKind, (std::time::Instant, Value)>>> = Mutex::new(None);
     if let Some((at, models)) = CACHE.lock().unwrap().get_or_insert_default().get(&agent) {
         if at.elapsed().as_secs() < 60 {
@@ -76,11 +94,7 @@ pub async fn list_models(agent: AgentKind) -> Result<Value> {
             eprintln!("Open Codex catalog: {e}");
         }
     }
-    let mut models = match agent {
-        AgentKind::Deepseek => crate::dsh::list_models().await?,
-        AgentKind::Pi => listed_models("pi", &["--list-models"]).await?,
-        AgentKind::Prime => listed_models("prime-agent", &["model", "list"]).await?,
-    };
+    let mut models = agents.get(agent)?.models().await?;
     if gateway.is_some() {
         if let Some(list) = models.as_array_mut() {
             list.retain(|m| m["provider"] == crate::opencodex::PROVIDER);
@@ -95,7 +109,7 @@ pub async fn list_models(agent: AgentKind) -> Result<Value> {
 }
 
 /// A model table as Pi and Prime print it: a header, then a provider and a model id leading each row.
-async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
+pub async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
     let home = std::env::var("HOME").unwrap_or_default();
     let run = Command::new(program)
         .args(args)
@@ -122,73 +136,22 @@ async fn listed_models(program: &str, args: &[&str]) -> Result<Value> {
     Ok(json!(models))
 }
 
-fn command_line(opts: &SpawnOptions) -> Result<(String, Vec<String>)> {
-    if opts.agent == AgentKind::Deepseek {
-        // The session's model, reasoning effort and resumption go to the plugin once it starts.
-        let layer = crate::dsh::install_profile()
-            .context("the Shed profile for dsh can't be written")?
-            .to_string_lossy()
-            .into_owned();
-        let args = ["--profile", crate::dsh::PROFILE, "--patch", &layer];
-        return Ok(("dsh".into(), args.iter().map(|a| a.to_string()).collect()));
-    }
-    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into()];
-    let program = match opts.agent {
-        AgentKind::Pi => "pi",
-        AgentKind::Prime => {
-            args.extend(["--cwd".into(), opts.cwd.clone()]);
-            "prime-agent"
-        }
-        AgentKind::Deepseek => unreachable!(),
-    };
-    if let Some(model) = &opts.model {
-        args.extend(["--model".into(), model.clone()]);
-    }
-    if let Some(thinking) = &opts.thinking {
-        args.extend(["--thinking".into(), thinking.clone()]);
-    }
-    args.extend([
-        "--append-system-prompt".into(),
-        crate::guide::text(opts.agent),
-    ]);
-    if let Some(resume) = &opts.resume {
-        let flag = if opts.agent == AgentKind::Pi {
-            "--session"
-        } else {
-            "--resume"
-        };
-        args.extend([flag.into(), resume.clone()]);
-    }
-    Ok((program.into(), args))
-}
-
 impl RpcChild {
-    /// A child with no process behind it, for a session whose commands a test answers.
-    #[cfg(test)]
-    pub(crate) fn inert() -> Arc<RpcChild> {
-        Arc::new(RpcChild {
-            stdin: tokio::sync::Mutex::new(None),
-            dsh: None,
-            requests: Arc::default(),
-            stderr_tail: Arc::default(),
-            next_id: AtomicU64::new(0),
-            child: Mutex::new(None),
-        })
-    }
-
     pub fn spawn(
+        launch: Launch,
         opts: &SpawnOptions,
     ) -> Result<(Arc<RpcChild>, mpsc::UnboundedReceiver<ChildOutput>)> {
-        let (program, args) = command_line(opts)?;
+        let Launch {
+            program,
+            args,
+            env,
+            protocol,
+        } = launch;
         let mut child = Command::new(&program)
             .args(&args)
             .current_dir(&opts.cwd)
             .envs(opts.env.iter().cloned())
-            // Shed runs its agents without asking or a sandbox, as it does Pi and Prime.
-            .envs(
-                (opts.agent == AgentKind::Deepseek)
-                    .then_some(("DSH_PERMISSION_MODE", "danger-full-access")),
-            )
+            .envs(env)
             .env(crate::opencodex::KEY_ENV, crate::opencodex::KEY)
             // `shed-web`, the web command the guide tells the agents about.
             .env(
@@ -209,7 +172,7 @@ impl RpcChild {
         let mut stdout = child.stdout.take();
         let stderr = child.stderr.take().expect("piped stderr");
         let (tx, rx) = mpsc::unbounded_channel();
-        let deepseek = opts.agent == AgentKind::Deepseek;
+        let deepseek = protocol == Protocol::Dsh;
         let rpc = Arc::new_cyclic(|me: &std::sync::Weak<RpcChild>| {
             let me = me.clone();
             let exited = async move {

@@ -10,6 +10,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
+use crate::agent::{Agents, Live};
 use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
 use crate::channel::Offer;
 use crate::history::{self, History};
@@ -17,7 +18,7 @@ use crate::prime::PrimeDaemon;
 use crate::protocol::{
     Item, ItemKind, Queue, ServerMessage, SessionKind, SessionStatus, SessionSummary,
 };
-use crate::rpc::{AgentKind, ChildOutput, RpcChild, SpawnOptions};
+use crate::rpc::{AgentKind, ChildOutput, SpawnOptions};
 use crate::store::{SessionRecord, Store};
 use crate::transcript::{Change, Transcript};
 
@@ -53,9 +54,8 @@ pub struct App {
     compacting_for_limit: std::sync::Mutex<HashMap<String, Instant>>,
     /// Prime sessions' spending, subagents included, read from their session files.
     costs: crate::cost::Costs,
-    /// What the tests answer for the agents, and what the bridge asked them.
-    #[cfg(test)]
-    agents: tests::Agents,
+    /// The agents this bridge can run a session of.
+    agents: Agents,
 }
 
 pub struct Session {
@@ -83,7 +83,7 @@ impl Session {
 enum BackendState {
     Pi {
         /// None while the session is stopped.
-        child: Option<Arc<RpcChild>>,
+        child: Option<Arc<dyn Live>>,
     },
     Prime(PrimeState),
     PiSubagent {
@@ -293,7 +293,7 @@ impl SessionState {
     }
 
     /// The agent process of a running `Pi` session.
-    fn child(&self) -> Option<&Arc<RpcChild>> {
+    fn child(&self) -> Option<&Arc<dyn Live>> {
         match &self.own {
             BackendState::Pi { child } => child.as_ref(),
             BackendState::Prime(_) | BackendState::PiSubagent { .. } => None,
@@ -382,7 +382,8 @@ impl App {
                 eprintln!("failed to save context windows: {e}");
             }
         }
-        let app = App::assemble(store, prime, limits)?;
+        let agents = Agents::installed(prime.clone());
+        let app = App::assemble(store, prime, limits, agents)?;
         tokio::spawn(app.clone().run_prime(prime_events));
         tokio::spawn(app.clone().watch_background_jobs());
         tokio::spawn(app.clone().watch_spend());
@@ -395,6 +396,7 @@ impl App {
         store: Store,
         prime: Arc<PrimeDaemon>,
         limits: HashMap<String, u64>,
+        agents: Agents,
     ) -> Result<Arc<App>> {
         let token = store.token()?;
         let (hub, _) = broadcast::channel(4096);
@@ -423,8 +425,7 @@ impl App {
             limits,
             compacting_for_limit: std::sync::Mutex::new(HashMap::new()),
             costs: crate::cost::Costs::default(),
-            #[cfg(test)]
-            agents: Default::default(),
+            agents,
         });
         Ok(app)
     }
@@ -558,29 +559,24 @@ impl App {
         }
     }
 
-    /// Run an agent command against a session, whichever backend owns it.
-    pub async fn command(&self, session: &Session, kind: &str, fields: Value) -> Result<Value> {
-        #[cfg(test)]
-        if let Some(answer) = self.agents.answer(&session.id, kind, &fields) {
-            return answer;
-        }
-        match session.backend {
-            Backend::Pi => self.child(session).await?.send(kind, fields).await,
-            Backend::Prime => self.prime.session(&session.id, kind, fields).await,
-            Backend::PiSubagent => {
-                bail!("Pi subagents are read-only; steer the parent session instead")
-            }
-        }
+    /// The models a session of this agent can start on.
+    pub async fn list_models(&self, agent: AgentKind) -> Result<Value> {
+        crate::rpc::list_models(&self.agents, agent).await
     }
 
-    async fn child(&self, session: &Session) -> Result<Arc<RpcChild>> {
-        session
-            .state
-            .lock()
-            .await
-            .child()
-            .cloned()
-            .ok_or_else(|| anyhow!("session is not running"))
+    /// Run an agent command against a session: by the process the bridge runs for it, or else by the agent itself
+    /// when it keeps its own sessions.
+    pub async fn command(&self, session: &Session, kind: &str, fields: Value) -> Result<Value> {
+        if session.backend == Backend::PiSubagent {
+            bail!("Pi subagents are read-only; steer the parent session instead")
+        }
+        let child = session.state.lock().await.child().cloned();
+        let live = match child {
+            Some(child) => Some(child),
+            None => self.agents.get(session.agent)?.session(&session.id),
+        };
+        let live = live.ok_or_else(|| anyhow!("session is not running"))?;
+        live.send(kind, fields).await
     }
 
     // ---- creating and stopping ----
@@ -674,7 +670,10 @@ impl App {
             resume,
             env,
         };
-        let spawned = RpcChild::spawn(&opts);
+        let spawned = match self.agents.get(session.agent) {
+            Ok(agent) => agent.start(&opts),
+            Err(e) => Err(e),
+        };
         let (child, rx) = {
             let mut st = session.state.lock().await;
             match spawned {
@@ -793,7 +792,7 @@ impl App {
     async fn run_pi_events(
         self: Arc<Self>,
         session: Arc<Session>,
-        child: Arc<RpcChild>,
+        child: Arc<dyn Live>,
         mut rx: mpsc::UnboundedReceiver<ChildOutput>,
     ) {
         while let Some(output) = rx.recv().await {

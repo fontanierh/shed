@@ -340,7 +340,7 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             json!({ "items": items, "earlier": earlier })
         }
         ClientOp::ListAgentModels { agent } => {
-            json!({ "models": crate::rpc::list_models(agent).await? })
+            json!({ "models": app.list_models(agent).await? })
         }
         ClientOp::ListDir { path, hidden } => crate::files::list_dir(path.as_deref(), hidden)?,
         ClientOp::GitBranch { path } => crate::git::branch(&path).await,
