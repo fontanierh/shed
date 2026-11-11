@@ -20,6 +20,9 @@ import {
 	applySubagentLine,
 	buildSubagentDetails,
 	createSingleResult,
+	formatToolCallRecord,
+	isSubagentDetails,
+	substitutePrevious,
 } from "./subagent/records.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -129,5 +132,24 @@ test("subagent builds details.results matching protocol/pi_subagents.json", () =
 	reviewer.stderr = "provider rate limit\nretry later";
 
 	const details = buildSubagentDetails("chain", "user", null, [scout, reviewer]);
+	assert.equal(isSubagentDetails(details), true);
+	assert.equal(isSubagentDetails({ mode: "unknown", results: [] }), false);
 	checkFixture(PI_SUBAGENTS, details);
+});
+
+test("subagent substitutePrevious preserves $ patterns and formatToolCallRecord handles non-string args", () => {
+	const rawCode = "const tmp = `${file}.$$.tmp`; s.replace(/x/, '$&'); IFS=$'\\n'";
+	const expanded = substitutePrevious("Implement:\n{previous}\nDone.", rawCode);
+	assert.equal(expanded, `Implement:\n${rawCode}\nDone.`);
+
+	const tag = (c, s) => `[${c}:${s}]`;
+	const range = (o, l) => (o !== undefined ? `:${o}-${l ?? ""}` : "");
+	assert.equal(
+		formatToolCallRecord("read", { path: ["not-a-string"], offset: "bad" }, tag, "/Users/me", range),
+		"[muted:read ][accent:...]",
+	);
+	assert.equal(
+		formatToolCallRecord("write", { path: "/Users/me/a.ts", content: { bad: 1 } }, tag, "/Users/me", range),
+		"[muted:write ][accent:~/a.ts]",
+	);
 });

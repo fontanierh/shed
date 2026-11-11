@@ -56,6 +56,9 @@ else
   pi update --self
 fi
 pi update --models
+# Pi installs its own Node/npm in ~/.local/share/pi-node/current/bin on Macs without Homebrew or system Node:
+# put it on PATH now so DeepSeek Harness and Open Codex find npm too.
+[ -d "$HOME/.local/share/pi-node/current/bin" ] && export PATH="$HOME/.local/share/pi-node/current/bin:$PATH"
 note "pi $(pi --version)"
 summary+=("Pi $(pi --version)")
 
@@ -101,6 +104,7 @@ if [ "$OPENCODEX" = 1 ]; then
     done
   fi
   if [ -z "$pkg" ]; then
+    command -v npm >/dev/null || { echo "Open Codex needs Node (npm), and neither PATH nor ~/.local/share/pi-node had it." >&2; exit 1; }
     npm install --global --silent "@bitkyc08/opencodex@$OPENCODEX_VERSION"
     pkg="$(npm root --global)/@bitkyc08/opencodex"
   fi
