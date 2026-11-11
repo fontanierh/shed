@@ -1,11 +1,13 @@
 {
   "deepseek": {
     "abort": {
-      "answers": {},
+      "answers": null,
       "asked": [
         {
-          "command": "abort",
-          "fields": {}
+          "command": "cancel",
+          "fields": {
+            "keepInbox": false
+          }
         }
       ],
       "changed": {},
@@ -25,7 +27,7 @@
                 ]
               }
             ],
-            "questionId": "q1"
+            "id": "q1"
           }
         }
       ],
@@ -45,47 +47,53 @@
       "refreshed": false
     },
     "compact": {
-      "answers": {},
+      "answers": null,
       "asked": [
         {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
-      "changed": {},
-      "refreshed": false
-    },
-    "compact with blank instructions": {
-      "answers": {},
-      "asked": [
-        {
-          "command": "compact",
-          "fields": {}
-        }
-      ],
-      "changed": {},
-      "refreshed": false
-    },
-    "compact with instructions": {
-      "answers": {},
-      "asked": [
-        {
-          "command": "compact",
+          "command": "command",
           "fields": {
-            "customInstructions": "keep the plan"
+            "line": "/compact"
           }
         }
       ],
       "changed": {},
-      "refreshed": false
+      "refreshed": true
     },
-    "follow up": {
-      "answers": {},
+    "compact with blank instructions": {
+      "answers": null,
       "asked": [
         {
-          "command": "follow_up",
+          "command": "command",
           "fields": {
-            "message": "After that"
+            "line": "/compact"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": true
+    },
+    "compact with instructions": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "command",
+          "fields": {
+            "line": "/compact"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": true
+    },
+    "follow up": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "images": [],
+            "mode": "followup",
+            "text": "After that"
           }
         }
       ],
@@ -100,22 +108,7 @@
     },
     "rename": {
       "answers": null,
-      "asked": [
-        {
-          "command": "set_session_name",
-          "fields": {
-            "name": "Plan the release"
-          }
-        },
-        {
-          "command": "get_state",
-          "fields": {}
-        },
-        {
-          "command": "get_session_stats",
-          "fields": {}
-        }
-      ],
+      "asked": [],
       "changed": {
         "named": true,
         "summary.title": "Plan the release"
@@ -135,89 +128,66 @@
       "refreshed": false
     },
     "send": {
-      "answers": {},
+      "answers": null,
       "asked": [
         {
           "command": "prompt",
           "fields": {
-            "message": "Carry on"
+            "images": [],
+            "mode": "followup",
+            "text": "Carry on"
           }
-        },
-        {
-          "command": "get_state",
-          "fields": {}
-        },
-        {
-          "command": "get_session_stats",
-          "fields": {}
         }
       ],
-      "changed": {
-        "named": true,
-        "summary.title": "From the agent"
-      },
+      "changed": {},
       "refreshed": true
     },
     "send while it works": {
-      "answers": {},
-      "asked": [
-        {
-          "command": "steer",
-          "fields": {
-            "message": "Carry on"
-          }
-        },
-        {
-          "command": "get_state",
-          "fields": {}
-        },
-        {
-          "command": "get_session_stats",
-          "fields": {}
-        }
-      ],
-      "changed": {
-        "named": true,
-        "summary.title": "From the agent"
-      },
-      "refreshed": true
-    },
-    "send, and the agent is already streaming": {
-      "answers": {},
+      "answers": null,
       "asked": [
         {
           "command": "prompt",
           "fields": {
-            "message": "Carry on"
+            "images": [],
+            "mode": "steer",
+            "text": "Carry on"
           }
-        },
-        {
-          "command": "steer",
-          "fields": {
-            "message": "Carry on"
-          }
-        },
-        {
-          "command": "get_state",
-          "fields": {}
-        },
-        {
-          "command": "get_session_stats",
-          "fields": {}
         }
       ],
-      "changed": {
-        "named": true,
-        "summary.title": "From the agent"
-      },
+      "changed": {},
+      "refreshed": true
+    },
+    "send, and the agent is already streaming": {
+      "asked": [
+        {
+          "command": "prompt",
+          "fields": {
+            "images": [],
+            "mode": "followup",
+            "text": "Carry on"
+          }
+        },
+        {
+          "command": "prompt",
+          "fields": {
+            "images": [],
+            "mode": "steer",
+            "text": "Carry on"
+          }
+        }
+      ],
+      "changed": {},
+      "fails": "Agent is already streaming",
       "refreshed": true
     },
     "stop the tool": {
-      "answers": {},
+      "answers": null,
       "asked": [
         {
-          "command": "abort",
-          "fields": {}
+          "command": "cancel",
+          "fields": {
+            "keepInbox": false
+          }
         }
       ],
       "changed": {},

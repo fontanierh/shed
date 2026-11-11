@@ -37,8 +37,10 @@ pub struct Script {
     close_gate: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
 }
 
-/// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
+/// Stands in for an agent of any kind: Pi and Prime answer from `ScriptedSession`, and DeepSeek runs its real `Dsh`
+/// driver over in-memory pipes whose plugin half answers from `Script`.
 struct Scripted {
+    kind: AgentKind,
     script: Arc<Script>,
     /// The agent it stands for: its ways are that agent's, and so is a session it keeps itself (Prime's daemon,
     /// which no test has connected).
@@ -53,11 +55,158 @@ struct ScriptedSession {
     absent: &'static str,
 }
 
+/// Runs a real `Dsh` driver over in-memory pipes against a scripted `shed.mjs` peer.
+fn scripted_dsh(script: Arc<Script>, opts: &SpawnOptions) -> Started {
+    let (to_plugin, from_bridge) = tokio::io::duplex(64 * 1024);
+    let (mut to_bridge, from_plugin) = tokio::io::duplex(64 * 1024);
+    let (events_tx, events_rx) = mpsc::unbounded_channel();
+    let session_id = opts.session_id.clone();
+    let dsh = crate::dsh::Dsh::start(opts, to_plugin, from_plugin, events_tx, async {
+        "agent exited".into()
+    });
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        if to_bridge
+            .write_all(b"{\"event\":\"ready\"}\n")
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let mut lines = tokio::io::BufReader::new(from_bridge);
+        let mut buf = Vec::new();
+        let mut current_model = json!({
+            "provider": "example",
+            "model": "model-1",
+            "reasoningEffort": "high",
+        });
+        while let Some(req) = crate::requests::next_message(&mut lines, &mut buf, "test-dsh").await
+        {
+            let id = req["id"].clone();
+            let method = req["method"].as_str().unwrap_or("");
+            let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
+            if method == "open" {
+                if let Some(m) = params.get("model").filter(|m| m.is_object()) {
+                    if let Some(p) = m["provider"].as_str() {
+                        current_model["provider"] = json!(p);
+                    }
+                    if let Some(mid) = m["model"].as_str() {
+                        current_model["model"] = json!(mid);
+                    }
+                    if let Some(eff) = m["reasoningEffort"].as_str() {
+                        current_model["reasoningEffort"] = json!(eff);
+                    }
+                }
+                let result = script
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .get("open")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        json!({
+                            "sessionId": format!("dsh-{session_id}"),
+                            "status": "idle",
+                            "model": current_model,
+                            "contextWindow": 200_000,
+                            "reasoning": { "efforts": [{ "id": "low" }, { "id": "high" }] },
+                        })
+                    });
+                let reply = json!({ "id": id, "result": result });
+                let _ = to_bridge.write_all(format!("{reply}\n").as_bytes()).await;
+                continue;
+            }
+            if method == "models" {
+                let result = script
+                    .answers
+                    .lock()
+                    .unwrap()
+                    .get("models")
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        json!({
+                            "models": [{
+                                "provider": "example",
+                                "id": "model-1",
+                                "name": "Model One",
+                            }]
+                        })
+                    });
+                let reply = json!({ "id": id, "result": result });
+                let _ = to_bridge.write_all(format!("{reply}\n").as_bytes()).await;
+                continue;
+            }
+            if method == "close" {
+                script.closes.fetch_add(1, Ordering::SeqCst);
+                let gate = script.close_gate.lock().unwrap().take();
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+                let reply = json!({ "id": id, "result": {} });
+                let _ = to_bridge.write_all(format!("{reply}\n").as_bytes()).await;
+                break;
+            }
+            script.asked.lock().unwrap().push(json!({
+                "session": session_id,
+                "command": method,
+                "fields": params,
+            }));
+            let refusal = script.refusals.lock().unwrap().get(method).cloned();
+            let slow = *script.slow_answer.lock().unwrap();
+            if !slow.is_zero() {
+                tokio::time::sleep(slow).await;
+            }
+            let reply = match refusal {
+                Some(error) => json!({ "id": id, "error": error }),
+                None => {
+                    let scripted = script.answers.lock().unwrap().get(method).cloned();
+                    let result = scripted.unwrap_or_else(|| match method {
+                        "prompt" => json!({ "messageId": "m1" }),
+                        "command" => json!({ "kind": "success", "text": "Compacted" }),
+                        "select" => {
+                            if let Some(p) = params["provider"].as_str() {
+                                current_model["provider"] = json!(p);
+                            }
+                            if let Some(m) = params["model"].as_str() {
+                                current_model["model"] = json!(m);
+                            }
+                            if let Some(e) = params["effort"].as_str() {
+                                current_model["reasoningEffort"] = json!(e);
+                            }
+                            json!({
+                                "sessionId": format!("dsh-{session_id}"),
+                                "status": "idle",
+                                "model": current_model,
+                                "contextWindow": 200_000,
+                                "reasoning": { "efforts": [{ "id": "low" }, { "id": "high" }] },
+                            })
+                        }
+                        "jobs" => json!({ "jobs": [] }),
+                        _ => json!({}),
+                    });
+                    json!({ "id": id, "result": result })
+                }
+            };
+            if to_bridge
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    (dsh, events_rx)
+}
+
 impl Starts for Scripted {
-    fn start(&self, _opts: &SpawnOptions) -> Result<Started> {
+    fn start(&self, opts: &SpawnOptions) -> Result<Started> {
         self.script.starts.fetch_add(1, Ordering::SeqCst);
         if let Some(gate) = self.script.start_gate.lock().unwrap().take() {
             gate.recv().unwrap();
+        }
+        if self.kind == AgentKind::Deepseek {
+            return Ok(scripted_dsh(self.script.clone(), opts));
         }
         let (_events, output) = mpsc::unbounded_channel();
         Ok((self.live("started"), output))
@@ -160,21 +309,8 @@ impl Live for ScriptedSession {
     fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
             // Recorded and answered as it goes to the agent.
-            let (kind, fields) = match ask.wire() {
-                Some(pair) => pair,
-                None => match &ask {
-                    Ask::Jobs => ("jobs", json!({})),
-                    Ask::JobOutput(job) => ("job_output", json!({ "jobId": job })),
-                    Ask::KillJob(job) => ("kill_job", json!({ "jobId": job })),
-                    Ask::Answer {
-                        question_id,
-                        answers,
-                    } => (
-                        "answer",
-                        json!({ "questionId": question_id, "answers": answers }),
-                    ),
-                    _ => unreachable!("handled by wire"),
-                },
+            let Some((kind, fields)) = ask.wire() else {
+                bail!("{} has no {ask:?} command", self.id);
             };
             let kind = kind.to_string();
             self.script
@@ -251,6 +387,7 @@ impl Rig {
         let installed = Agents::installed(prime.clone(), store.clone());
         let agents = Agents::of(|kind| {
             Arc::new(Scripted {
+                kind,
                 script: script.clone(),
                 real: installed.get(kind).clone(),
             })
@@ -1368,13 +1505,34 @@ async fn commands() {
             if case == "send while it works" {
                 summary.status = SessionStatus::Running;
             }
-            let state = SessionState::new(summary, None, own(rig, "s1", backend, answering));
+            let (own_state, dsh_events) =
+                if agent == AgentKind::Deepseek && backend == Backend::Started && answering {
+                    let opts = SpawnOptions {
+                        agent,
+                        session_id: "s1".into(),
+                        cwd: "/work/project".into(),
+                        model: None,
+                        thinking: None,
+                        resume: None,
+                    };
+                    let (child, rx) = scripted_dsh(rig.agents.clone(), &opts);
+                    (
+                        BackendState::Started(Process::Running(child.clone())),
+                        Some((child, rx)),
+                    )
+                } else {
+                    (own(rig, "s1", backend, answering), None)
+                };
+            let state = SessionState::new(summary, None, own_state);
             let session = &Arc::new(Session::new(
                 "s1".into(),
                 agent,
                 "/work/project".into(),
                 state,
             ));
+            if let Some((child, rx)) = dsh_events {
+                tokio::spawn(rig.app.clone().run_pi_events(session.clone(), child, rx));
+            }
             let before = kept(rig, session).await;
             let app = &rig.app;
             let answer = match case {
@@ -2311,6 +2469,38 @@ async fn sessions_publish_their_capabilities_on_the_wire() {
             "backgroundCommands": true,
             "spendIncludesSubagents": true,
         })
+    );
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// DeepSeek sessions in the test rig run through the real `Dsh` driver over in-memory plugin pipes, not Pi's
+/// `ScriptedSession`.
+#[tokio::test(start_paused = true)]
+async fn a_deepseek_session_runs_through_the_dsh_driver() {
+    let rig = Rig::new("dsh-real-driver", &[]);
+    let cwd = rig.app.store.dir().to_string_lossy().into_owned();
+    let summary = rig
+        .app
+        .create_session(
+            AgentKind::Deepseek,
+            cwd,
+            Some("example/model-1".into()),
+            Some("medium".into()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(summary.thinking_level.as_deref(), Some("high"));
+    let session = rig.app.find(&summary.id).await.unwrap();
+    rig.agents.asked.lock().unwrap().clear();
+    rig.app.compact(&session, None).await.unwrap();
+    let asked = rig.agents.asked.lock().unwrap().clone();
+    assert_eq!(
+        asked,
+        vec![json!({
+            "session": summary.id,
+            "command": "command",
+            "fields": { "line": "/compact" },
+        })]
     );
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
