@@ -241,7 +241,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public var isSubagent: Bool { kind == .subagent }
     /// What this session supports, falling back to the legacy by-name table when talking to an older bridge.
     public var can: SessionCapabilities {
-        capabilities ?? .legacy(agent: agent, isSubagent: isSubagent, readOnly: readOnly)
+        let fallback = SessionCapabilities.legacy(agent: agent, isSubagent: isSubagent, readOnly: readOnly)
+        guard var caps = capabilities else { return fallback }
+        if !caps.hasResumeField { caps.resume = fallback.resume }
+        return caps
+    }
+    /// A started session whose process is gone (stopped, or exited with an error): needs Resume before taking commands.
+    public var needsResume: Bool {
+        can.resume && (status == .stopped || status == .error)
     }
     /// A subagent left fully idle for five minutes, nothing waiting for it: taken to be gone, since Prime keeps
     /// finished subagents alive. It shows again as soon as it does anything.
@@ -258,6 +265,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
 }
 
 public struct SessionCapabilities: Codable, Equatable, Sendable {
+    public internal(set) var resume: Bool
     public let restartKernel: Bool
     public let clearGoal: Bool
     public let newSession: Bool
@@ -266,8 +274,15 @@ public struct SessionCapabilities: Codable, Equatable, Sendable {
     public let answer: Bool
     public let backgroundCommands: Bool
     public let spendIncludesSubagents: Bool
+    /// Whether `resume` was present on the wire (bridges from before `resume` omit it).
+    var hasResumeField = true
+
+    private enum CodingKeys: String, CodingKey {
+        case resume, restartKernel, clearGoal, newSession, autoCompactionSwitch, followUp, answer, backgroundCommands, spendIncludesSubagents
+    }
 
     public init(
+        resume: Bool = false,
         restartKernel: Bool,
         clearGoal: Bool,
         newSession: Bool,
@@ -277,6 +292,7 @@ public struct SessionCapabilities: Codable, Equatable, Sendable {
         backgroundCommands: Bool,
         spendIncludesSubagents: Bool
     ) {
+        self.resume = resume
         self.restartKernel = restartKernel
         self.clearGoal = clearGoal
         self.newSession = newSession
@@ -287,10 +303,51 @@ public struct SessionCapabilities: Codable, Equatable, Sendable {
         self.spendIncludesSubagents = spendIncludesSubagents
     }
 
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedResume = try c.decodeIfPresent(Bool.self, forKey: .resume)
+        self.resume = decodedResume ?? false
+        self.hasResumeField = decodedResume != nil
+        self.restartKernel = try c.decode(Bool.self, forKey: .restartKernel)
+        self.clearGoal = try c.decode(Bool.self, forKey: .clearGoal)
+        self.newSession = try c.decode(Bool.self, forKey: .newSession)
+        self.autoCompactionSwitch = try c.decode(Bool.self, forKey: .autoCompactionSwitch)
+        self.followUp = try c.decode(Bool.self, forKey: .followUp)
+        self.answer = try c.decode(Bool.self, forKey: .answer)
+        self.backgroundCommands = try c.decode(Bool.self, forKey: .backgroundCommands)
+        self.spendIncludesSubagents = try c.decode(Bool.self, forKey: .spendIncludesSubagents)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if hasResumeField { try c.encode(resume, forKey: .resume) }
+        try c.encode(restartKernel, forKey: .restartKernel)
+        try c.encode(clearGoal, forKey: .clearGoal)
+        try c.encode(newSession, forKey: .newSession)
+        try c.encode(autoCompactionSwitch, forKey: .autoCompactionSwitch)
+        try c.encode(followUp, forKey: .followUp)
+        try c.encode(answer, forKey: .answer)
+        try c.encode(backgroundCommands, forKey: .backgroundCommands)
+        try c.encode(spendIncludesSubagents, forKey: .spendIncludesSubagents)
+    }
+
+    public static func == (lhs: SessionCapabilities, rhs: SessionCapabilities) -> Bool {
+        lhs.resume == rhs.resume
+            && lhs.restartKernel == rhs.restartKernel
+            && lhs.clearGoal == rhs.clearGoal
+            && lhs.newSession == rhs.newSession
+            && lhs.autoCompactionSwitch == rhs.autoCompactionSwitch
+            && lhs.followUp == rhs.followUp
+            && lhs.answer == rhs.answer
+            && lhs.backgroundCommands == rhs.backgroundCommands
+            && lhs.spendIncludesSubagents == rhs.spendIncludesSubagents
+    }
+
     /// Fallback for bridges built before `SessionSummary.capabilities` was added.
     static func legacy(agent: AgentKind, isSubagent: Bool, readOnly: Bool) -> SessionCapabilities {
         if readOnly {
             return SessionCapabilities(
+                resume: false,
                 restartKernel: false,
                 clearGoal: false,
                 newSession: false,
@@ -302,6 +359,7 @@ public struct SessionCapabilities: Codable, Equatable, Sendable {
             )
         }
         return SessionCapabilities(
+            resume: agent != .prime && !isSubagent,
             restartKernel: agent == .prime,
             clearGoal: agent == .prime,
             newSession: agent != .deepseek,

@@ -569,6 +569,7 @@
           "followUp": true,
           "newSession": true,
           "restartKernel": true,
+          "resume": false,
           "spendIncludesSubagents": true
         },
         "cost": 0.5,
@@ -628,6 +629,7 @@
           "followUp": true,
           "newSession": true,
           "restartKernel": true,
+          "resume": false,
           "spendIncludesSubagents": true
         },
         "cost": 0.5,

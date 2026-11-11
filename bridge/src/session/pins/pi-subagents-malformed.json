@@ -239,6 +239,7 @@
             "followUp": false,
             "newSession": false,
             "restartKernel": false,
+            "resume": false,
             "spendIncludesSubagents": false
           },
           "cost": 0.25,
@@ -291,6 +292,7 @@
             "followUp": false,
             "newSession": false,
             "restartKernel": false,
+            "resume": false,
             "spendIncludesSubagents": false
           },
           "cost": 0.0,
@@ -347,6 +349,7 @@
             "followUp": false,
             "newSession": false,
             "restartKernel": false,
+            "resume": false,
             "spendIncludesSubagents": false
           },
           "cost": 0.25,
@@ -399,6 +402,7 @@
             "followUp": false,
             "newSession": false,
             "restartKernel": false,
+            "resume": false,
             "spendIncludesSubagents": false
           },
           "cost": 0.0,

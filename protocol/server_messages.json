@@ -96,6 +96,7 @@
             "followUp": true,
             "newSession": true,
             "restartKernel": true,
+            "resume": false,
             "spendIncludesSubagents": true
           },
           "context": {
@@ -210,6 +211,7 @@
           "followUp": true,
           "newSession": true,
           "restartKernel": true,
+          "resume": false,
           "spendIncludesSubagents": true
         },
         "context": {

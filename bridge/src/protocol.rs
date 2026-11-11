@@ -262,6 +262,7 @@ pub struct SessionSummary {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
+    pub resume: bool,
     pub restart_kernel: bool,
     pub clear_goal: bool,
     pub new_session: bool,
@@ -812,6 +813,7 @@ mod tests {
                 reason: Some("Tailscale isn't running on this computer".into()),
             }],
             capabilities: Some(Capabilities {
+                resume: false,
                 restart_kernel: true,
                 clear_goal: true,
                 new_session: true,

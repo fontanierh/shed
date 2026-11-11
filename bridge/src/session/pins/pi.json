@@ -52,6 +52,7 @@
         "followUp": true,
         "newSession": true,
         "restartKernel": false,
+        "resume": true,
         "spendIncludesSubagents": false
       },
       "contextLimit": 64000,
@@ -89,6 +90,7 @@
         "followUp": true,
         "newSession": false,
         "restartKernel": false,
+        "resume": true,
         "spendIncludesSubagents": false
       },
       "cost": 0.0,
@@ -119,6 +121,7 @@
         "followUp": false,
         "newSession": false,
         "restartKernel": false,
+        "resume": false,
         "spendIncludesSubagents": false
       },
       "cost": 0.25,
@@ -158,6 +161,7 @@
         "followUp": false,
         "newSession": false,
         "restartKernel": false,
+        "resume": false,
         "spendIncludesSubagents": false
       },
       "cost": 0.0,
@@ -202,6 +206,7 @@
               "followUp": true,
               "newSession": true,
               "restartKernel": false,
+              "resume": true,
               "spendIncludesSubagents": false
             },
             "cost": 0.0,
@@ -560,6 +565,7 @@
               "followUp": false,
               "newSession": false,
               "restartKernel": false,
+              "resume": false,
               "spendIncludesSubagents": false
             },
             "cost": 0.25,
@@ -610,6 +616,7 @@
               "followUp": false,
               "newSession": false,
               "restartKernel": false,
+              "resume": false,
               "spendIncludesSubagents": false
             },
             "cost": 0.0,

@@ -123,24 +123,32 @@ struct PhoneSessionToolbar: ToolbarContent {
                         Button("Rename…", systemImage: "pencil", action: rename)
                     }
                 }
-                Section {
-                    Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
-                        .disabled(session.status.isBusy)
-                    if session.can.autoCompactionSwitch {
-                        Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                if session.needsResume {
+                    Button("Resume Session", systemImage: "play.fill") { store.resume() }
+                    if session.can.backgroundCommands {
+                        Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
                     }
+                    Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(session.cwd) }
+                } else {
+                    Section {
+                        Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
+                            .disabled(session.status.isBusy)
+                        if session.can.autoCompactionSwitch {
+                            Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                        }
+                    }
+                    if session.can.restartKernel {
+                        Button("Restart Python Kernel…", systemImage: "arrow.clockwise", action: restartKernel)
+                    }
+                    if session.can.backgroundCommands {
+                        Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
+                    }
+                    if session.hasSites {
+                        Button("Sites", systemImage: "globe", action: showSites)
+                    }
+                    Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(session.cwd) }
+                    Button("Stop Session", systemImage: "stop.circle", role: .destructive) { store.close() }
                 }
-                if session.can.restartKernel {
-                    Button("Restart Python Kernel…", systemImage: "arrow.clockwise", action: restartKernel)
-                }
-                if session.can.backgroundCommands {
-                    Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
-                }
-                if session.hasSites {
-                    Button("Sites", systemImage: "globe", action: showSites)
-                }
-                Button("Copy Path", systemImage: "doc.on.doc") { Clipboard.copy(session.cwd) }
-                Button("Stop Session", systemImage: "stop.circle", role: .destructive) { store.close() }
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
