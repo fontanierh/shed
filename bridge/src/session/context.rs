@@ -39,13 +39,13 @@ impl App {
 
     /// Re-read state and stats from the agent and publish the session summary.
     pub async fn refresh(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
-        let levels_for = {
+        let (levels_for, moves) = {
             let mut st = session.state.lock().await;
             st.refresh_scheduled = false;
             if st.stopped() {
                 return Ok(());
             }
-            st.levels_for.clone()
+            (st.levels_for.clone(), st.status_moves)
         };
         let (state, stats) = tokio::join!(
             self.command(session, Ask::State),
@@ -91,10 +91,14 @@ impl App {
         if let Some(auto) = state.auto_compaction {
             st.summary.auto_compaction = auto;
         }
-        if !matches!(
-            st.summary.status,
-            SessionStatus::Stopped | SessionStatus::Error | SessionStatus::Done
-        ) {
+        // An event that moved the status while the agent answered is newer than the answer: a turn the agent began
+        // by itself meanwhile must not be set back to idle, with nothing to refresh it until the turn ends.
+        if st.status_moves == moves
+            && !matches!(
+                st.summary.status,
+                SessionStatus::Stopped | SessionStatus::Error | SessionStatus::Done
+            )
+        {
             st.summary.status = state.status;
         }
         if let Some(name) = state.name {

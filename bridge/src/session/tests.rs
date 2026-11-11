@@ -1517,6 +1517,37 @@ async fn a_message_sent_again_under_its_id_goes_once() {
 
 /// A message sent again while its first copy is still with the agent waits for that copy: if the agent then refuses
 /// it, the second one goes, and the message is not lost.
+/// A turn the agent begins by itself while a refresh waits on its answer is newer than that answer: the session
+/// stays running, not set back to the idle the agent said before the turn began.
+#[tokio::test(start_paused = true)]
+async fn a_turn_begun_while_a_refresh_waits_is_not_set_back_to_idle() {
+    let rig = &Rig::new("refresh-overtaken", &[]);
+    rig.script("get_state", json!({ "isStreaming": false }));
+    rig.script("get_session_stats", json!({}));
+    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
+    let session = Arc::new(Session::new(
+        "s1".into(),
+        AgentKind::Pi,
+        "/work/project".into(),
+        state,
+    ));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_secs(1);
+    let refresh = {
+        let (app, session) = (rig.app.clone(), session.clone());
+        tokio::spawn(async move { app.refresh(&session).await.map_err(|e| e.to_string()) })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    rig.app
+        .handle_event(&session, &json!({ "type": "agent_start" }))
+        .await;
+    assert!(refresh.await.unwrap().is_ok());
+    assert_eq!(
+        session.state.lock().await.summary.status,
+        SessionStatus::Running
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
     let rig = &Rig::new("send-again-early", &[]);
@@ -1830,6 +1861,26 @@ async fn a_detach_during_an_attach_leaves_the_client_detached() {
     let sent = client.until_reply("a").await;
     assert!(!types(&sent).contains(&"snapshot"), "{sent:?}");
     assert_eq!(sent.last().unwrap()["ok"], true);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Attach, detach, attach again: the first attach, ending late, answers for itself only, and the second still
+/// brings the transcript.
+#[tokio::test(start_paused = true)]
+async fn an_attach_called_off_and_made_again_is_not_spent_by_the_first() {
+    let rig = Rig::new("serve-reattach", &[]);
+    rig.script("attach", json!({ "snapshot": { "messages": [] } }));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_millis(300);
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    for (id, op) in [("a", "attach"), ("d", "detach"), ("b", "attach")] {
+        client
+            .say(json!({ "id": id, "op": op, "sessionId": "p1" }))
+            .await;
+    }
+    let first = client.until_reply("a").await;
+    assert!(!types(&first).contains(&"snapshot"), "{first:?}");
+    attached_in_order(&client.until_reply("b").await);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
 

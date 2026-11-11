@@ -317,7 +317,8 @@ impl RpcChild {
         self.child.lock().ok()?.as_ref().and_then(|c| c.id())
     }
 
-    /// Close stdin for an orderly shutdown; kill if the agent hasn't exited after 3 seconds.
+    /// Close stdin for an orderly shutdown; kill if the agent hasn't exited after 3 seconds. Returns once the process
+    /// is gone, so a resume after it can never run a second agent on the same session file.
     pub async fn close(&self) {
         match &self.dsh {
             Some(dsh) => dsh.close().await,
@@ -331,16 +332,17 @@ impl RpcChild {
         }
         let child = self.child.lock().unwrap().take();
         if let Some(mut child) = child {
-            tokio::spawn(async move {
-                if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
-                    .await
-                    .is_err()
-                {
-                    if let Err(e) = child.kill().await {
-                        eprintln!("an agent still running 3 seconds after its close could not be killed: {e}");
-                    }
+            if tokio::time::timeout(std::time::Duration::from_secs(3), child.wait())
+                .await
+                .is_err()
+            {
+                // `kill` waits for the process to end too.
+                if let Err(e) = child.kill().await {
+                    eprintln!(
+                        "an agent still running 3 seconds after its close could not be killed: {e}"
+                    );
                 }
-            });
+            }
         }
     }
 
@@ -366,5 +368,40 @@ impl RpcChild {
         } else {
             format!("agent exited{code}: {}", tail.join("\n"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An agent that pays no heed to its input closing is killed, and is gone by the time `close` returns: a resume
+    /// right after may start the session again without two agents writing one file.
+    #[tokio::test(start_paused = true)]
+    async fn a_close_returns_once_the_agent_is_gone() {
+        let launch = Launch {
+            program: "/bin/sleep".into(),
+            args: vec!["30".into()],
+            env: Vec::new(),
+            protocol: Protocol::Pi,
+        };
+        let opts = SpawnOptions {
+            agent: AgentKind::Pi,
+            cwd: "/".into(),
+            model: None,
+            thinking: None,
+            resume: None,
+            env: Vec::new(),
+        };
+        let (child, _output) = RpcChild::spawn(launch, &opts).unwrap();
+        let pid = child.pid().expect("it runs").to_string();
+        child.close().await;
+        let alive = std::process::Command::new("/bin/kill")
+            .args(["-0", &pid])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "the agent outlived its close");
     }
 }
