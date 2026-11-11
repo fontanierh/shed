@@ -72,6 +72,21 @@ final class SavedEnvironmentsTests: XCTestCase {
         XCTAssertEqual(saved, SavedEnvironments(environments: store.environments, complete: true))
     }
 
+    /// The copy kept the first time holds the most: a later list that cannot be read was saved from what was left.
+    @MainActor func testASecondListThatCannotBeReadLeavesTheFirstKeptCopyAsItIs() {
+        let defaults = scratchDefaults()
+        let first = json(#"[\#(one),\#(two),{"id":"dddd4444","name":"No address","token":"t-lost"}]"#)
+        defaults.set(first, forKey: keptKey)
+        defaults.set(json(#"[\#(one),7]"#), forKey: key)
+
+        let store = SessionStore(defaults: defaults)
+        XCTAssertNotNil(store.errorMessage)
+        store.moveEnvironments(from: IndexSet(integer: 0), to: 0)
+        XCTAssertEqual(defaults.data(forKey: keptKey), first)
+        XCTAssertEqual(SessionStore.readEnvironments(defaults.data(forKey: key)),
+                       SavedEnvironments(environments: store.environments, complete: true))
+    }
+
     @MainActor func testAListReadWholeIsSavedWithoutACopy() {
         let defaults = scratchDefaults()
         defaults.set(json("[\(one),\(two)]"), forKey: key)

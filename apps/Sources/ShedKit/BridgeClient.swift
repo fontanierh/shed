@@ -14,9 +14,20 @@ public struct ConnectionLost: Error, Sendable {
     public let maybeDelivered: Bool
 }
 
-/// What the store asks of a connection, so a test can answer in its place.
+/// The bridge did not answer a request within its limit, on a connection that still carries replies. Nothing is
+/// sent again, and the store shows it: the user cannot tell whether what was asked was done.
+struct Unanswered: LocalizedError {
+    var errorDescription: String? { "That computer did not answer in time, so this may not have been done." }
+}
+
+/// What the store asks of its connection to a computer, so a test can stand in for one.
 @MainActor
-protocol BridgeCalling: AnyObject {
+protocol BridgeConnection: AnyObject {
+    var onMessage: (ServerMessage) -> Void { get set }
+    var onState: (BridgeClient.State) -> Void { get set }
+    func connect(to url: URL)
+    func disconnect()
+    func checkAlive()
     /// Send an operation and wait for its reply; returns the raw reply JSON.
     @discardableResult
     func call(_ op: ClientOp) async throws -> Data
@@ -25,7 +36,7 @@ protocol BridgeCalling: AnyObject {
 struct Reply<T: Decodable>: Decodable { let data: T }
 
 @MainActor
-public final class BridgeClient: BridgeCalling {
+public final class BridgeClient: BridgeConnection {
     public enum State: Equatable, Sendable {
         case disconnected(String?)
         case connecting
@@ -41,7 +52,7 @@ public final class BridgeClient: BridgeCalling {
     private var generation = 0
     private var connected = false
     private var nextId = 0
-    private var pending: [String: CheckedContinuation<Data, Error>] = [:]
+    private let replies = PendingReplies()
     /// When the bridge last sent anything, for telling a quiet connection from a dead one.
     private var lastHeard = ContinuousClock.now
 
@@ -92,11 +103,10 @@ public final class BridgeClient: BridgeCalling {
         nextId += 1
         let id = "c\(nextId)"
         let text = try op.message(id: id)
-        return try await withCheckedThrowingContinuation { continuation in
-            pending[id] = continuation
+        return try await replies.reply(to: id, within: op.replyLimit) {
             task.send(.string(text)) { [weak self] error in
                 guard error != nil else { return }
-                Task { @MainActor in self?.pending.removeValue(forKey: id)?.resume(throwing: ConnectionLost(maybeDelivered: false)) }
+                Task { @MainActor in self?.replies.settle(id, .failure(ConnectionLost(maybeDelivered: false))) }
             }
         }
     }
@@ -151,12 +161,8 @@ public final class BridgeClient: BridgeCalling {
         }
         guard let head = try? JSONDecoder().decode(Head.self, from: data) else { return }
         if head.type == "reply" {
-            guard let id = head.id, let continuation = pending.removeValue(forKey: id) else { return }
-            if head.ok == true {
-                continuation.resume(returning: data)
-            } else {
-                continuation.resume(throwing: BridgeError(head.error ?? "Request failed"))
-            }
+            guard let id = head.id else { return }
+            replies.settle(id, head.ok == true ? .success(data) : .failure(BridgeError(head.error ?? "Request failed")))
             return
         }
         do {
@@ -168,9 +174,41 @@ public final class BridgeClient: BridgeCalling {
         }
     }
 
-    private func failPending(_ error: Error) {
-        let waiting = pending
-        pending.removeAll()
-        for continuation in waiting.values { continuation.resume(throwing: error) }
+    private func failPending(_ error: Error) { replies.failAll(error) }
+}
+
+/// The requests waiting for their replies, each for no longer than its limit.
+@MainActor
+final class PendingReplies {
+    private var waiting: [String: (asker: CheckedContinuation<Data, Error>, limit: Task<Void, Never>)] = [:]
+    /// Lets that long pass, or throws when called off. A test gives its own, so no limit takes real time.
+    private let pause: @MainActor (Duration) async throws -> Void
+
+    init(pause: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.pause = pause
+    }
+
+    /// Waits for the reply to the request `id`, which `send` puts on the wire once the wait is noted. With no reply
+    /// within `limit` it throws `Unanswered`, and a reply that comes later is dropped.
+    func reply(to id: String, within limit: Duration, send: () -> Void) async throws -> Data {
+        try await withCheckedThrowingContinuation { asker in
+            let limit = Task { [weak self, pause] in
+                guard (try? await pause(limit)) != nil else { return }
+                self?.settle(id, .failure(Unanswered()))
+            }
+            waiting[id] = (asker, limit)
+            send()
+        }
+    }
+
+    /// Gives the request `id` its outcome. One that no longer waits has had another, and this one is dropped.
+    func settle(_ id: String, _ outcome: Result<Data, Error>) {
+        guard let request = waiting.removeValue(forKey: id) else { return }
+        request.limit.cancel()
+        request.asker.resume(with: outcome)
+    }
+
+    func failAll(_ error: Error) {
+        for id in Array(waiting.keys) { settle(id, .failure(error)) }
     }
 }

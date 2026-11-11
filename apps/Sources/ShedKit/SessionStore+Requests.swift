@@ -9,6 +9,12 @@ struct Unconfirmed: LocalizedError {
     }
 }
 
+/// An operation that changes something never left for its computer, whose connection did not come back in time.
+/// It is shown too: the connection state says the computer is out of reach, not that what was asked was given up.
+struct Unreached: LocalizedError {
+    var errorDescription: String? { "That computer could not be reached, so this was not done." }
+}
+
 extension SessionStore {
     func report(_ error: Error) {
         // A dropped connection shows as the connection state, and the client is already reconnecting.
@@ -16,12 +22,17 @@ extension SessionStore {
         errorMessage = error.localizedDescription
     }
 
-    /// Asks a computer's bridge for `op`. Every request goes this way but two: `send`, which looks at the transcript
-    /// to tell whether a message arrived, and the `detach` of a session being left, which sent late could detach a
-    /// session opened again since. Cut off by a dropped connection, an operation that changes something is sent
+    /// What to tell the user of an operation that changes something and was given up after a dropped connection.
+    private static func givenUp(mayHaveArrived: Bool) -> Error {
+        mayHaveArrived ? Unconfirmed() : Unreached()
+    }
+
+    /// Asks a computer's bridge for `op`. Every request goes this way but two: a message, which goes through
+    /// `deliver` and is sent again under its id, and the `detach` of a session being left, which sent late could
+    /// detach a session opened again since. Cut off by a dropped connection, an operation that changes something is sent
     /// again once the connection is back, when it can't have arrived or when doing it twice is harmless. If it
-    /// can't be, or is cut off again, it throws `Unconfirmed` unless the operation is one to repeat. A read is never
-    /// sent again: whoever asked gets the `ConnectionLost`.
+    /// can't be, or is cut off again, it throws what to show: `Unconfirmed` when a copy may have arrived, `Unreached`
+    /// when none can have. A read is never sent again: whoever asked gets the `ConnectionLost`.
     @discardableResult
     func call(_ env: String, _ op: ClientOp) async throws -> Data {
         do {
@@ -30,8 +41,8 @@ extension SessionStore {
             do {
                 guard !lost.maybeDelivered || op.repeatable, await reconnected(env) else { throw lost }
                 return try await client(env).call(op)
-            } catch is ConnectionLost where !op.repeatable {
-                throw Unconfirmed()
+            } catch let again as ConnectionLost {
+                throw Self.givenUp(mayHaveArrived: lost.maybeDelivered || again.maybeDelivered)
             }
         }
     }
@@ -40,8 +51,8 @@ extension SessionStore {
         try JSONDecoder().decode(Reply<T>.self, from: try await call(env, op)).data
     }
 
-    private func client(_ env: String) throws -> any BridgeCalling {
-        guard let client = standIns[env] ?? clients[env] else { throw BridgeError("That computer is no longer in Shed") }
+    private func client(_ env: String) throws -> any BridgeConnection {
+        guard let client = clients[env] else { throw BridgeError("That computer is no longer in Shed") }
         return client
     }
 
@@ -80,10 +91,13 @@ extension SessionStore {
         // gives way to its parent. Any other failure (a bridge out of reach) says nothing about the subagent.
         if (error as? BridgeError)?.message == "session ended", let parent = sessions[id]?.parentId {
             ended.insert(id)
-            try? await Task.sleep(for: .milliseconds(1400))
+            await pause(.milliseconds(1400))
             if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
             return
         }
+        // A computer out of reach shows as the connection state, and the open session is attached again when its
+        // connection is back: nothing the user asked for was given up.
+        if error is Unreached || error is Unconfirmed { return }
         report(error)
     }
 
@@ -96,7 +110,32 @@ extension SessionStore {
         sessions[summary.id] = summary
         select(summary.id)
         if let firstMessage, !firstMessage.isEmpty {
-            do { try await call(env, .send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString)) } catch { report(error) }
+            do {
+                try await deliver(.send(sessionId: created.id, text: firstMessage, sendId: UUID().uuidString), to: env)
+            } catch {
+                report(error)
+            }
+        }
+    }
+
+    /// Sends a message, the composer's or the first of a new session. Cut off by a dropped connection, it goes again
+    /// once the connection is back. A bridge that takes a message once per id is simply sent it again. An older one
+    /// would run it twice if it had arrived, so there `landed` says whether it did, and with nothing to tell by the
+    /// message is not sent again. A message given up throws what to show, as `call` does.
+    private func deliver(_ message: ClientOp, to env: String, landed: (() async -> Bool)? = nil) async throws {
+        do {
+            try await client(env).call(message)
+        } catch let lost as ConnectionLost {
+            do {
+                guard await reconnected(env) else { throw lost }
+                if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
+                    guard let landed else { throw lost }
+                    if await landed() { return }
+                }
+                try await client(env).call(message)
+            } catch let again as ConnectionLost {
+                throw Self.givenUp(mayHaveArrived: lost.maybeDelivered || again.maybeDelivered)
+            }
         }
     }
 
@@ -110,24 +149,15 @@ extension SessionStore {
         let message = ClientOp.send(sessionId: raw, text: text, sendId: UUID().uuidString)
         Task {
             do {
-                do {
-                    try await client(env).call(message)
-                } catch let lost as ConnectionLost {
-                    // Cut off by a dropped connection: send it again once back. A bridge that takes a message once per
-                    // id is simply sent it again. An older one would run it twice, so there the session's transcript,
-                    // sent afresh on reconnecting, says whether it arrived after all.
-                    guard await reconnected(env) else { throw lost }
-                    if lost.maybeDelivered, (bridgeLevel[env] ?? 1) < 2 {
-                        try? await Task.sleep(for: .seconds(2))
-                        let queued = sessions[id]?.queue
-                        let landed = busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
-                                          : sending[id]?.contains { $0.id == local.id } != true
-                        if landed { return }
-                    }
-                    try await client(env).call(message)
+                try await deliver(message, to: env) { [self] in
+                    // The session's transcript, sent afresh on reconnecting, says whether it arrived after all.
+                    await pause(.seconds(2))
+                    let queued = sessions[id]?.queue
+                    return busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
+                                : sending[id]?.contains { $0.id == local.id } != true
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
-                try? await Task.sleep(for: .seconds(60))
+                await pause(.seconds(60))
                 sending[id]?.removeAll { $0.id == local.id }
             } catch {
                 sending[id]?.removeAll { $0.id == local.id }

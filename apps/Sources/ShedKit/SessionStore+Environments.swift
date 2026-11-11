@@ -80,7 +80,8 @@ extension SessionStore {
 
     private func saveEnvironments() {
         if let unreadEnvironments {
-            defaults.set(unreadEnvironments, forKey: "environmentsUnread")
+            // A copy kept before stays: this list was saved from what could be read then, so that one holds more.
+            if defaults.data(forKey: "environmentsUnread") == nil { defaults.set(unreadEnvironments, forKey: "environmentsUnread") }
             self.unreadEnvironments = nil
         }
         defaults.set(try? JSONEncoder().encode(environments), forKey: "environments")
@@ -167,8 +168,8 @@ extension SessionStore {
         client.connect(to: url)
     }
 
-    private func makeClient(_ env: String) -> BridgeClient {
-        let client = BridgeClient()
+    private func makeClient(_ env: String) -> any BridgeConnection {
+        let client = makeConnection()
         client.onMessage = { [weak self] in self?.apply($0, from: env) }
         client.onState = { [weak self] state in self?.connectionChanged(state, env) }
         clients[env] = client
@@ -199,12 +200,15 @@ extension SessionStore {
         }
     }
 
-    /// Waits for an environment's bridge connection to come back, up to `reconnectWait`.
+    /// Waits for an environment's bridge connection to come back, up to `reconnectWait`. The time is what it paused
+    /// for, added up.
     func reconnected(_ env: String) async -> Bool {
-        let deadline = ContinuousClock.now + reconnectWait
+        let step = Duration.milliseconds(250)
+        var waited = Duration.zero
         while connection(of: env) != .connected {
-            guard ContinuousClock.now < deadline else { return false }
-            try? await Task.sleep(for: .milliseconds(250))
+            guard waited < Self.reconnectWait else { return false }
+            await pause(step)
+            waited += step
         }
         return true
     }

@@ -12,6 +12,14 @@ public enum AgentKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .deepseek: "DeepSeek"
         }
     }
+    /// Whether a session's cost already holds what its subagents spent (`spend_includes_subagents` in the bridge's
+    /// agent.rs). Otherwise each subagent carries its own, and the app adds them up.
+    var spendIncludesSubagents: Bool {
+        switch self {
+        case .prime: true
+        case .pi, .deepseek: false
+        }
+    }
 }
 
 public enum ItemKind: String, Codable, Sendable {
@@ -20,6 +28,16 @@ public enum ItemKind: String, Codable, Sendable {
 
 public enum ToolStatus: String, Codable, Sendable {
     case preparing, pending, running, done, error
+    /// A state this version of the app has no name for. The bridge never sends this word.
+    case unknown
+}
+
+extension ToolStatus {
+    /// A bridge newer than the app may name a state the app does not know. It reads as `unknown`, so the item or
+    /// the patch carrying it is kept: a patch dropped for its status would lose the tool's output with it.
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+    }
 }
 
 public struct Item: Codable, Identifiable, Equatable, Sendable {
@@ -124,8 +142,15 @@ public struct ItemAppend: Codable, Sendable {
 
 public enum SessionStatus: String, Codable, Sendable {
     case starting, idle, running, compacting, done, stopped, error
+    /// A state this version of the app has no name for. The bridge never sends this word.
+    case unknown
 
     public var isBusy: Bool { self == .running || self == .compacting || self == .starting }
+
+    /// A state the app does not know reads as `unknown`, so the session is still listed and its updates still land.
+    public init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+    }
 }
 
 public enum SessionKind: String, Codable, Sendable {
@@ -408,6 +433,8 @@ extension ServerMessage: Decodable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(String.self, forKey: .type) {
+        // A session of an agent the app does not know is left out of the list, and an update to one is dropped with
+        // a line in the log: the app has no way to draw or drive it. A status it does not know reads as `unknown`.
         case "sessions":
             self = .sessions(try c.decode(Readable<SessionSummary>.self, forKey: .sessions).values,
                              bridge: (try? c.decode(Int.self, forKey: .bridge)) ?? 1)

@@ -618,7 +618,8 @@ struct StatusDot: View {
         switch status {
         case .running, .starting: Palette.accent
         case .compacting: Palette.lilac
-        case .idle: Palette.moon.opacity(0.4)
+        // A state the app has no name for is not shown as working, nor as finished or failed.
+        case .idle, .unknown: Palette.moon.opacity(0.4)
         case .done: Palette.success.opacity(0.75)
         case .stopped: Palette.moon.opacity(0.2)
         case .error: Palette.danger

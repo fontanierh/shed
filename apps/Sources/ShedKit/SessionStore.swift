@@ -59,11 +59,13 @@ public final class SessionStore {
     /// The saved list of computers as found, when not all of it could be read. The first save of the list files it
     /// under a key of its own, so that what replaces it holds less but nothing is lost.
     @ObservationIgnored var unreadEnvironments: Data?
-    @ObservationIgnored var clients: [String: BridgeClient] = [:]
-    /// What answers a computer's requests in place of its client, in tests.
-    @ObservationIgnored var standIns: [String: any BridgeCalling] = [:]
+    @ObservationIgnored var clients: [String: any BridgeConnection] = [:]
+    /// Makes the connection to a computer the first time it is connected: a `BridgeClient`, unless a test gave its own.
+    @ObservationIgnored let makeConnection: @MainActor () -> any BridgeConnection
+    /// Lets that long pass. The requests wait through it, so a test gives one that returns at once.
+    @ObservationIgnored let pause: @MainActor (Duration) async -> Void
     /// How long a request cut off waits for its connection to come back.
-    @ObservationIgnored var reconnectWait = Duration.seconds(60)
+    static let reconnectWait = Duration.seconds(60)
     /// What each computer's bridge says it understands. From 2 on it takes a message once per id.
     @ObservationIgnored var bridgeLevel: [String: Int] = [:]
     @ObservationIgnored var itemIndex: [String: Int] = [:]
@@ -80,8 +82,15 @@ public final class SessionStore {
     @ObservationIgnored var replaying: String?
     @ObservationIgnored var replayedIds: Set<String> = []
 
-    public init(defaults: UserDefaults = .standard) {
+    public convenience init(defaults: UserDefaults = .standard) {
+        self.init(defaults: defaults, connection: { BridgeClient() }, pause: { try? await Task.sleep(for: $0) })
+    }
+
+    init(defaults: UserDefaults, connection: @escaping @MainActor () -> any BridgeConnection,
+         pause: @escaping @MainActor (Duration) async -> Void) {
         self.defaults = defaults
+        makeConnection = connection
+        self.pause = pause
         drafts = defaults.dictionary(forKey: "drafts") as? [String: String] ?? [:]
         let saved = defaults.data(forKey: "environments")
         if let read = Self.readEnvironments(saved) {
