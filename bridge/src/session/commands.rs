@@ -114,13 +114,61 @@ impl App {
         restart.await
     }
 
+    pub async fn follow_up(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        text: String,
+    ) -> Result<Value> {
+        let Some(ask) = self.agent(session.agent).verbs().follow_up(text) else {
+            bail!("this agent does not queue follow-up messages")
+        };
+        self.command(session, ask).await
+    }
+
+    pub async fn abort(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
+        let ask = self.agent(session.agent).verbs().abort();
+        self.command(session, ask).await
+    }
+
     pub async fn stop_tool(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
         let stop = self.agent(session.agent).verbs().stop_tool();
         self.command(session, stop).await
     }
 
+    pub async fn set_auto_compaction(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        enabled: bool,
+    ) -> Result<()> {
+        let Some(ask) = self.agent(session.agent).verbs().auto_compaction(enabled) else {
+            bail!("this agent compacts on its own")
+        };
+        self.command(session, ask).await?;
+        self.refresh(session).await
+    }
+
+    pub async fn answer_question(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        question_id: String,
+        answers: Vec<Value>,
+    ) -> Result<()> {
+        let Some(ask) = self
+            .agent(session.agent)
+            .verbs()
+            .answer(question_id, answers)
+        else {
+            bail!("this agent does not ask questions")
+        };
+        self.command(session, ask).await?;
+        Ok(())
+    }
+
     pub async fn new_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<Value> {
-        let result = self.command(session, Ask::NewSession).await?;
+        let Some(ask) = self.agent(session.agent).verbs().new_session() else {
+            bail!("start a new session from the app instead")
+        };
+        let result = self.command(session, ask).await?;
         {
             let mut st = session.state.lock().await;
             st.named = false;
@@ -129,5 +177,38 @@ impl App {
         self.resnapshot(session).await?;
         self.refresh(session).await?;
         Ok(result)
+    }
+
+    pub async fn session_models(
+        &self,
+        session: &Session,
+    ) -> Result<Vec<crate::protocol::ModelInfo>> {
+        let data = self.command(session, Ask::Models).await?;
+        let mut models = crate::agent_wire::models(&data);
+        // With Open Codex, a session switches among its models only, like the new-session list.
+        if crate::opencodex::gateway(&self.store).is_some() {
+            models.retain(|m| m.provider == crate::opencodex::PROVIDER);
+        }
+        Ok(models)
+    }
+
+    pub async fn set_model(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        provider: String,
+        model_id: String,
+    ) -> Result<()> {
+        self.command(session, Ask::SetModel { provider, model_id })
+            .await?;
+        self.refresh(session).await
+    }
+
+    pub async fn set_thinking(
+        self: &Arc<Self>,
+        session: &Arc<Session>,
+        level: String,
+    ) -> Result<()> {
+        self.command(session, Ask::SetThinkingLevel(level)).await?;
+        self.refresh(session).await
     }
 }

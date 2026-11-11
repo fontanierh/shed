@@ -211,7 +211,7 @@ impl PrimeDaemon {
             })
         };
 
-        let roster = match self.supervisor("roster_subscribe", json!({})).await {
+        let roster = match self.supervisor("roster_subscribe", json!({}), QUICK).await {
             Ok(roster) => roster,
             Err(e) => {
                 // The next attempt opens its own connection and reader: this one goes with it.
@@ -286,7 +286,7 @@ impl PrimeDaemon {
     }
 
     /// A supervisor-level command.
-    pub async fn supervisor(&self, kind: &str, fields: Value) -> Result<Value> {
+    pub async fn supervisor(&self, kind: &str, fields: Value, limit: Duration) -> Result<Value> {
         let id = format!("ar_{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let mut command = json!({ "type": kind, "id": id });
         if let (Some(obj), Value::Object(extra)) = (command.as_object_mut(), fields) {
@@ -311,7 +311,7 @@ impl PrimeDaemon {
                 bail!("Prime daemon write failed: {e}");
             }
         }
-        match asked.answer(QUICK).await {
+        match asked.answer(limit).await {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(anyhow::Error::new(crate::agent::Refused(e))),
             Err(Unanswered::Gone) => Err(anyhow!("Prime daemon disconnected")),
@@ -325,6 +325,7 @@ impl PrimeDaemon {
         active_session_id: &str,
         kind: &str,
         mut fields: Value,
+        limit: Duration,
     ) -> Result<Value> {
         if let Value::Object(obj) = &mut fields {
             obj.insert(
@@ -334,7 +335,7 @@ impl PrimeDaemon {
         } else {
             fields = json!({ "activeSessionId": active_session_id });
         }
-        self.supervisor(kind, fields).await
+        self.supervisor(kind, fields, limit).await
     }
 
     pub async fn create(
@@ -360,6 +361,7 @@ impl PrimeDaemon {
             .supervisor(
                 "create",
                 json!({ "config": config, "launchEnv": launch_env() }),
+                QUICK,
             )
             .await?;
         PrimeRow::read(&created).ok_or_else(|| anyhow!("Prime returned no session id"))
@@ -387,7 +389,7 @@ impl PrimeDaemon {
     /// reopened: Prime also keeps sessions live that nobody has opened since an older reboot. Archived ones are
     /// dropped from the list.
     async fn wake_open_sessions(self: Arc<Self>, running: HashSet<String>) {
-        let Ok(list) = self.supervisor("list", json!({ "all": true })).await else {
+        let Ok(list) = self.supervisor("list", json!({ "all": true }), QUICK).await else {
             return;
         };
         let live: HashMap<String, String> = list["sessions"]
@@ -416,7 +418,7 @@ impl PrimeDaemon {
             match self.attach(id).await {
                 Ok(_) => {
                     eprintln!("reopened Prime session {id} the daemon had left without a worker");
-                    if let Err(e) = self.session(id, "detach", json!({})).await {
+                    if let Err(e) = self.session(id, "detach", json!({}), QUICK).await {
                         eprintln!("could not detach from Prime session {id} again: {e}");
                     }
                 }
@@ -426,8 +428,10 @@ impl PrimeDaemon {
     }
 
     pub async fn attach(&self, active_session_id: &str) -> Result<Value> {
-        let (kind, fields) = crate::ask::Ask::Attach.wire();
-        self.session(active_session_id, kind, fields).await
+        let ask = crate::ask::Ask::Attach;
+        let (kind, fields) = ask.wire().expect("Prime attach has wire");
+        self.session(active_session_id, kind, fields, ask.limit())
+            .await
     }
 }
 
@@ -530,5 +534,60 @@ mod tests {
         };
         assert_eq!(top_level(&row(json!({}))).as_deref(), Some("s1"));
         assert_eq!(top_level(&row(json!({ "runtimeKind": "subagent" }))), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_session_command_waits_up_to_its_own_limit() {
+        let store = Store::temporary("prime-limit");
+        let daemon = PrimeDaemon::unconnected("test".into(), store.clone());
+        let (client, server) = UnixStream::pair().unwrap();
+        let (read, write) = client.into_split();
+        *daemon.writer.lock().await = Some(write);
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let reader_daemon = daemon.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(read);
+            let mut buf = Vec::new();
+            while let Some(msg) =
+                crate::requests::next_message(&mut lines, &mut buf, "test-daemon").await
+            {
+                reader_daemon.dispatch(msg, &tx);
+            }
+        });
+        tokio::spawn(async move {
+            let (read, mut write) = server.into_split();
+            let mut lines = BufReader::new(read);
+            let mut buf = Vec::new();
+            let msg = crate::requests::next_message(&mut lines, &mut buf, "test-client")
+                .await
+                .unwrap();
+            let id = msg["id"].as_str().unwrap().to_string();
+            // Longer than QUICK (120 s), within Ask::Compact's SLOW (30 min).
+            tokio::time::sleep(Duration::from_secs(180)).await;
+            let reply = json!({
+                "id": id,
+                "type": "response",
+                "command": "compact",
+                "success": true,
+                "data": { "summary": "done" },
+            });
+            write
+                .write_all(format!("{reply}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+
+        let agents = crate::agent::Agents::installed(daemon, store.clone());
+        let crate::agent::Sessions::Kept(keeps) =
+            agents.get(crate::rpc::AgentKind::Prime).sessions()
+        else {
+            unreachable!()
+        };
+        let answer = keeps
+            .session("a1")
+            .send(crate::ask::Ask::Compact { instructions: None })
+            .await;
+        let _ = std::fs::remove_dir_all(store.dir());
+        assert_eq!(answer.unwrap(), json!({ "summary": "done" }));
     }
 }

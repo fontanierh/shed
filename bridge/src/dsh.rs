@@ -1,7 +1,7 @@
-//! DeepSeek Harness seen as a Pi RPC agent. The bridge runs `dsh --profile shed`, a dsh profile whose one stdio
-//! plugin (`bridge/dsh/shed.mjs`, written into the profile on each start) forwards dsh's own events: durable session
-//! events for the session and every subagent under it, live assistant stream frames, and agent status. This answers
-//! the Pi commands the bridge sends and turns that feed into Pi's events, so the rest of the bridge runs a DeepSeek
+//! DeepSeek Harness driven through `dsh --profile shed`, a dsh profile whose one stdio plugin (`bridge/dsh/shed.mjs`,
+//! written into the profile on each start) forwards dsh's own events: durable session events for the session and every
+//! subagent under it, live assistant stream frames, and agent status. This answers what the bridge asks of the session
+//! and turns that feed into Pi's events, so the rest of the bridge runs a DeepSeek
 //! session as it runs a Pi one. Three events are dsh's own: `dsh_subagent` (one child's transcript and state, mirrored
 //! as a read-only session), `dsh_jobs` (how many background commands are running) and `dsh_question` (what the agent
 //! asks the user, or null once nothing is left to answer).
@@ -19,8 +19,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use crate::ask::{Ask, Delivery};
 use crate::channel::Offer;
-use crate::requests::{Requests, Unanswered, QUICK, SLOW};
+use crate::requests::{Requests, Unanswered, QUICK};
 use crate::rpc::{ChildOutput, SpawnOptions};
 
 /// The plugin and the profile layer that loads it, kept with the bridge so both always match.
@@ -252,13 +253,17 @@ impl Dsh {
                     "sessionId": resume,
                     "model": selection,
                 }),
+                QUICK,
             )
             .await?;
         let id = opened["sessionId"]
             .as_str()
             .ok_or_else(|| anyhow!("dsh opened no session"))?
             .to_string();
-        let models = self.call("models", json!({})).await.unwrap_or_default();
+        let models = self
+            .call("models", json!({}), QUICK)
+            .await
+            .unwrap_or_default();
         let mut feed = self.feed.lock().unwrap();
         feed.root = id.clone();
         feed.describe(&opened);
@@ -299,13 +304,12 @@ impl Dsh {
         opened.clone().unwrap().map_err(|e| anyhow!(e))
     }
 
-    // ---- the Pi commands ----
-
-    pub async fn send(self: &Arc<Self>, kind: &str, fields: Value) -> Result<Value> {
+    pub async fn send(self: &Arc<Self>, ask: Ask) -> Result<Value> {
+        let limit = ask.limit();
         let session = self.session().await?;
-        match kind {
-            "get_state" => Ok(self.feed.lock().unwrap().pi_state(&session)),
-            "get_session_stats" => {
+        match ask {
+            Ask::State => Ok(self.feed.lock().unwrap().pi_state(&session)),
+            Ask::Stats => {
                 let feed = self.feed.lock().unwrap();
                 Ok(match (feed.tokens, feed.window) {
                     (Some(tokens), Some(window)) => json!({ "contextUsage": {
@@ -316,103 +320,50 @@ impl Dsh {
                     _ => json!({}),
                 })
             }
-            "get_messages" => Ok(json!({ "messages": self.feed.lock().unwrap().root_messages() })),
-            "get_available_models" => {
-                Ok(json!({ "models": self.feed.lock().unwrap().pi_models() }))
-            }
-            "get_available_thinking_levels" => {
-                Ok(json!({ "levels": self.feed.lock().unwrap().efforts() }))
-            }
-            "set_model" => {
+            Ask::Messages => Ok(json!({ "messages": self.feed.lock().unwrap().root_messages() })),
+            Ask::Models => Ok(json!({ "models": self.feed.lock().unwrap().pi_models() })),
+            Ask::ThinkingLevels => Ok(json!({ "levels": self.feed.lock().unwrap().efforts() })),
+            Ask::SetModel { provider, model_id } => {
                 let state = self
                     .call(
                         "select",
-                        json!({ "provider": fields["provider"], "model": fields["modelId"] }),
+                        json!({ "provider": provider, "model": model_id }),
+                        limit,
                     )
                     .await?;
                 self.feed.lock().unwrap().describe(&state);
                 self.emit(json!({ "type": "session_action_update" }));
                 Ok(Value::Null)
             }
-            "set_thinking_level" => {
-                let level = fields["level"].as_str().unwrap_or("");
+            Ask::SetThinkingLevel(level) => {
                 let state = self
-                    .call("select", json!({ "effort": effort(level) }))
+                    .call("select", json!({ "effort": effort(&level) }), limit)
                     .await?;
                 self.feed.lock().unwrap().describe(&state);
-                self.emit(json!({ "type": "thinking_level_changed", "level": fields["level"] }));
+                self.emit(json!({ "type": "thinking_level_changed", "level": level }));
                 Ok(Value::Null)
             }
-            "set_session_name" => {
-                let name = fields["name"].as_str().map(str::to_string);
-                self.feed.lock().unwrap().name = name.clone();
+            Ask::SetName(name) => {
+                self.feed.lock().unwrap().name = Some(name.clone());
                 self.emit(json!({ "type": "session_info_changed", "name": name }));
                 Ok(Value::Null)
             }
-            "prompt" | "steer" | "follow_up" => {
-                let text = fields["message"].as_str().unwrap_or("").to_string();
-                // While the agent waits on a question, what's typed is the answer to it.
-                let waiting = self.feed.lock().unwrap().question.clone();
-                if let Some(question) = waiting.filter(|_| !text.trim().is_empty()) {
-                    let answers: Vec<Value> = question["questions"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .map(|q| json!({ "id": q["id"], "selected": [], "custom": text }))
-                        .collect();
-                    self.call(
-                        "answer",
-                        json!({ "id": question["id"], "answers": answers }),
-                    )
-                    .await?;
-                    return Ok(Value::Null);
-                }
-                let images: Vec<Value> = fields["images"]
-                    .as_array()
-                    .map(|images| {
-                        images
-                            .iter()
-                            .map(|i| json!({ "data": i["data"], "mimeType": i["mimeType"] }))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let mode = if kind == "steer" { "steer" } else { "followup" };
-                let sent = self
-                    .call(
-                        "prompt",
-                        json!({ "text": text, "images": images, "mode": mode }),
-                    )
-                    .await?;
-                // Until dsh takes it into a turn, it waits in the session's inbox: shown as queued.
-                let queued = {
-                    let mut feed = self.feed.lock().unwrap();
-                    let queued = feed.running;
-                    if queued {
-                        let id = sent["messageId"].as_str().unwrap_or("").to_string();
-                        feed.queue.push_back((id, text, mode == "steer"));
-                    }
-                    queued
-                };
-                if queued {
-                    self.queue_changed();
-                }
-                Ok(Value::Null)
+            Ask::Prompt { message, delivery } => {
+                let steer = matches!(delivery, Delivery::Steer | Delivery::SteerOrQueue);
+                self.prompt(message, steer, limit).await
             }
-            "abort" | "abort_and_send_queued" => {
-                let keep = kind == "abort_and_send_queued";
-                if !keep {
-                    self.feed.lock().unwrap().queue.clear();
-                    self.queue_changed();
-                }
-                self.call("cancel", json!({ "keepInbox": keep })).await?;
-                Ok(Value::Null)
-            }
+            Ask::Steer(text) => self.prompt(text, true, limit).await,
+            Ask::FollowUp(text) => self.prompt(text, false, limit).await,
+            Ask::Abort => self.cancel(false, limit).await,
+            Ask::AbortAndSendQueued => self.cancel(true, limit).await,
             // dsh's own compaction events (as for one it starts itself) tell how it goes once it has begun; a request
             // it turns down before then (nothing to compact) ends here.
-            "compact" => {
+            Ask::Compact { .. } => {
                 self.emit(json!({ "type": "compaction_start", "reason": "manual" }));
                 let before = self.feed.lock().unwrap().compactions;
-                let result = self.call("command", json!({ "line": "/compact" })).await;
+                let result = self
+                    .call("command", json!({ "line": "/compact" }), limit)
+                    .await;
                 let ended = self.feed.lock().unwrap().compactions != before;
                 match &result {
                     _ if ended => {}
@@ -427,34 +378,90 @@ impl Dsh {
                 }
                 result.map(|_| Value::Null)
             }
-            "set_auto_compaction" => bail!("DeepSeek Harness compacts on its own"),
-            "new_session" => bail!("start a new DeepSeek session from the app instead"),
-            "dsh_jobs" => self.call("jobs", json!({})).await,
-            "dsh_job_output" => {
-                self.call("job_output", json!({ "jobId": fields["jobId"] }))
+            Ask::Jobs => self.call("jobs", json!({}), limit).await,
+            Ask::JobOutput(job) => {
+                self.call("job_output", json!({ "jobId": job }), limit)
                     .await
             }
-            "dsh_kill_job" => {
-                self.call("kill_job", json!({ "jobId": fields["jobId"] }))
-                    .await
-            }
-            "dsh_answer" => {
-                let answers = fields["answers"]
-                    .as_array()
-                    .filter(|a| !a.is_empty())
-                    .cloned();
+            Ask::KillJob(job) => self.call("kill_job", json!({ "jobId": job }), limit).await,
+            Ask::Answer {
+                question_id,
+                answers,
+            } => {
+                let answers = (!answers.is_empty()).then_some(answers);
                 self.call(
                     "answer",
-                    json!({ "id": fields["questionId"], "answers": answers }),
+                    json!({ "id": question_id, "answers": answers }),
+                    limit,
                 )
                 .await
             }
-            other => bail!("DeepSeek Harness has no {other} command"),
+            Ask::SetAutoCompaction(_) => bail!("this agent compacts on its own"),
+            Ask::NewSession => bail!("start a new session from the app instead"),
+            Ask::KernelBash
+            | Ask::PersistentShells
+            | Ask::TailKernelBash { .. }
+            | Ask::TailPersistentShell { .. }
+            | Ask::KillKernelBash(_)
+            | Ask::KillPersistentShell(_)
+            | Ask::Attach => bail!("DeepSeek Harness has no {ask:?} command"),
         }
     }
 
+    async fn prompt(&self, text: String, steer: bool, limit: std::time::Duration) -> Result<Value> {
+        // While the agent waits on a question, what's typed is the answer to it.
+        let waiting = self.feed.lock().unwrap().question.clone();
+        if let Some(question) = waiting.filter(|_| !text.trim().is_empty()) {
+            let answers: Vec<Value> = question["questions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|q| json!({ "id": q["id"], "selected": [], "custom": text }))
+                .collect();
+            self.call(
+                "answer",
+                json!({ "id": question["id"], "answers": answers }),
+                limit,
+            )
+            .await?;
+            return Ok(Value::Null);
+        }
+        let mode = if steer { "steer" } else { "followup" };
+        let sent = self
+            .call(
+                "prompt",
+                json!({ "text": text, "images": [], "mode": mode }),
+                limit,
+            )
+            .await?;
+        // Until dsh takes it into a turn, it waits in the session's inbox: shown as queued.
+        let queued = {
+            let mut feed = self.feed.lock().unwrap();
+            let queued = feed.running;
+            if queued {
+                let id = sent["messageId"].as_str().unwrap_or("").to_string();
+                feed.queue.push_back((id, text, steer));
+            }
+            queued
+        };
+        if queued {
+            self.queue_changed();
+        }
+        Ok(Value::Null)
+    }
+
+    async fn cancel(&self, keep: bool, limit: std::time::Duration) -> Result<Value> {
+        if !keep {
+            self.feed.lock().unwrap().queue.clear();
+            self.queue_changed();
+        }
+        self.call("cancel", json!({ "keepInbox": keep }), limit)
+            .await?;
+        Ok(Value::Null)
+    }
+
     pub async fn close(&self) {
-        let close = self.call("close", json!({}));
+        let close = self.call("close", json!({}), QUICK);
         match tokio::time::timeout(std::time::Duration::from_secs(10), close).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => eprintln!("dsh: close failed: {e}"),
@@ -509,7 +516,7 @@ impl Dsh {
         }
     }
 
-    async fn call(&self, method: &str, params: Value) -> Result<Value> {
+    async fn call(&self, method: &str, params: Value, limit: std::time::Duration) -> Result<Value> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let asked = self.requests.ask(id);
         let mut line = json!({ "id": id, "method": method, "params": params })
@@ -523,8 +530,6 @@ impl Dsh {
         if !written {
             bail!("agent is not running");
         }
-        // A slash command (`/compact`) is answered once it has run; everything else at once.
-        let limit = if method == "command" { SLOW } else { QUICK };
         match asked.answer(limit).await {
             Ok(Ok(result)) => Ok(result),
             Ok(Err(e)) => Err(anyhow!(e)),
