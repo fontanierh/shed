@@ -40,3 +40,13 @@ jobs:
         run: git ls-files -z 'setup/*.json' 'setup/**/*.json' | xargs -0 -n1 python3 -m json.tool >/dev/null
       - name: The Open Codex patches are patches
         run: git ls-files -z '*.patch' | xargs -0 -n1 git apply --numstat
+
+  # The scripts run on macOS, whose /bin/bash is 3.2: what parses under the runner's bash 5 may not there (`|&`, `;&`).
+  # Syntax only: a bash 4 builtin or option (`local -A`, `mapfile`) parses, and fails only when run.
+  macos-bash:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: /bin/bash --version
+      - name: Shell scripts parse under macOS's own bash
+        run: git ls-files -z '*.sh' | xargs -0 -n1 /bin/bash -n
