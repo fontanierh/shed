@@ -93,6 +93,15 @@ enum ClientOp: Sendable {
         }
     }
 
+    /// How long its reply may take. The bridge answers a compaction once it is done, and everything else at once:
+    /// these are the limits it gives its agents (`SLOW` and `QUICK` in the bridge's requests.rs).
+    var replyLimit: Duration {
+        switch name {
+        case .compact: .seconds(30 * 60)
+        default: .seconds(120)
+        }
+    }
+
     /// The message that asks for it, under the id its reply will carry.
     func message(id: String) throws -> String {
         var (name, payload) = wire
