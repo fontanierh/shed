@@ -119,8 +119,20 @@ impl Agent for Scripted {
         self.real.jobs()
     }
 
-    fn gateway_session(&self, file_name: &str) -> String {
-        self.real.gateway_session(file_name)
+    fn subagents(&self) -> crate::agent::SubagentsFrom {
+        self.real.subagents()
+    }
+
+    fn gateway_session(
+        &self,
+        session_file: Option<&str>,
+        conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        self.real.gateway_session(session_file, conversation)
+    }
+
+    fn cost(&self, session_file: Option<&str>, reported: f64, before: f64) -> f64 {
+        self.real.cost(session_file, reported, before)
     }
 
     fn spend_includes_subagents(&self) -> bool {
@@ -1240,8 +1252,13 @@ async fn malformed_events() {
     leniency("events-malformed", events, |events| async move {
         let mut seen = serde_json::Map::new();
         for (name, event) in events.as_object().into_iter().flatten() {
+            let agent = if name == "subagent" {
+                AgentKind::Deepseek
+            } else {
+                AgentKind::Pi
+            };
             // What earlier events left, so a part the agent leaves out shows as kept or dropped.
-            let mut summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
             summary.title = "Earlier".into();
             summary.thinking_level = Some("low".into());
             summary.queue.steering = vec!["earlier".into()];
@@ -1251,7 +1268,7 @@ async fn malformed_events() {
             state.named = true;
             let session = Arc::new(Session::new(
                 "s1".into(),
-                AgentKind::Pi,
+                agent,
                 "/work/project".into(),
                 state,
             ));
@@ -2203,5 +2220,39 @@ async fn commands_an_agent_lacks_are_refused_without_asking_it() {
         assert_eq!(sent.last().unwrap()["ok"], false, "{req}: {sent:?}");
     }
     assert!(rig.agents.asked.lock().unwrap().is_empty());
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// DeepSeek Harness reports its subagents through `dsh_subagent`, so its `subagent` tool call does not also flip
+/// Pi's subagent flag on the parent.
+#[tokio::test]
+async fn a_subagent_tool_call_on_deepseek_waits_for_its_own_subagent_events() {
+    let rig = Rig::new("dsh-subagent-tool", &[]);
+    let summary = new_summary(
+        "dsh1",
+        AgentKind::Deepseek,
+        SessionKind::Root,
+        "/work/project",
+    );
+    let state = SessionState::new(summary, None, own(&rig, "dsh1", Backend::Started, true));
+    let session = Arc::new(Session::new(
+        "dsh1".into(),
+        AgentKind::Deepseek,
+        "/work/project".into(),
+        state,
+    ));
+    rig.app.sessions.write().await.push(session.clone());
+    rig.app
+        .handle_event(
+            &session,
+            &json!({
+                "type": "tool_execution_start",
+                "toolCallId": "call_1",
+                "toolName": "subagent",
+                "args": { "prompt": "read the file" },
+            }),
+        )
+        .await;
+    assert!(!session.state.lock().await.summary.running_subagents);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

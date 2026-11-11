@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{App, Backend, Session, SessionState};
+use super::{App, Backend, Session};
 use crate::agent_wire;
 use crate::protocol::{SessionStatus, Spend, StuckKind, WaitingOn};
 use crate::transcript::Transcript;
@@ -58,18 +58,6 @@ fn tool_code(item: &crate::protocol::Item) -> String {
         .unwrap_or(args)
 }
 
-/// The session id an agent sends Open Codex with its requests: Prime's own conversation id, and for the others what
-/// the agent makes of its session file's name.
-fn agent_session_id(agent: &dyn crate::agent::Agent, st: &SessionState) -> Option<String> {
-    if let Some(prime) = st.prime() {
-        let conversation = prime.conversation.as_ref();
-        return conversation.map(|conversation| conversation.as_str().to_string());
-    }
-    let file = st.session_file.as_deref()?;
-    let name = std::path::Path::new(file).file_stem()?.to_str()?;
-    Some(agent.gateway_session(name))
-}
-
 impl App {
     /// What each working session spends, from Open Codex's request history: each session's own requests, counted as
     /// they're made, give its cost; a top-level session's family (it and everything under it) gives what the run has
@@ -109,7 +97,8 @@ impl App {
                     s.clone(),
                     st.summary.parent_id.clone(),
                     working,
-                    agent_session_id(self.agent(s.agent).as_ref(), &st),
+                    self.agent(s.agent)
+                        .gateway_session(st.session_file.as_deref(), st.conversation()),
                     gateway_model,
                 ));
             }
