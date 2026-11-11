@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 
-use crate::agent::{Agents, JobsFrom, Live, Sessions};
+use crate::agent::{Agents, JobsFrom, Live, Sessions, SubagentsFrom};
 use crate::agent_wire::{self, ConversationId, DshSubagent, PiSubagentCall, SessionEvent};
 use crate::channel::Offer;
 use crate::history::{self, History};
@@ -54,8 +54,6 @@ pub struct App {
     limits: std::sync::Mutex<HashMap<String, u64>>,
     /// When the bridge last asked a session to compact for its limit, so one crossing asks once.
     compacting_for_limit: std::sync::Mutex<HashMap<String, Instant>>,
-    /// Prime sessions' spending, subagents included, read from their session files.
-    costs: crate::cost::Costs,
     /// The agents this bridge can run a session of.
     agents: Agents,
     /// The models each agent listed, kept a minute, since listing starts the agent.
@@ -369,6 +367,10 @@ impl SessionState {
         self.prime().and_then(|prime| prime.worker_pid)
     }
 
+    pub(super) fn conversation(&self) -> Option<&ConversationId> {
+        self.prime().and_then(|prime| prime.conversation.as_ref())
+    }
+
     /// History applies while the current context starts with the summary that cut it off.
     fn earlier(&self) -> &[Item] {
         let history = self.prime().and_then(|prime| prime.history.as_ref());
@@ -470,7 +472,6 @@ impl App {
             saving: Mutex::new(()),
             limits,
             compacting_for_limit: std::sync::Mutex::new(HashMap::new()),
-            costs: crate::cost::Costs::default(),
             agents,
             models: Default::default(),
         });
@@ -1040,13 +1041,22 @@ impl App {
                 st.summary.question = question;
                 summary_changed = true;
             }
-            SessionEvent::DshSubagent(child) => dsh_subagent = Some(child),
-            SessionEvent::PiSubagentCall(call) if session.backend == Backend::Started => {
+            SessionEvent::DshSubagent(child)
+                if self.agent(session.agent).subagents() == SubagentsFrom::Events =>
+            {
+                dsh_subagent = Some(child);
+            }
+            SessionEvent::PiSubagentCall(call)
+                if session.backend == Backend::Started
+                    && self.agent(session.agent).subagents() == SubagentsFrom::PiTool =>
+            {
                 st.summary.running_subagents = !call.finished;
                 summary_changed = true;
                 pi_subagents = Some(call);
             }
-            SessionEvent::PiSubagentCall(_) | SessionEvent::Other => {}
+            SessionEvent::DshSubagent(_)
+            | SessionEvent::PiSubagentCall(_)
+            | SessionEvent::Other => {}
         }
         st.transcript.handle_event(event);
         let looping = st.transcript.take_looping();
@@ -1151,7 +1161,9 @@ impl App {
             self.send_snapshot(&session.id, &mut st);
         }
         // Rebuild Pi subagents from completed subagent tool results (e.g. after a resume).
-        if session.backend == Backend::Started {
+        if session.backend == Backend::Started
+            && self.agent(session.agent).subagents() == SubagentsFrom::PiTool
+        {
             for call in PiSubagentCall::finished_in(&messages) {
                 self.update_pi_subagents(session, call).await;
             }
@@ -1187,9 +1199,8 @@ pub fn expand_dir(path: &str) -> Result<String> {
 
 /// What a session's chosen context window is saved under: a Prime conversation's `sessionId`, else the session's id.
 fn limit_key<'a>(session: &'a Session, st: &'a SessionState) -> &'a str {
-    st.prime()
-        .and_then(|prime| prime.conversation.as_ref())
-        .map_or(&session.id, |conversation| conversation.as_str())
+    st.conversation()
+        .map_or(&session.id, ConversationId::as_str)
 }
 
 mod commands;

@@ -208,7 +208,8 @@ impl App {
         }
         if let Some(own) = row.cost {
             st.summary.cost = self
-                .prime_cost(st.session_file.as_deref(), own, st.summary.cost)
+                .agent(session.agent)
+                .cost(st.session_file.as_deref(), own, st.summary.cost)
                 .max(st.gateway_cost);
         }
         let mark = (row.activity, row.message_count);
@@ -313,15 +314,5 @@ impl App {
             Ok(Err(e)) => eprintln!("history of {}: {file}: {e}", session.id),
             Err(e) => eprintln!("history of {}: {e}", session.id),
         }
-    }
-
-    /// A Prime session's spending: its own calls (as Prime reports them, or as its file records them if that's more)
-    /// plus its subagents'. Never less than before: a total doesn't go back down.
-    pub(super) fn prime_cost(&self, file: Option<&str>, own: f64, before: f64) -> f64 {
-        let total = match file.and_then(|f| self.costs.read(f)) {
-            Some((recorded, subagents)) => own.max(recorded) + subagents,
-            None => own,
-        };
-        total.max(before)
     }
 }

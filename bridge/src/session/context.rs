@@ -110,14 +110,11 @@ impl App {
         }
         if let Some(stats) = stats {
             if let Some(own) = stats.cost {
-                st.summary.cost = match session.backend {
-                    Backend::Prime => {
-                        let file = stats.session_file.or_else(|| st.session_file.clone());
-                        self.prime_cost(file.as_deref(), own, st.summary.cost)
-                    }
-                    Backend::Started | Backend::Subagent => own,
-                }
-                .max(st.gateway_cost);
+                let file = stats.session_file.as_deref().or(st.session_file.as_deref());
+                st.summary.cost = self
+                    .agent(session.agent)
+                    .cost(file, own, st.summary.cost)
+                    .max(st.gateway_cost);
             }
             st.summary.context = stats.context;
         }

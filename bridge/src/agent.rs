@@ -9,7 +9,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use crate::agent_wire::PrimeRow;
+use crate::agent_wire::{ConversationId, PrimeRow};
 use crate::ask::{Ask, Delivery};
 use crate::prime::PrimeDaemon;
 use crate::rpc::{AgentKind, ChildOutput, Launch, Protocol, RpcChild, SpawnOptions};
@@ -27,9 +27,18 @@ pub trait Agent: Send + Sync {
     /// `Ask::KillJob`) and reports them as events. Otherwise the bridge reads them where the agent leaves them.
     fn jobs(&self) -> JobsFrom;
 
-    /// The session id it sends Open Codex with its requests, from the name of the session's file without its
-    /// extension. An agent that keeps its own sessions is known by its conversation instead.
-    fn gateway_session(&self, file_name: &str) -> String;
+    /// How a session's subagents reach the bridge.
+    fn subagents(&self) -> SubagentsFrom;
+
+    /// The session id it sends Open Codex with its requests, from the session's file or conversation id.
+    fn gateway_session(
+        &self,
+        session_file: Option<&str>,
+        conversation: Option<&ConversationId>,
+    ) -> Option<String>;
+
+    /// What a session has spent, given its file, what the agent reports now, and what was counted before.
+    fn cost(&self, session_file: Option<&str>, reported: f64, before: f64) -> f64;
 
     /// Whether what Open Codex counts for a session already holds what its subagents spent.
     fn spend_includes_subagents(&self) -> bool;
@@ -357,6 +366,21 @@ pub enum JobsFrom {
     Agent,
 }
 
+/// How a session's subagents reach the bridge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubagentsFrom {
+    /// Streamed inside the parent's `subagent` tool call (`details.results`).
+    PiTool,
+    /// Sent as events of their own (`dsh_subagent`).
+    Events,
+    /// Listed as sessions in the agent's own roster.
+    Roster,
+}
+
+fn file_stem(path: Option<&str>) -> Option<&str> {
+    std::path::Path::new(path?).file_stem()?.to_str()
+}
+
 pub type Started = (Arc<dyn Live>, mpsc::UnboundedReceiver<ChildOutput>);
 
 /// A session's agent while it runs.
@@ -386,7 +410,10 @@ impl Agents {
         Agents::of(|kind| match kind {
             AgentKind::Pi => Arc::new(Pi(store.clone())),
             AgentKind::Deepseek => Arc::new(Deepseek(store.clone())),
-            AgentKind::Prime => Arc::new(Prime(prime.clone())),
+            AgentKind::Prime => Arc::new(Prime {
+                daemon: prime.clone(),
+                costs: crate::cost::Costs::default(),
+            }),
         })
     }
 
@@ -471,13 +498,22 @@ impl Agent for Pi {
         JobsFrom::Files
     }
 
+    fn subagents(&self) -> SubagentsFrom {
+        SubagentsFrom::PiTool
+    }
+
     /// The id in the file's name, `<time>_<id>.jsonl`.
-    fn gateway_session(&self, file_name: &str) -> String {
-        file_name
-            .rsplit('_')
-            .next()
-            .unwrap_or(file_name)
-            .to_string()
+    fn gateway_session(
+        &self,
+        session_file: Option<&str>,
+        _conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        let name = file_stem(session_file)?;
+        Some(name.rsplit('_').next().unwrap_or(name).to_string())
+    }
+
+    fn cost(&self, _session_file: Option<&str>, reported: f64, _before: f64) -> f64 {
+        reported
     }
 
     fn spend_includes_subagents(&self) -> bool {
@@ -527,8 +563,20 @@ impl Agent for Deepseek {
         JobsFrom::Agent
     }
 
-    fn gateway_session(&self, file_name: &str) -> String {
-        file_name.to_string()
+    fn subagents(&self) -> SubagentsFrom {
+        SubagentsFrom::Events
+    }
+
+    fn gateway_session(
+        &self,
+        session_file: Option<&str>,
+        _conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        Some(file_stem(session_file)?.to_string())
+    }
+
+    fn cost(&self, _session_file: Option<&str>, reported: f64, _before: f64) -> f64 {
+        reported
     }
 
     fn spend_includes_subagents(&self) -> bool {
@@ -541,7 +589,11 @@ impl Agent for Deepseek {
 }
 
 /// Prime Agent, whose sessions live in its daemon: the daemon announces them, and the bridge attaches.
-struct Prime(Arc<PrimeDaemon>);
+struct Prime {
+    daemon: Arc<PrimeDaemon>,
+    /// Sessions' spending, subagents included, read from their session files.
+    costs: crate::cost::Costs,
+}
 
 impl Keeps for Prime {
     fn create(
@@ -551,7 +603,7 @@ impl Keeps for Prime {
         thinking: Option<String>,
     ) -> BoxFuture<'_, Result<PrimeRow>> {
         Box::pin(async move {
-            self.0
+            self.daemon
                 .create(&cwd, model.as_deref(), thinking.as_deref())
                 .await
         })
@@ -575,7 +627,7 @@ impl Keeps for Prime {
 
     fn session(&self, id: &str) -> Arc<dyn Live> {
         Arc::new(PrimeSession {
-            daemon: self.0.clone(),
+            daemon: self.daemon.clone(),
             id: id.to_string(),
         })
     }
@@ -594,8 +646,26 @@ impl Agent for Prime {
         JobsFrom::Kernel
     }
 
-    fn gateway_session(&self, file_name: &str) -> String {
-        file_name.to_string()
+    fn subagents(&self) -> SubagentsFrom {
+        SubagentsFrom::Roster
+    }
+
+    fn gateway_session(
+        &self,
+        _session_file: Option<&str>,
+        conversation: Option<&ConversationId>,
+    ) -> Option<String> {
+        Some(conversation?.as_str().to_string())
+    }
+
+    /// Own calls (as Prime reports them, or as its file records them if that's more) plus its subagents', never less
+    /// than before.
+    fn cost(&self, session_file: Option<&str>, reported: f64, before: f64) -> f64 {
+        let total = match session_file.and_then(|f| self.costs.read(f)) {
+            Some((recorded, subagents)) => reported.max(recorded) + subagents,
+            None => reported,
+        };
+        total.max(before)
     }
 
     /// Prime counts what its subagents spend into their parent.
@@ -640,5 +710,70 @@ impl Live for RpcChild {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(RpcChild::close(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn each_agent_names_its_gateway_session_from_its_own_record() {
+        let store = Store::temporary("agent-gateway");
+        let prime = PrimeDaemon::unconnected("test".into(), store.clone());
+        let agents = Agents::installed(prime, store.clone());
+        let conv = PrimeRow::read(&json!({ "activeSessionId": "a1", "sessionId": "conv-1" }))
+            .unwrap()
+            .conversation
+            .unwrap();
+
+        assert_eq!(
+            agents
+                .get(AgentKind::Pi)
+                .gateway_session(Some("/sessions/2026-11-11_abc123.jsonl"), Some(&conv)),
+            Some("abc123".into())
+        );
+        assert_eq!(
+            agents
+                .get(AgentKind::Deepseek)
+                .gateway_session(Some("/sessions/2026-11-11_abc123.jsonl"), Some(&conv)),
+            Some("2026-11-11_abc123".into())
+        );
+        assert_eq!(
+            agents
+                .get(AgentKind::Prime)
+                .gateway_session(Some("/sessions/file.jsonl"), None),
+            None
+        );
+        assert_eq!(
+            agents
+                .get(AgentKind::Prime)
+                .gateway_session(Some("/sessions/file.jsonl"), Some(&conv)),
+            Some("conv-1".into())
+        );
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn prime_adds_subagent_spending_from_the_session_file_and_never_drops() {
+        let store = Store::temporary("agent-cost");
+        let prime = PrimeDaemon::unconnected("test".into(), store.clone());
+        let agents = Agents::installed(prime, store.clone());
+        let file = store.dir().join("s1.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"usage\":{\"cost\":0.4}}}\n\
+             {\"type\":\"child_usage_attributed\",\"childUsage\":{\"cost\":{\"total\":0.25}}}\n",
+        )
+        .unwrap();
+        let path = file.to_str();
+
+        assert_eq!(agents.get(AgentKind::Pi).cost(path, 0.3, 0.5), 0.3);
+        assert_eq!(agents.get(AgentKind::Deepseek).cost(path, 0.3, 0.5), 0.3);
+        assert!((agents.get(AgentKind::Prime).cost(path, 0.3, 0.0) - 0.65).abs() < 1e-9);
+        assert!((agents.get(AgentKind::Prime).cost(path, 0.3, 0.8) - 0.8).abs() < 1e-9);
+        let _ = std::fs::remove_dir_all(store.dir());
     }
 }

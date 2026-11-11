@@ -342,22 +342,7 @@
           "session": "dsh1"
         },
         {
-          "patches": 2
-        },
-        {
-          "changed": {
-            "runningSubagents": true
-          },
-          "session": "dsh1"
-        },
-        {
-          "patches": 1
-        },
-        {
-          "changed": {
-            "runningSubagents": false
-          },
-          "session": "dsh1"
+          "patches": 3
         },
         {
           "message": {

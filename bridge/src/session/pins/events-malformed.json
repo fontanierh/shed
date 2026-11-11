@@ -1017,7 +1017,7 @@
         "s1.f117882d": "running"
       },
       "summary": {
-        "agent": "pi",
+        "agent": "deepseek",
         "autoCompaction": true,
         "backgroundJobs": 1,
         "cost": 0.0,
