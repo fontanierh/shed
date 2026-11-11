@@ -1,5 +1,4 @@
 import XCTest
-import Observation
 @testable import ShedKit
 
 final class SessionStreamingTests: XCTestCase {
@@ -30,63 +29,83 @@ final class SessionStreamingTests: XCTestCase {
         XCTAssertEqual(store.items[0].text, "Start one two ")
     }
 
-    @MainActor private func waitForLive(_ store: SessionStore, _ key: String, upTo ms: Int) async -> Int {
-        var waited = 0
-        while waited < ms {
-            if store.live.texts[key] != nil { return waited }
-            try? await Task.sleep(for: .milliseconds(10), tolerance: .zero)
-            waited += 10
+    /// The store's waits, each held until the test lets it go: no clock is read.
+    @MainActor final class HeldPauses {
+        private(set) var asked: [Duration] = []
+        private var waiting: [CheckedContinuation<Void, Never>] = []
+        var held: Int { waiting.count }
+
+        func pause(_ time: Duration) async {
+            asked.append(time)
+            await withCheckedContinuation { waiting.append($0) }
         }
-        return -1
+
+        /// Lets go of the oldest wait only.
+        func releaseFirst() {
+            guard !waiting.isEmpty else { return }
+            waiting.removeFirst().resume()
+        }
+
+        func release() {
+            let all = waiting
+            waiting = []
+            all.forEach { $0.resume() }
+        }
     }
 
-    @MainActor func testThousandDeltaBurstStaysBatched() async {
-        let store = SessionStore(defaults: scratchDefaults())
+    @MainActor private func store(_ pauses: HeldPauses) -> SessionStore {
+        let store = SessionStore(defaults: scratchDefaults(), connection: { ScriptedBridge() }, pause: { await pauses.pause($0) })
         store.select("test:reply")
         store.apply(.session(summary("reply")), from: "test")
         store.apply(.snapshot(sessionId: "reply", items: [Item(id: "text", kind: .text, text: "Start ")], earlier: 0), from: "test")
+        return store
+    }
+
+    /// A burst keeps one deadline: a thousand deltas wait on one pause of 80 ms, and show together when it ends.
+    @MainActor func testThousandDeltaBurstStaysBatched() async {
+        let pauses = HeldPauses()
+        let store = store(pauses)
         for i in 0..<1000 {
             store.apply(.itemPatch(sessionId: "reply", itemId: "text", set: nil, append: ItemAppend(text: "word ")), from: "test")
             store.apply(.session(summary("other-\(i % 10)")), from: "test")
         }
+        let held = await eventually { pauses.held == 1 }
+        XCTAssertTrue(held)
+        XCTAssertEqual(pauses.asked, [.milliseconds(80)])
         XCTAssertEqual(store.items[0].text, "Start ")
         XCTAssertTrue(store.live.texts.isEmpty)
-        // The deadline bounds batching, not how soon a loaded main actor must service it.
-        let appeared = await waitForLive(store, "text", upTo: 2000)
-        XCTAssertGreaterThanOrEqual(appeared, 0)
+        pauses.release()
         let expected = "Start " + String(repeating: "word ", count: 1000)
-        XCTAssertEqual(store.live.texts["text"], expected)
+        let shown = await eventually { store.live.texts["text"] == expected }
+        XCTAssertTrue(shown)
         XCTAssertEqual(store.items[0].text, "Start ")
         store.apply(.session(summary("reply", status: .idle)), from: "test")
         XCTAssertEqual(store.items[0].text, expected)
         XCTAssertTrue(store.live.texts.isEmpty)
     }
 
-    @MainActor func testForcedFlushCancelsReadyTimer() {
-        let store = SessionStore(defaults: scratchDefaults())
-        store.select("test:reply")
-        store.apply(.session(summary("reply")), from: "test")
-        store.apply(.snapshot(sessionId: "reply", items: [Item(id: "text", kind: .text, text: "Start ")], earlier: 0), from: "test")
+    /// A change of state flushes at once and calls the waiting deadline off: text after it waits on a deadline of its
+    /// own, not on the rest of the old one.
+    @MainActor func testForcedFlushCancelsReadyTimer() async {
+        let pauses = HeldPauses()
+        let store = store(pauses)
         store.apply(.itemPatch(sessionId: "reply", itemId: "text", set: nil, append: ItemAppend(text: "old ")), from: "test")
-        // Start the sleeper, then keep its ready continuation waiting on the main actor.
-        RunLoop.current.run(until: .now + 0.01)
-        Thread.sleep(forTimeInterval: 0.3)
+        let first = await eventually { pauses.held == 1 }
+        XCTAssertTrue(first)
         store.apply(.itemPatch(sessionId: "reply", itemId: "text", set: ItemSet(text: "Replaced "), append: nil), from: "test")
-        let resumed = ContinuousClock.now
-        @MainActor final class Publication {
-            var at: ContinuousClock.Instant?
-        }
-        let publication = Publication()
-        withObservationTracking {
-            _ = store.live.texts
-        } onChange: {
-            MainActor.assumeIsolated { publication.at = .now }
-        }
+        XCTAssertEqual(store.items[0].text, "Replaced ")
         store.apply(.itemPatch(sessionId: "reply", itemId: "text", set: nil, append: ItemAppend(text: "new ")), from: "test")
-        RunLoop.current.run(until: .now + 0.3)
-        XCTAssertNotNil(publication.at)
-        if let at = publication.at { XCTAssertGreaterThanOrEqual(at - resumed, .milliseconds(80)) }
-        XCTAssertEqual(store.live.texts["text"], "Replaced new ")
+        let second = await eventually { pauses.held == 2 }
+        XCTAssertTrue(second)
+        XCTAssertEqual(pauses.asked, [.milliseconds(80), .milliseconds(80)])
+        XCTAssertNil(store.live.texts["text"])
+        // The old deadline ending shows nothing: it was called off.
+        pauses.releaseFirst()
+        let early = await eventually { store.live.texts["text"] != nil }
+        XCTAssertFalse(early)
+        pauses.release()
+        let shown = await eventually { store.live.texts["text"] == "Replaced new " }
+        XCTAssertTrue(shown)
         store.apply(.session(summary("reply", status: .idle)), from: "test")
         XCTAssertEqual(store.items[0].text, "Replaced new ")
         XCTAssertTrue(store.live.texts.isEmpty)
