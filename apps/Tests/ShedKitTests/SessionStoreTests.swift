@@ -163,8 +163,8 @@ final class SessionStoreTests: XCTestCase {
                 summary("other", agent: agent, cost: 8),
             ]), from: "one")
             let parent = store.sessions["one:p"]!
-            XCTAssertEqual(SessionStore.cost(of: parent, in: store.sessions), agent.spendIncludesSubagents ? 4 : 7, agent.rawValue)
-            XCTAssertEqual(agent.spendIncludesSubagents, agent == .prime, agent.rawValue)
+            XCTAssertEqual(SessionStore.cost(of: parent, in: store.sessions), parent.can.spendIncludesSubagents ? 4 : 7, agent.rawValue)
+            XCTAssertEqual(parent.can.spendIncludesSubagents, agent == .prime, agent.rawValue)
         }
     }
 
@@ -179,5 +179,92 @@ final class SessionStoreTests: XCTestCase {
         // Unpublished, a site opens only on the computer that serves it, and this one is not known to be local.
         XCTAssertEqual(store.allSites.map(\.opens), [true, false, true])
         XCTAssertEqual(store.sites(of: store.sessions["one:old"]!).map(\.site.port), [9000])
+    }
+
+    @MainActor func testCapabilitiesFromBridgeOverrideByNameFallbacks() throws {
+        let payload = #"""
+        {
+          "type": "sessions",
+          "bridge": 2,
+          "sessions": [
+            {
+              "id": "p",
+              "agent": "pi",
+              "kind": "root",
+              "runningSubagents": false,
+              "readOnly": false,
+              "cwd": "/tmp",
+              "title": "parent",
+              "status": "idle",
+              "createdAt": 0,
+              "thinkingLevels": [],
+              "cost": 4,
+              "queue": { "steering": [], "followUp": [] },
+              "autoCompaction": true,
+              "backgroundJobs": 0,
+              "capabilities": {
+                "restartKernel": true,
+                "clearGoal": true,
+                "newSession": false,
+                "autoCompactionSwitch": false,
+                "followUp": false,
+                "answer": true,
+                "backgroundCommands": false,
+                "spendIncludesSubagents": true
+              }
+            },
+            {
+              "id": "c",
+              "agent": "pi",
+              "kind": "subagent",
+              "parentId": "p",
+              "runningSubagents": false,
+              "readOnly": true,
+              "cwd": "/tmp",
+              "title": "child",
+              "status": "done",
+              "createdAt": 0,
+              "thinkingLevels": [],
+              "cost": 2,
+              "queue": { "steering": [], "followUp": [] },
+              "autoCompaction": true,
+              "backgroundJobs": 0
+            }
+          ]
+        }
+        """#
+        let message = try JSONDecoder().decode(ServerMessage.self, from: Data(payload.utf8))
+        let store = SessionStore(defaults: scratchDefaults())
+        store.apply(message, from: "one")
+        let parent = try XCTUnwrap(store.sessions["one:p"])
+        let child = try XCTUnwrap(store.sessions["one:c"])
+        XCTAssertEqual(SessionStore.cost(of: parent, in: store.sessions), 4)
+        XCTAssertEqual(
+            parent.can,
+            SessionCapabilities(
+                restartKernel: true,
+                clearGoal: true,
+                newSession: false,
+                autoCompactionSwitch: false,
+                followUp: false,
+                answer: true,
+                backgroundCommands: false,
+                spendIncludesSubagents: true
+            )
+        )
+        XCTAssertNil(child.capabilities)
+        XCTAssertEqual(
+            child.can,
+            SessionCapabilities(
+                restartKernel: false,
+                clearGoal: false,
+                newSession: false,
+                autoCompactionSwitch: false,
+                followUp: false,
+                answer: false,
+                backgroundCommands: false,
+                spendIncludesSubagents: false
+            )
+        )
     }
 }

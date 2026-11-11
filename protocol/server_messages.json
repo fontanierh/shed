@@ -88,6 +88,16 @@
           "agent": "prime",
           "autoCompaction": false,
           "backgroundJobs": 2,
+          "capabilities": {
+            "answer": false,
+            "autoCompactionSwitch": true,
+            "backgroundCommands": true,
+            "clearGoal": true,
+            "followUp": true,
+            "newSession": true,
+            "restartKernel": true,
+            "spendIncludesSubagents": true
+          },
           "context": {
             "percent": 25.0,
             "tokens": 50000,
@@ -192,6 +202,16 @@
         "agent": "prime",
         "autoCompaction": false,
         "backgroundJobs": 2,
+        "capabilities": {
+          "answer": false,
+          "autoCompactionSwitch": true,
+          "backgroundCommands": true,
+          "clearGoal": true,
+          "followUp": true,
+          "newSession": true,
+          "restartKernel": true,
+          "spendIncludesSubagents": true
+        },
         "context": {
           "percent": 25.0,
           "tokens": 50000,

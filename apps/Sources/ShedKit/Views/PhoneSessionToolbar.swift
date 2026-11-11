@@ -126,14 +126,14 @@ struct PhoneSessionToolbar: ToolbarContent {
                 Section {
                     Button("Compact Now", systemImage: "rectangle.compress.vertical") { store.compact() }
                         .disabled(session.status.isBusy)
-                    if session.controlsAutoCompaction {
+                    if session.can.autoCompactionSwitch {
                         Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
                     }
                 }
-                if session.agent == .prime {
+                if session.can.restartKernel {
                     Button("Restart Python Kernel…", systemImage: "arrow.clockwise", action: restartKernel)
                 }
-                if session.hasBackgroundCommands {
+                if session.can.backgroundCommands {
                     Button("Background Commands", systemImage: "apple.terminal", action: showJobs)
                 }
                 if session.hasSites {

@@ -45,10 +45,15 @@ impl App {
             let session = match self.find(&id).await {
                 Ok(s) => s,
                 Err(_) => {
-                    let mut summary =
-                        new_summary(&id, parent.agent, SessionKind::Subagent, &parent.cwd);
+                    let mut summary = new_summary(
+                        &self.agents,
+                        &id,
+                        parent.agent,
+                        SessionKind::Subagent,
+                        true,
+                        &parent.cwd,
+                    );
                     summary.parent_id = Some(parent.id.clone());
-                    summary.read_only = true;
                     let state = SessionState::new(summary, None, BackendState::subagent());
                     let session = Arc::new(Session::new(
                         id.clone(),
@@ -122,9 +127,15 @@ impl App {
         let session = match self.find(&id).await {
             Ok(s) => s,
             Err(_) => {
-                let mut summary = new_summary(&id, root.agent, SessionKind::Subagent, &root.cwd);
+                let mut summary = new_summary(
+                    &self.agents,
+                    &id,
+                    root.agent,
+                    SessionKind::Subagent,
+                    true,
+                    &root.cwd,
+                );
                 summary.parent_id = Some(parent_id);
-                summary.read_only = true;
                 let state = SessionState::new(summary, None, BackendState::subagent());
                 let session = Arc::new(Session::new(
                     id.clone(),

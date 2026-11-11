@@ -134,10 +134,10 @@ struct Composer: View {
         #endif
         VStack(alignment: .leading, spacing: 8) {
             if let goal = session.goal {
-                GoalCard(goal: goal, cancel: store.clearGoal)
+                GoalCard(goal: goal, cancel: session.can.clearGoal ? { store.clearGoal() } : nil)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if let question = session.question {
+            if let question = session.question, session.can.answer {
                 QuestionCard(store: store, session: session, question: question)
                     .id(question.id)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -187,18 +187,20 @@ struct Composer: View {
                 #endif
 
                 if busy {
-                    Button(action: queueFollowUp) {
-                        Image(systemName: "text.append")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Palette.moon)
-                            .frame(width: 34, height: 34)
-                            .card(radius: 17, fill: Palette.raised.opacity(0.8))
+                    if session.can.followUp {
+                        Button(action: queueFollowUp) {
+                            Image(systemName: "text.append")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Palette.moon)
+                                .frame(width: 34, height: 34)
+                                .card(radius: 17, fill: Palette.raised.opacity(0.8))
+                        }
+                        .buttonStyle(PressStyle())
+                        .disabled(!canSend)
+                        .opacity(canSend ? 1 : 0.5)
+                        .help("Queue: send after the agent finishes")
+                        .transition(.scale.combined(with: .opacity))
                     }
-                    .buttonStyle(PressStyle())
-                    .disabled(!canSend)
-                    .opacity(canSend ? 1 : 0.5)
-                    .help("Queue: send after the agent finishes")
-                    .transition(.scale.combined(with: .opacity))
 
                     Button(action: send) {
                         Label("Steer", systemImage: "arrow.up.right")

@@ -546,6 +546,16 @@
       "agent": "pi",
       "autoCompaction": false,
       "backgroundJobs": 0,
+      "capabilities": {
+        "answer": false,
+        "autoCompactionSwitch": true,
+        "backgroundCommands": true,
+        "clearGoal": false,
+        "followUp": true,
+        "newSession": true,
+        "restartKernel": false,
+        "spendIncludesSubagents": false
+      },
       "context": {
         "percent": 18.38235294117647,
         "tokens": 50000,

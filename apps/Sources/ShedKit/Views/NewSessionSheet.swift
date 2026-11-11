@@ -83,11 +83,9 @@ struct NewSessionSheet: View {
         return agentModels.split(separator: "\n").filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
     }
 
-    /// Whether `kind` can start on `model` here: one it listed, or before it has said, one in its usual providers.
+    /// Whether `kind` can start on `model` here: one it listed on this computer.
     private func fits(_ model: String, _ kind: AgentKind) -> Bool {
-        let known = listed(kind)
-        if !known.isEmpty { return known.contains(model) }
-        return model.hasPrefix("deepseek") == (kind == .deepseek)
+        listed(kind).contains(model)
     }
 
     /// A model left from another agent, or another computer, would fail to start.
@@ -106,11 +104,8 @@ struct NewSessionSheet: View {
 
     /// Recently used ones first, then the rest of what the agent listed.
     private var models: [String] {
-        let recent = recentModels.split(separator: "\n").map(String.init).filter { fits($0, agent) }
-        var all = listed(agent)
-        if all.isEmpty {
-            all = agent == .deepseek ? ["deepseek-official/deepseek-v4-pro", "deepseek-official/deepseek-v4-flash"] : ["openai/gpt-6.1-terra"]
-        }
+        let all = listed(agent)
+        let recent = recentModels.split(separator: "\n").map(String.init).filter(all.contains)
         return recent + all.filter { !recent.contains($0) }
     }
 
@@ -253,7 +248,7 @@ struct NewSessionSheet: View {
                 .padding(.leading, 10)
             Menu {
                 Button("Agent default") { model = "" }
-                Divider()
+                if !models.isEmpty { Divider() }
                 let recent = models.filter { recentModels.split(separator: "\n").contains(Substring($0)) }
                 ForEach(recent, id: \.self) { name in Button(Self.label(name)) { model = name } }
                 if !recent.isEmpty { Divider() }
@@ -425,7 +420,7 @@ struct AgentCard: View {
                 AgentMark(agent: kind, size: 44)
                     .offset(y: hop ? -8 : 0)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(kind == .prime ? "Prime Agent" : kind.displayName).font(.system(size: 16, weight: .medium)).foregroundStyle(Palette.moon)
+                    Text(kind.cardTitle).font(.system(size: 16, weight: .medium)).foregroundStyle(Palette.moon)
                     Text(detail).font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
@@ -866,6 +861,13 @@ struct PhoneFolderPicker: View {
 private extension AgentKind {
     /// Every agent has a card: Prime first, then the others as they are listed.
     static var cards: [AgentKind] { [.prime] + allCases.filter { $0 != .prime } }
+
+    var cardTitle: String {
+        switch self {
+        case .prime: "Prime Agent"
+        case .pi, .deepseek: displayName
+        }
+    }
 
     var cardDetail: String {
         switch self {

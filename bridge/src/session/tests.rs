@@ -270,6 +270,10 @@ impl Rig {
         }
     }
 
+    fn summary(&self, id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> SessionSummary {
+        new_summary(&self.app.agents, id, agent, kind, false, cwd)
+    }
+
     fn script(&self, command: &str, answer: Value) {
         self.agents
             .answers
@@ -1086,7 +1090,7 @@ async fn malformed_state_and_stats() {
             *rig.agents.answers.lock().unwrap() =
                 serde_json::from_value(answers).unwrap_or_default();
             // What an earlier refresh left, so a part the agent leaves out shows as kept.
-            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
+            let mut summary = rig.summary("s1", agent, SessionKind::Root, "/work/project");
             summary.title = "Earlier".into();
             summary.thinking_level = Some("low".into());
             summary.thinking_levels = vec!["low".into()];
@@ -1258,7 +1262,7 @@ async fn malformed_events() {
                 AgentKind::Pi
             };
             // What earlier events left, so a part the agent leaves out shows as kept or dropped.
-            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
+            let mut summary = rig.summary("s1", agent, SessionKind::Root, "/work/project");
             summary.title = "Earlier".into();
             summary.thinking_level = Some("low".into());
             summary.queue.steering = vec!["earlier".into()];
@@ -1359,7 +1363,7 @@ async fn commands() {
                 )]),
                 _ => HashMap::new(),
             };
-            let mut summary = new_summary("s1", agent, SessionKind::Root, "/work/project");
+            let mut summary = rig.summary("s1", agent, SessionKind::Root, "/work/project");
             summary.title = "Earlier".into();
             if case == "send while it works" {
                 summary.status = SessionStatus::Running;
@@ -1544,7 +1548,7 @@ async fn a_new_session_that_fails_halfway_is_not_kept() {
 async fn a_message_sent_again_under_its_id_goes_once() {
     let rig = &Rig::new("send-once", &[]);
     rig.script("prompt", json!({}));
-    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let summary = rig.summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
     let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
     let session = &Arc::new(Session::new(
         "s1".into(),
@@ -1603,7 +1607,7 @@ async fn a_turn_begun_while_a_refresh_waits_is_not_set_back_to_idle() {
     let rig = &Rig::new("refresh-overtaken", &[]);
     rig.script("get_state", json!({ "isStreaming": false }));
     rig.script("get_session_stats", json!({}));
-    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let summary = rig.summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
     let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
     let session = Arc::new(Session::new(
         "s1".into(),
@@ -1631,7 +1635,7 @@ async fn a_turn_begun_while_a_refresh_waits_is_not_set_back_to_idle() {
 async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
     let rig = &Rig::new("send-again-early", &[]);
     rig.script("prompt", json!({}));
-    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let summary = rig.summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
     let state = SessionState::new(summary, None, own(rig, "s1", Backend::Started, true));
     let session = Arc::new(Session::new(
         "s1".into(),
@@ -1850,7 +1854,7 @@ async fn a_closed_session_keeps_nothing_of_its_agent_at_work() {
 #[tokio::test]
 async fn a_closed_session_keeps_no_background_commands_its_agent_reported() {
     let rig = Rig::new("close-jobs", &[]);
-    let summary = new_summary(
+    let summary = rig.summary(
         "d1",
         AgentKind::Deepseek,
         SessionKind::Root,
@@ -1939,7 +1943,7 @@ async fn prime_session(rig: &Rig, id: &str, parent: Option<&str>) -> Arc<Session
         Some(_) => SessionKind::Subagent,
         None => SessionKind::Root,
     };
-    let mut summary = new_summary(id, AgentKind::Prime, kind, "/work/project");
+    let mut summary = rig.summary(id, AgentKind::Prime, kind, "/work/project");
     summary.parent_id = parent.map(str::to_string);
     let state = SessionState::new(summary, None, BackendState::prime());
     let session = Arc::new(Session::new(
@@ -2186,7 +2190,7 @@ async fn commands_an_agent_lacks_are_refused_without_asking_it() {
         ("dsh1", AgentKind::Deepseek, Backend::Started),
         ("p1", AgentKind::Prime, Backend::Prime),
     ] {
-        let summary = new_summary(id, agent, SessionKind::Root, "/work/project");
+        let summary = rig.summary(id, agent, SessionKind::Root, "/work/project");
         let state = SessionState::new(summary, None, own(&rig, id, backend, true));
         let session = Arc::new(Session::new(
             id.into(),
@@ -2228,7 +2232,7 @@ async fn commands_an_agent_lacks_are_refused_without_asking_it() {
 #[tokio::test]
 async fn a_subagent_tool_call_on_deepseek_waits_for_its_own_subagent_events() {
     let rig = Rig::new("dsh-subagent-tool", &[]);
-    let summary = new_summary(
+    let summary = rig.summary(
         "dsh1",
         AgentKind::Deepseek,
         SessionKind::Root,
@@ -2254,5 +2258,59 @@ async fn a_subagent_tool_call_on_deepseek_waits_for_its_own_subagent_events() {
         )
         .await;
     assert!(!session.state.lock().await.summary.running_subagents);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Clients learn what each session supports from `capabilities` on its summary rather than switching on agent names.
+#[tokio::test]
+async fn sessions_publish_their_capabilities_on_the_wire() {
+    let rig = Rig::new("serve-capabilities", &[("sessions.json", SAVED_SESSIONS)]);
+    prime_session(&rig, "p1", None).await;
+    let mut client = Client::connect(&rig).await;
+    client
+        .say(json!({ "id": "l", "op": "list_sessions" }))
+        .await;
+    let listed = client.until_reply("l").await;
+    let sessions = listed.last().unwrap()["data"].as_array().unwrap();
+    let caps = |id: &str| sessions.iter().find(|s| s["id"] == id).unwrap()["capabilities"].clone();
+    assert_eq!(
+        caps("pi1"),
+        json!({
+            "restartKernel": false,
+            "clearGoal": false,
+            "newSession": true,
+            "autoCompactionSwitch": true,
+            "followUp": true,
+            "answer": false,
+            "backgroundCommands": true,
+            "spendIncludesSubagents": false,
+        })
+    );
+    assert_eq!(
+        caps("dsh1"),
+        json!({
+            "restartKernel": false,
+            "clearGoal": false,
+            "newSession": false,
+            "autoCompactionSwitch": false,
+            "followUp": true,
+            "answer": true,
+            "backgroundCommands": true,
+            "spendIncludesSubagents": false,
+        })
+    );
+    assert_eq!(
+        caps("p1"),
+        json!({
+            "restartKernel": true,
+            "clearGoal": true,
+            "newSession": true,
+            "autoCompactionSwitch": true,
+            "followUp": true,
+            "answer": false,
+            "backgroundCommands": true,
+            "spendIncludesSubagents": true,
+        })
+    );
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
