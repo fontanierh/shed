@@ -588,6 +588,16 @@
       "agent": "prime",
       "autoCompaction": false,
       "backgroundJobs": 0,
+      "capabilities": {
+        "answer": false,
+        "autoCompactionSwitch": true,
+        "backgroundCommands": true,
+        "clearGoal": true,
+        "followUp": true,
+        "newSession": true,
+        "restartKernel": true,
+        "spendIncludesSubagents": true
+      },
       "context": {
         "percent": 18.38235294117647,
         "tokens": 50000,

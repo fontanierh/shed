@@ -381,6 +381,34 @@ fn file_stem(path: Option<&str>) -> Option<&str> {
     std::path::Path::new(path?).file_stem()?.to_str()
 }
 
+/// What a session of `agent` supports across the wire. Read-only subagents are views of a parent's conversation and
+/// take no commands or background jobs of their own.
+pub fn capabilities(agent: &dyn Agent, read_only: bool) -> crate::protocol::Capabilities {
+    if read_only {
+        return crate::protocol::Capabilities {
+            restart_kernel: false,
+            clear_goal: false,
+            new_session: false,
+            auto_compaction_switch: false,
+            follow_up: false,
+            answer: false,
+            background_commands: false,
+            spend_includes_subagents: agent.spend_includes_subagents(),
+        };
+    }
+    let verbs = agent.verbs();
+    crate::protocol::Capabilities {
+        restart_kernel: verbs.restart_kernel(None).is_some(),
+        clear_goal: verbs.clear_goal().is_some(),
+        new_session: verbs.new_session().is_some(),
+        auto_compaction_switch: verbs.auto_compaction(true).is_some(),
+        follow_up: verbs.follow_up(String::new()).is_some(),
+        answer: verbs.answer(String::new(), Vec::new()).is_some(),
+        background_commands: true,
+        spend_includes_subagents: agent.spend_includes_subagents(),
+    }
+}
+
 pub type Started = (Arc<dyn Live>, mpsc::UnboundedReceiver<ChildOutput>);
 
 /// A session's agent while it runs.

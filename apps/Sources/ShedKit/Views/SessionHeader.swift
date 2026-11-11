@@ -59,7 +59,7 @@ struct SessionHeader: View {
 
             // The composer shows the context gauge; read-only sessions have none.
             if session.readOnly || session.status == .stopped, let context = session.context { ContextGauge(context: context) }
-            if session.hasBackgroundCommands { BackgroundCommandsButton(store: store, session: session) }
+            if session.can.backgroundCommands { BackgroundCommandsButton(store: store, session: session) }
             if session.hasSites { SitesButton(store: store, session: session) }
             Text(session.cost, format: .currency(code: "USD").precision(.fractionLength(2)))
                 .font(.system(size: 12.5).monospacedDigit())
@@ -76,14 +76,14 @@ struct SessionHeader: View {
                     }
                     Button("Compact Now") { store.compact() }
                         .disabled(session.status.isBusy)
-                    if session.controlsAutoCompaction {
+                    if session.can.autoCompactionSwitch {
                         Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
                     }
-                    if session.agent == .prime {
+                    if session.can.restartKernel {
                         Button("Restart Python Kernel…") { restartingKernel = true }
                     }
                     Divider()
-                    if session.startsNewSessionInPlace {
+                    if session.can.newSession {
                         Button("New Session (same agent)") { store.newSession() }
                     }
                     Button("Copy Path") { Clipboard.copy(session.cwd) }

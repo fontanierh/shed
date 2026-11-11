@@ -12,14 +12,6 @@ public enum AgentKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .deepseek: "DeepSeek"
         }
     }
-    /// Whether a session's cost already holds what its subagents spent (`spend_includes_subagents` in the bridge's
-    /// agent.rs). Otherwise each subagent carries its own, and the app adds them up.
-    var spendIncludesSubagents: Bool {
-        switch self {
-        case .prime: true
-        case .pi, .deepseek: false
-        }
-    }
 }
 
 public enum ItemKind: String, Codable, Sendable {
@@ -243,15 +235,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public let spend: RunSpend?
     /// Web servers the session's processes are listening on. Missing from a bridge older than sites.
     public let sites: [Site]?
+    /// What this session supports, sent by bridges that derive it from `Agent` and `Verbs`.
+    public var capabilities: SessionCapabilities? = nil
 
     public var isSubagent: Bool { kind == .subagent }
-    /// Background commands come from each agent's own tools. Pi's and DeepSeek's subagents run in the parent's
-    /// process, so their commands are the parent's.
-    public var hasBackgroundCommands: Bool { !(agent != .prime && isSubagent) }
-    /// DeepSeek Harness has no fresh conversation in the same session: a new one is started from the app.
-    public var startsNewSessionInPlace: Bool { agent != .deepseek }
-    /// DeepSeek Harness compacts on its own: it can compact now, but has no switch to stop it.
-    public var controlsAutoCompaction: Bool { agent != .deepseek }
+    /// What this session supports, falling back to the legacy by-name table when talking to an older bridge.
+    public var can: SessionCapabilities {
+        capabilities ?? .legacy(agent: agent, isSubagent: isSubagent, readOnly: readOnly)
+    }
     /// A subagent left fully idle for five minutes, nothing waiting for it: taken to be gone, since Prime keeps
     /// finished subagents alive. It shows again as soon as it does anything.
     public func isDormant(at now: Date) -> Bool {
@@ -264,6 +255,63 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Sendable {
     public var hasSites: Bool { !servedSites.isEmpty }
     public var servedSites: [Site] { sites ?? [] }
     public var folderName: String { (cwd as NSString).lastPathComponent }
+}
+
+public struct SessionCapabilities: Codable, Equatable, Sendable {
+    public let restartKernel: Bool
+    public let clearGoal: Bool
+    public let newSession: Bool
+    public let autoCompactionSwitch: Bool
+    public let followUp: Bool
+    public let answer: Bool
+    public let backgroundCommands: Bool
+    public let spendIncludesSubagents: Bool
+
+    public init(
+        restartKernel: Bool,
+        clearGoal: Bool,
+        newSession: Bool,
+        autoCompactionSwitch: Bool,
+        followUp: Bool,
+        answer: Bool,
+        backgroundCommands: Bool,
+        spendIncludesSubagents: Bool
+    ) {
+        self.restartKernel = restartKernel
+        self.clearGoal = clearGoal
+        self.newSession = newSession
+        self.autoCompactionSwitch = autoCompactionSwitch
+        self.followUp = followUp
+        self.answer = answer
+        self.backgroundCommands = backgroundCommands
+        self.spendIncludesSubagents = spendIncludesSubagents
+    }
+
+    /// Fallback for bridges built before `SessionSummary.capabilities` was added.
+    static func legacy(agent: AgentKind, isSubagent: Bool, readOnly: Bool) -> SessionCapabilities {
+        if readOnly {
+            return SessionCapabilities(
+                restartKernel: false,
+                clearGoal: false,
+                newSession: false,
+                autoCompactionSwitch: false,
+                followUp: false,
+                answer: false,
+                backgroundCommands: false,
+                spendIncludesSubagents: agent == .prime
+            )
+        }
+        return SessionCapabilities(
+            restartKernel: agent == .prime,
+            clearGoal: agent == .prime,
+            newSession: agent != .deepseek,
+            autoCompactionSwitch: agent != .deepseek,
+            followUp: true,
+            answer: agent == .deepseek,
+            backgroundCommands: !(agent != .prime && isSubagent),
+            spendIncludesSubagents: agent == .prime
+        )
+    }
 }
 
 /// Questions the agent asks the user. Each is answered with the labels picked, or with typed text.

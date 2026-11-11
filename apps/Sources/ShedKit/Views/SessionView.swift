@@ -48,9 +48,8 @@ struct SessionView: View {
         return ReaderAction { store.stopTool() }
     }
 
-    /// Only Prime runs a Python kernel.
     private var restartKernel: ReaderAction? {
-        if session.readOnly || session.agent != .prime { return nil }
+        if session.readOnly || !session.can.restartKernel { return nil }
         let store = store
         return ReaderAction { store.restartKernel() }
     }
@@ -249,7 +248,7 @@ struct SessionView: View {
     /// The phone opens the lists from the idle lines; the Mac has both in its header.
     private var openJobs: (() -> Void)? {
         #if os(iOS)
-        session.hasBackgroundCommands ? { showingJobs = true } : nil
+        session.can.backgroundCommands ? { showingJobs = true } : nil
         #else
         nil
         #endif

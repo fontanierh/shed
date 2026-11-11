@@ -247,7 +247,18 @@ fn to_json(msg: &ServerMessage) -> Arc<str> {
         .into()
 }
 
-fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> SessionSummary {
+fn new_summary(
+    agents: &Agents,
+    id: &str,
+    agent: AgentKind,
+    kind: SessionKind,
+    read_only: bool,
+    cwd: &str,
+) -> SessionSummary {
+    let capabilities = Some(crate::agent::capabilities(
+        agents.get(agent).as_ref(),
+        read_only,
+    ));
     SessionSummary {
         id: id.to_string(),
         agent,
@@ -255,7 +266,7 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         parent_id: None,
         name: None,
         running_subagents: false,
-        read_only: false,
+        read_only,
         cwd: cwd.to_string(),
         title: default_title(cwd),
         status: SessionStatus::Starting,
@@ -278,6 +289,7 @@ fn new_summary(id: &str, agent: AgentKind, kind: SessionKind, cwd: &str) -> Sess
         question: None,
         spend: None,
         sites: Vec::new(),
+        capabilities,
     }
 }
 
@@ -453,7 +465,8 @@ impl App {
                 }
             })
             .map(|r| {
-                let mut summary = new_summary(&r.id, r.agent, SessionKind::Root, &r.cwd);
+                let mut summary =
+                    new_summary(&agents, &r.id, r.agent, SessionKind::Root, false, &r.cwd);
                 summary.context_limit = limits.get(&r.id).copied();
                 summary.title = r.title.clone();
                 summary.status = SessionStatus::Stopped;
@@ -668,7 +681,7 @@ impl App {
             return Ok(summary);
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
-        let summary = new_summary(&id, agent, SessionKind::Root, &cwd);
+        let summary = new_summary(&self.agents, &id, agent, SessionKind::Root, false, &cwd);
         // Starting from its first moment in the list, so nothing else starts it too.
         let starting = BackendState::Started(Process::Starting { closed: false });
         let state = SessionState::new(summary, None, starting);

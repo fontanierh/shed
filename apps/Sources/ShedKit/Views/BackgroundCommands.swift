@@ -99,9 +99,7 @@ struct BackgroundCommandsPanel: View {
                     AgentMark(symbol: "terminal", color: Palette.accent, size: 48, asleep: true)
                         .padding(.bottom, 8)
                     Text("No background commands").font(.system(size: 16, weight: .semibold)).foregroundStyle(Palette.moon)
-                    Text(session.agent == .prime ? "Commands the agent leaves running with bash() appear here."
-                         : session.agent == .pi ? "Commands the agent starts with bash_background appear here."
-                         : "Commands the agent leaves running appear here.")
+                    Text("Commands the agent leaves running appear here.")
                         .font(.caption).foregroundStyle(.tertiary)
                 }
                 Spacer()

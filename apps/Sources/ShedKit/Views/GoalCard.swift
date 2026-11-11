@@ -4,7 +4,7 @@ import SwiftUI
 /// The goal the agent keeps working toward across turns: what it is, how far it has gone, and a way to drop it.
 struct GoalCard: View {
     let goal: Goal
-    let cancel: () -> Void
+    let cancel: (() -> Void)?
     @State private var expanded = false
     @State private var confirming = false
     /// The objective a cancel was sent for, until the goal goes away (a running turn takes it at its next step).
@@ -54,7 +54,7 @@ struct GoalCard: View {
 
                 if cancelling == goal.objective {
                     ProgressView().controlSize(.mini).frame(width: 22, height: 22)
-                } else {
+                } else if cancel != nil {
                     Button { confirming = true } label: {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold)).foregroundStyle(Palette.moon.opacity(0.6))
@@ -84,7 +84,7 @@ struct GoalCard: View {
         .confirmationDialog("Cancel this goal?", isPresented: $confirming, titleVisibility: .visible) {
             Button("Cancel Goal", role: .destructive) {
                 cancelling = goal.objective
-                cancel()
+                cancel?()
             }
             Button("Keep Working", role: .cancel) {}
         } message: {

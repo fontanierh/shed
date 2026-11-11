@@ -143,8 +143,14 @@ impl App {
         let session = match self.find(&row.id).await {
             Ok(s) => s,
             Err(_) => {
-                let mut summary =
-                    new_summary(&row.id, AgentKind::Prime, SessionKind::Root, &row.cwd);
+                let mut summary = new_summary(
+                    &self.agents,
+                    &row.id,
+                    AgentKind::Prime,
+                    SessionKind::Root,
+                    false,
+                    &row.cwd,
+                );
                 summary.created_at = row.created_at.unwrap_or_else(now_ms);
                 let state = SessionState::new(summary, None, BackendState::prime());
                 let session = Arc::new(Session::new(

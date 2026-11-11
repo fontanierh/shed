@@ -253,6 +253,23 @@ pub struct SessionSummary {
     pub spend: Option<Spend>,
     /// Web servers the session's processes are listening on. Always sent, empty or not.
     pub sites: Vec<Site>,
+    /// What this session's agent supports, so clients do not repeat per-agent switches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<Capabilities>,
+}
+
+/// What a session supports, derived from its agent and `Verbs`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Capabilities {
+    pub restart_kernel: bool,
+    pub clear_goal: bool,
+    pub new_session: bool,
+    pub auto_compaction_switch: bool,
+    pub follow_up: bool,
+    pub answer: bool,
+    pub background_commands: bool,
+    pub spend_includes_subagents: bool,
 }
 
 /// What a session and its subagents spend, by Open Codex's request history.
@@ -707,6 +724,7 @@ mod tests {
             question: None,
             spend: None,
             sites: vec![],
+            capabilities: None,
         }
     }
 
@@ -793,6 +811,16 @@ mod tests {
                 exposed: true,
                 reason: Some("Tailscale isn't running on this computer".into()),
             }],
+            capabilities: Some(Capabilities {
+                restart_kernel: true,
+                clear_goal: true,
+                new_session: true,
+                auto_compaction_switch: true,
+                follow_up: true,
+                answer: false,
+                background_commands: true,
+                spend_includes_subagents: true,
+            }),
             ..bare_summary()
         }
     }
