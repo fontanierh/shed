@@ -58,11 +58,14 @@ async fn main() -> Result<()> {
     }
     // What an agent is told about Shed, as its sessions here get it.
     if argv.get(1).map(String::as_str) == Some("guide") {
-        let agent = match argv.get(2).map(String::as_str) {
-            Some("pi") => rpc::AgentKind::Pi,
-            Some("prime") => rpc::AgentKind::Prime,
-            Some("deepseek" | "dsh") => rpc::AgentKind::Deepseek,
-            _ => bail!("usage: agent-remote guide pi|prime|deepseek"),
+        // By the name its sessions carry, so a new agent has its guide here without a line of its own.
+        let name = match argv.get(2).map(String::as_str) {
+            Some("dsh") => "deepseek",
+            Some(name) => name,
+            None => "",
+        };
+        let Ok(agent) = serde_json::from_value::<rpc::AgentKind>(name.into()) else {
+            bail!("usage: agent-remote guide <agent>, by the name its sessions carry: pi, prime, deepseek");
         };
         println!("{}", guide::text(agent));
         return Ok(());

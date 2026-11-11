@@ -1,10 +1,9 @@
-//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it and listing it
-//! in `Agents::installed`; `docs/architecture.md` says what else a new agent needs.
+//! What the bridge asks of an agent, and the agents it has. Adding one is implementing `Agent` for it and giving it
+//! its place in `Agents`; `docs/architecture.md` says what else a new agent needs.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -68,27 +67,37 @@ pub trait Live: Send + Sync {
     fn close(&self) -> BoxFuture<'_, ()>;
 }
 
-/// The agents by kind.
-pub struct Agents(HashMap<AgentKind, Arc<dyn Agent>>);
+/// The agents, one for each kind: a kind without one does not compile.
+pub struct Agents {
+    pi: Arc<dyn Agent>,
+    prime: Arc<dyn Agent>,
+    deepseek: Arc<dyn Agent>,
+}
 
 impl Agents {
     /// The agents Shed ships with.
     pub fn installed(prime: Arc<PrimeDaemon>) -> Agents {
-        Agents::of([
-            (AgentKind::Pi, Arc::new(Pi) as Arc<dyn Agent>),
-            (AgentKind::Deepseek, Arc::new(Deepseek)),
-            (AgentKind::Prime, Arc::new(Prime(prime))),
-        ])
+        Agents::of(|kind| match kind {
+            AgentKind::Pi => Arc::new(Pi),
+            AgentKind::Deepseek => Arc::new(Deepseek),
+            AgentKind::Prime => Arc::new(Prime(prime.clone())),
+        })
     }
 
-    pub fn of(agents: impl IntoIterator<Item = (AgentKind, Arc<dyn Agent>)>) -> Agents {
-        Agents(agents.into_iter().collect())
+    pub fn of(agent: impl Fn(AgentKind) -> Arc<dyn Agent>) -> Agents {
+        Agents {
+            pi: agent(AgentKind::Pi),
+            prime: agent(AgentKind::Prime),
+            deepseek: agent(AgentKind::Deepseek),
+        }
     }
 
-    pub fn get(&self, kind: AgentKind) -> Result<&Arc<dyn Agent>> {
-        self.0
-            .get(&kind)
-            .ok_or_else(|| anyhow!("this bridge has no {kind:?} agent"))
+    pub fn get(&self, kind: AgentKind) -> &Arc<dyn Agent> {
+        match kind {
+            AgentKind::Pi => &self.pi,
+            AgentKind::Prime => &self.prime,
+            AgentKind::Deepseek => &self.deepseek,
+        }
     }
 }
 

@@ -64,6 +64,9 @@ pub struct Session {
     pub backend: Backend,
     pub cwd: String,
     pub state: Mutex<SessionState>,
+    /// Held while a message with a send id is with the agent, so the same message sent again waits to learn whether
+    /// the first copy was taken.
+    pub sending: Mutex<()>,
 }
 
 impl Session {
@@ -75,6 +78,7 @@ impl Session {
             backend: state.own.backend(),
             cwd,
             state: Mutex::new(state),
+            sending: Mutex::new(()),
         }
     }
 }
@@ -583,11 +587,8 @@ impl App {
         }
     }
 
-    /// The agent of a kind. Every kind a session can have is in the list: sessions are only made of listed kinds.
     pub(crate) fn agent(&self, kind: AgentKind) -> &Arc<dyn crate::agent::Agent> {
-        self.agents
-            .get(kind)
-            .expect("a session's agent is one the bridge has")
+        self.agents.get(kind)
     }
 
     /// The models a session of this agent can start on.
@@ -604,7 +605,7 @@ impl App {
         let child = session.state.lock().await.child().cloned();
         let live = match child {
             Some(child) => Some(child),
-            None => self.agents.get(session.agent)?.session(&session.id),
+            None => self.agents.get(session.agent).session(&session.id),
         };
         let live = live.ok_or_else(|| anyhow!("session is not running"))?;
         live.send(kind, fields).await
@@ -623,12 +624,15 @@ impl App {
         // An agent that keeps its own sessions makes it, and it is taken in as its roster would announce it.
         let kept = self
             .agents
-            .get(agent)?
+            .get(agent)
             .create(cwd.clone(), model.clone(), thinking.clone());
         if let Some(made) = kept {
             let row = made.await?;
             let session = self.apply_prime_row(row).await;
-            self.refresh(&session).await?;
+            // It exists now, so that is the answer: an error here would have the user make a second one.
+            if let Err(e) = self.refresh(&session).await {
+                eprintln!("a new {agent:?} session's state can't be read yet: {e:#}");
+            }
             let summary = session.state.lock().await.summary.clone();
             return Ok(summary);
         }
@@ -711,10 +715,7 @@ impl App {
             resume,
             env,
         };
-        let spawned = match self.agents.get(session.agent) {
-            Ok(agent) => agent.start(&opts),
-            Err(e) => Err(e),
-        };
+        let spawned = self.agents.get(session.agent).start(&opts);
         let (child, rx) = {
             let mut st = session.state.lock().await;
             st.starting = false;
@@ -793,15 +794,17 @@ impl App {
 
     pub async fn delete_session(self: &Arc<Self>, session: &Arc<Session>) -> Result<()> {
         let key = limit_key(session, &*session.state.lock().await).to_string();
+        // What is kept for the session is forgotten once it is closed: a close that fails leaves it as it was.
+        if session.backend != Backend::PiSubagent {
+            self.close_session(session).await?;
+        }
         self.forget_limit(&key);
         self.compacting_for_limit
             .lock()
             .unwrap()
             .remove(&session.id);
-        match session.backend {
-            Backend::Prime => return self.close_session(session).await,
-            Backend::Pi => self.close_session(session).await?,
-            Backend::PiSubagent => {}
+        if session.backend == Backend::Prime {
+            return Ok(());
         }
         // Its subagents and theirs: dsh nests them.
         let mut subagents = Vec::new();

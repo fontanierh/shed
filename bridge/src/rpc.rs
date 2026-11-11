@@ -60,7 +60,7 @@ pub enum ChildOutput {
 }
 
 pub struct RpcChild {
-    /// Pi and Prime: commands go straight to stdin. DeepSeek: `dsh` owns stdin and answers them.
+    /// Pi: commands go straight to stdin. DeepSeek: `dsh` owns stdin and answers them.
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     dsh: Option<Arc<crate::dsh::Dsh>>,
     requests: Arc<Requests<String>>,
@@ -94,7 +94,7 @@ pub async fn list_models(agents: &crate::agent::Agents, agent: AgentKind) -> Res
             eprintln!("Open Codex catalog: {e}");
         }
     }
-    let mut models = agents.get(agent)?.models().await?;
+    let mut models = agents.get(agent).models().await?;
     if gateway.is_some() {
         if let Some(list) = models.as_array_mut() {
             list.retain(|m| m["provider"] == crate::opencodex::PROVIDER);

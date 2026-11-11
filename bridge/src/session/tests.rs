@@ -7,7 +7,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use strum::IntoEnumIterator;
 
 use super::*;
 use crate::agent::{Agent, Started};
@@ -26,6 +25,10 @@ pub struct Script {
     starts: std::sync::atomic::AtomicUsize,
     closes: std::sync::atomic::AtomicUsize,
     slow_start: std::sync::Mutex<Duration>,
+    /// The session an agent that keeps its own makes when asked, as its roster would list it.
+    made: std::sync::Mutex<Option<Value>>,
+    /// How long an answer takes, once it is decided.
+    slow_answer: std::sync::Mutex<Duration>,
 }
 
 /// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
@@ -67,7 +70,11 @@ impl Agent for Scripted {
         model: Option<String>,
         thinking: Option<String>,
     ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
-        self.real.create(cwd, model, thinking)
+        let made = self.script.made.lock().unwrap().clone();
+        match made.as_ref().and_then(PrimeRow::read) {
+            Some(row) => Some(Box::pin(async move { Ok(row) })),
+            None => self.real.create(cwd, model, thinking),
+        }
     }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
@@ -107,7 +114,12 @@ impl Live for ScriptedSession {
                 .lock()
                 .unwrap()
                 .push(json!({ "session": self.id, "command": kind, "fields": fields }));
-            if let Some(refusal) = self.script.refusals.lock().unwrap().get(&kind) {
+            let refusal = self.script.refusals.lock().unwrap().get(&kind).cloned();
+            let slow = *self.script.slow_answer.lock().unwrap();
+            if !slow.is_zero() {
+                tokio::time::sleep(slow).await;
+            }
+            if let Some(refusal) = refusal {
                 return Err(anyhow!("{refusal}"));
             }
             let scripted = self.script.answers.lock().unwrap().get(&kind).cloned();
@@ -151,13 +163,12 @@ impl Rig {
         let prime = PrimeDaemon::unconnected("test".into());
         let script = Arc::new(Script::default());
         let installed = Agents::installed(prime.clone());
-        let agents = Agents::of(AgentKind::iter().map(|kind| {
-            let agent = Scripted {
+        let agents = Agents::of(|kind| {
+            Arc::new(Scripted {
                 script: script.clone(),
-                real: installed.get(kind).unwrap().clone(),
-            };
-            (kind, Arc::new(agent) as Arc<dyn Agent>)
-        }));
+                real: installed.get(kind).clone(),
+            })
+        });
         let app = App::assemble(store, prime, limits, agents).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(app.clone().run_prime(rx));
@@ -1442,5 +1453,68 @@ async fn a_message_sent_again_under_its_id_goes_once() {
         .await
         .unwrap();
     assert_eq!(prompts(), 6);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A message sent again while its first copy is still with the agent waits for that copy: if the agent then refuses
+/// it, the second one goes, and the message is not lost.
+#[tokio::test(start_paused = true)]
+async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
+    let rig = &Rig::new("send-again-early", &[]);
+    rig.script("prompt", json!({}));
+    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Pi, true));
+    let session = Arc::new(Session::new(
+        "s1".into(),
+        AgentKind::Pi,
+        "/work/project".into(),
+        state,
+    ));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_secs(1);
+    rig.agents
+        .refusals
+        .lock()
+        .unwrap()
+        .insert("prompt".into(), "no model is set".into());
+    let send = || {
+        let (app, session) = (rig.app.clone(), session.clone());
+        tokio::spawn(async move {
+            app.send_text(&session, "Carry on".into(), Some("a".into()))
+                .await
+                .map_err(|e| e.to_string())
+        })
+    };
+    let first = send();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The agent would take it now, but the first copy is already on its way to a refusal.
+    rig.agents.refusals.lock().unwrap().clear();
+    let second = send();
+    assert_eq!(first.await.unwrap(), Err("no model is set".to_string()));
+    assert!(second.await.unwrap().is_ok());
+    let prompts = rig
+        .agents
+        .asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|asked| asked["command"] == "prompt")
+        .count();
+    assert_eq!(prompts, 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Once the agent has made the session, creating it has succeeded: failing to read its state then is not an error to
+/// answer with, since trying again would make a second one.
+#[tokio::test(start_paused = true)]
+async fn a_session_its_agent_made_is_answered_even_if_reading_it_fails() {
+    let rig = Rig::new("create-kept", &[]);
+    *rig.agents.made.lock().unwrap() = Some(prime_row("p1", json!({})));
+    let made = rig
+        .app
+        .create_session(AgentKind::Prime, "/tmp".into(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(made.id, "p1");
+    assert_eq!(rig.app.sessions.read().await.len(), 1);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
