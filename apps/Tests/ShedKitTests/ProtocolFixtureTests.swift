@@ -73,10 +73,23 @@ final class ProtocolFixtureTests: XCTestCase {
             "toolStatus": { ToolStatus(rawValue: $0) != nil },
             "sessionStatus": { SessionStatus(rawValue: $0) != nil },
             "sessionKind": { SessionKind(rawValue: $0) != nil },
+            "stuckKind": { StuckKind(rawValue: $0) != nil },
         ]
         XCTAssertEqual(Set(enums.keys), Set(known.keys))
         for (name, values) in enums {
             for value in values { XCTAssertTrue(known[name]?(value) ?? false, "\(name): \(value)") }
         }
+    }
+
+    /// A status or kind a newer bridge or agent names is kept, as unknown: the command or the notice still shows.
+    func testAJobStatusOrStuckKindTheAppDoesNotKnowIsKept() throws {
+        let job = #"{"id": "j1", "command": "make", "status": "paused", "persistent": false}"#
+        let decoded = try JSONDecoder().decode(BackgroundJob.self, from: Data(job.utf8))
+        XCTAssertEqual(decoded.status, .unknown)
+        XCTAssertFalse(decoded.isRunning)
+        let lost = try JSONDecoder().decode(BackgroundJob.self, from: Data(job.replacingOccurrences(of: "paused", with: "lost").utf8))
+        XCTAssertEqual(lost.status, .lost)
+        let stuck = #"{"kind": "network", "command": "curl", "reason": "waiting"}"#
+        XCTAssertEqual(try JSONDecoder().decode(Stuck.self, from: Data(stuck.utf8)).kind, .unknown)
     }
 }

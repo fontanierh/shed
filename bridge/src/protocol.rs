@@ -283,6 +283,30 @@ pub struct WaitingOn {
     pub pid: Option<u32>,
 }
 
+/// Where a background command is. Read once from the agent's word; one the bridge does not know is passed on as it
+/// came, so a status an agent adds still shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JobStatus {
+    Running,
+    Finished,
+    /// Pi stopped without recording the exit.
+    Lost,
+    #[serde(untagged)]
+    Other(String),
+}
+
+impl JobStatus {
+    pub fn read(word: &str) -> JobStatus {
+        match word {
+            "running" => JobStatus::Running,
+            "finished" => JobStatus::Finished,
+            "lost" => JobStatus::Lost,
+            other => JobStatus::Other(other.to_string()),
+        }
+    }
+}
+
 /// A background command, as the agent's own TUI lists it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -296,9 +320,7 @@ pub struct BackgroundJob {
     pub started_at: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
-    /// running, finished, or lost (Pi stopped without recording the exit). The agent's own word where it has one,
-    /// passed on as it came, which is why it is not an enum.
-    pub status: String,
+    pub status: JobStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i64>,
     /// Prime's persistent shells, which stay open between commands.
@@ -329,10 +351,9 @@ pub struct Site {
     pub reason: Option<String>,
 }
 
-/// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission
-/// prompt, or the verdict of a model asked about it (`stallCheck` in config.json).
 /// What a session is stuck on.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "snake_case")]
 pub enum StuckKind {
     /// The agent's current tool call.
@@ -341,6 +362,8 @@ pub enum StuckKind {
     Command,
 }
 
+/// A tool call or background command that has stood still long enough to look stuck, and why: macOS's permission
+/// prompt, or the verdict of a model asked about it (`stallCheck` in config.json).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stuck {
@@ -631,6 +654,14 @@ pub enum ServerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_job_status_is_its_word_and_an_unknown_word_passes_through() {
+        for word in ["running", "finished", "lost", "paused"] {
+            assert_eq!(json!(JobStatus::read(word)), json!(word));
+        }
+        assert_eq!(JobStatus::read("paused"), JobStatus::Other("paused".into()));
+    }
     use serde_json::json;
     use std::collections::BTreeSet;
     use strum::{IntoEnumIterator, VariantNames};
@@ -879,6 +910,7 @@ mod tests {
                 "toolStatus": values::<ToolStatus>(),
                 "sessionStatus": values::<SessionStatus>(),
                 "sessionKind": values::<SessionKind>(),
+                "stuckKind": values::<StuckKind>(),
             },
             "messages": messages,
         });

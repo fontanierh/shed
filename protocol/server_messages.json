@@ -27,6 +27,10 @@
       "stopped",
       "error"
     ],
+    "stuckKind": [
+      "tool",
+      "command"
+    ],
     "toolStatus": [
       "preparing",
       "pending",

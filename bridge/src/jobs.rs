@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 
 use crate::agent::JobsFrom;
 use crate::ask::Ask;
-use crate::protocol::{BackgroundJob, WaitingOn};
+use crate::protocol::{BackgroundJob, JobStatus, WaitingOn};
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
@@ -358,7 +358,7 @@ impl App {
                             pid: Some(pid),
                             started_at: None,
                             duration_ms: None,
-                            status: "running".into(),
+                            status: JobStatus::Running,
                             exit_code: None,
                             persistent: false,
                             stuck: None,
@@ -490,7 +490,7 @@ impl App {
                     .into_iter()
                     .find(|job| job.id == job_id)
                     .ok_or_else(|| anyhow!("This command is no longer available."))?;
-                if job.status != "running" {
+                if job.status != JobStatus::Running {
                     return Ok(false);
                 }
                 let pid = job.pid.ok_or_else(|| anyhow!("job has no pid"))?;
@@ -538,7 +538,11 @@ fn dsh_job(job: &Value) -> BackgroundJob {
             (Some(s), Some(f)) => Some(f.saturating_sub(s)),
             _ => None,
         },
-        status: if running { "running" } else { "finished" }.into(),
+        status: if running {
+            JobStatus::Running
+        } else {
+            JobStatus::Finished
+        },
         exit_code,
         persistent: false,
         stuck: None,
@@ -549,7 +553,10 @@ fn dsh_job(job: &Value) -> BackgroundJob {
 fn mark_permission_prompts(jobs: &mut [BackgroundJob], tree: Option<&ProcessTree>) {
     let Some(tree) = tree else { return };
     let home = crate::host::home_text();
-    for job in jobs.iter_mut().filter(|job| job.status == "running") {
+    for job in jobs
+        .iter_mut()
+        .filter(|job| job.status == JobStatus::Running)
+    {
         job.stuck = job
             .pid
             .and_then(|pid| tree.permission_prompt(pid, &home))
@@ -573,7 +580,7 @@ fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
         pid: a["pid"].as_u64().map(|p| p as u32),
         started_at: a["startedAt"].as_str().and_then(parse_iso_ms),
         duration_ms: a["durationMs"].as_u64(),
-        status: a["status"].as_str().unwrap_or("running").to_string(),
+        status: JobStatus::read(a["status"].as_str().unwrap_or("running")),
         exit_code: a["exitCode"].as_i64(),
         persistent: !prefix.is_empty() || a["persistent"].as_bool().unwrap_or(false),
         stuck: None,
@@ -597,12 +604,12 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
         })
         .filter_map(|(j, path)| {
             let pid = j["pid"].as_u64().map(|p| p as u32);
-            let mut status = j["status"].as_str().unwrap_or("finished").to_string();
+            let mut status = JobStatus::read(j["status"].as_str().unwrap_or("finished"));
             // Only Pi rewrites the record, so a job it left behind says "running" for good. Once seen gone, that is
             // noted beside it: the pid can be given to another process later, and that one isn't this job.
             let lost = path.with_extension("lost");
-            if status == "running" && (lost.exists() || !pid.is_some_and(alive)) {
-                status = "lost".into();
+            if status == JobStatus::Running && (lost.exists() || !pid.is_some_and(alive)) {
+                status = JobStatus::Lost;
                 if !lost.exists() {
                     if let Err(e) = std::fs::write(&lost, b"") {
                         eprintln!("can't note a lost job in {}: {e}", lost.display());
@@ -641,7 +648,7 @@ pub fn forget(session_id: &str) {
 pub fn pi_running(session_id: &str, tree: Option<&ProcessTree>) -> (u32, Option<WaitingOn>) {
     let running: Vec<BackgroundJob> = pi_jobs(session_id)
         .into_iter()
-        .filter(|job| job.status == "running")
+        .filter(|job| job.status == JobStatus::Running)
         .collect();
     let home = crate::host::home_text();
     let prompt = |job: &BackgroundJob| {
