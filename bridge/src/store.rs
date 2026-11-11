@@ -234,11 +234,40 @@ pub struct SessionRecord {
     pub session_file: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredSession {
+    id: String,
+    agent: String,
+    cwd: String,
+    title: String,
+    created_at: u64,
+    #[serde(default)]
+    session_file: Option<String>,
+}
+
+struct RawSession {
+    parsed: StoredSession,
+    raw: Value,
+}
+
+impl<'de> Deserialize<'de> for RawSession {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        let parsed = serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?;
+        Ok(RawSession { parsed, raw })
+    }
+}
+
 /// The bridge's folder. Copies share what its config last gave.
 #[derive(Clone)]
 pub struct Store {
     dir: PathBuf,
     kept: Arc<Mutex<Kept>>,
+    /// Records in `sessions.json` whose `agent` this version of the bridge does not know, kept as saved.
+    foreign_sessions: Arc<Mutex<Vec<Value>>>,
 }
 
 impl Store {
@@ -254,6 +283,7 @@ impl Store {
         Store {
             dir,
             kept: Default::default(),
+            foreign_sessions: Default::default(),
         }
     }
 
@@ -317,14 +347,53 @@ impl Store {
     }
 
     pub fn load_sessions(&self) -> Vec<SessionRecord> {
-        self.load("sessions.json")
+        let entries: Vec<RawSession> = self.load("sessions.json");
+        let mut known = Vec::new();
+        let mut foreign = Vec::new();
+        for entry in entries {
+            let s = entry.parsed;
+            match serde_json::from_value::<AgentKind>(Value::String(s.agent.clone())) {
+                Ok(agent) => known.push(SessionRecord {
+                    id: s.id,
+                    agent,
+                    cwd: s.cwd,
+                    title: s.title,
+                    created_at: s.created_at,
+                    session_file: s.session_file,
+                }),
+                Err(_) => {
+                    eprintln!(
+                        "sessions.json lists {} for unknown agent {:?}: kept as saved",
+                        s.id, s.agent
+                    );
+                    foreign.push(entry.raw);
+                }
+            }
+        }
+        *self.foreign_sessions.lock().unwrap() = foreign;
+        known
     }
 
     pub fn save_sessions(&self, records: &[SessionRecord]) -> Result<()> {
-        write_private(
-            &self.dir.join("sessions.json"),
-            &serde_json::to_vec_pretty(records)?,
-        )
+        let foreign = self.foreign_sessions.lock().unwrap().clone();
+        let bytes = if foreign.is_empty() {
+            serde_json::to_vec_pretty(records)?
+        } else {
+            let mut all: Vec<Value> = records
+                .iter()
+                .map(serde_json::to_value)
+                .collect::<std::result::Result<_, _>>()?;
+            for raw in foreign {
+                let overridden = raw["id"]
+                    .as_str()
+                    .is_some_and(|id| records.iter().any(|r| r.id == id));
+                if !overridden {
+                    all.push(raw);
+                }
+            }
+            serde_json::to_vec_pretty(&all)?
+        };
+        write_private(&self.dir.join("sessions.json"), &bytes)
     }
 
     /// The settings in config.json, read each time, so editing the file takes effect without a restart. A file
@@ -815,6 +884,47 @@ mod tests {
         assert!(store.load_limits().is_empty());
         assert!(store.load_published_sites().is_empty());
         assert_eq!(std::fs::read_dir(&store.dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_session_of_an_agent_this_bridge_does_not_know_is_kept_across_saves() {
+        let store = store("unknown-agent");
+        let initial = json!([
+            {
+                "id": "pi1",
+                "agent": "pi",
+                "cwd": "/work/project",
+                "title": "Known",
+                "createdAt": 1_700_000_000_000u64,
+                "sessionFile": "/work/sessions/pi1.jsonl"
+            },
+            {
+                "id": "fut1",
+                "agent": "future-agent",
+                "cwd": "/work/other",
+                "title": "From a newer bridge",
+                "createdAt": 1_700_000_002_000u64,
+                "sessionFile": "/work/sessions/fut1.jsonl"
+            }
+        ]);
+        std::fs::write(
+            store.dir.join("sessions.json"),
+            serde_json::to_vec_pretty(&initial).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.load_sessions();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id, "pi1");
+        assert!(!store.dir.join("sessions.json.bad").exists());
+
+        store.save_sessions(&loaded).unwrap();
+        let saved: Value = serde_json::from_str(
+            &std::fs::read_to_string(store.dir.join("sessions.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved, initial);
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 }
