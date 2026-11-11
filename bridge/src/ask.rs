@@ -1,6 +1,5 @@
-//! Everything the bridge asks a session's agent, as one type. A command becomes a name and fields only where it
-//! leaves for the agent (`wire`), so the session code cannot ask for something no agent knows, and a new command is
-//! a new case here.
+//! Everything the bridge asks a session's agent, as one type, with how long it may take. Each driver turns an
+//! `Ask` into its own protocol; `wire` is the JSONL RPC form shared by Pi and Prime's daemon.
 
 use std::time::Duration;
 
@@ -75,9 +74,9 @@ pub enum Ask {
 }
 
 impl Ask {
-    /// The command as it goes to the agent, in Pi's vocabulary and the additions of the other two.
-    pub fn wire(&self) -> (&'static str, Value) {
-        match self {
+    /// The command in Pi's RPC vocabulary and Prime's daemon extensions, or `None` for commands outside it.
+    pub fn wire(&self) -> Option<(&'static str, Value)> {
+        Some(match self {
             Ask::Prompt { message, delivery } => (
                 "prompt",
                 match delivery {
@@ -117,16 +116,6 @@ impl Ask {
                 },
             ),
             Ask::NewSession => ("new_session", json!({})),
-            Ask::Jobs => ("dsh_jobs", json!({})),
-            Ask::JobOutput(job) => ("dsh_job_output", json!({ "jobId": job })),
-            Ask::KillJob(job) => ("dsh_kill_job", json!({ "jobId": job })),
-            Ask::Answer {
-                question_id,
-                answers,
-            } => (
-                "dsh_answer",
-                json!({ "questionId": question_id, "answers": answers }),
-            ),
             Ask::KernelBash => ("list_kernel_bash", json!({})),
             Ask::PersistentShells => ("list_persistent_shells", json!({})),
             Ask::TailKernelBash { activity, lines } => (
@@ -147,7 +136,8 @@ impl Ask {
                 "attach",
                 json!({ "capabilities": ["attach_snapshot", "event_sequence"] }),
             ),
-        }
+            Ask::Jobs | Ask::JobOutput(_) | Ask::KillJob(_) | Ask::Answer { .. } => return None,
+        })
     }
 
     /// How long an agent that is there may take to answer. A compaction is answered once it is done; everything

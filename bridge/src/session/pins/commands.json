@@ -1,5 +1,43 @@
 {
   "deepseek": {
+    "abort": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "answer": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "answer",
+          "fields": {
+            "answers": [
+              {
+                "id": "mode",
+                "selected": [
+                  "Fast"
+                ]
+              }
+            ],
+            "questionId": "q1"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "auto compaction": {
+      "asked": [],
+      "changed": {},
+      "fails": "this agent compacts on its own",
+      "refreshed": false
+    },
     "clear the goal": {
       "asked": [],
       "changed": {},
@@ -41,34 +79,24 @@
       "changed": {},
       "refreshed": false
     },
-    "new session": {
-      "answers": {
-        "cancelled": false
-      },
+    "follow up": {
+      "answers": {},
       "asked": [
         {
-          "command": "new_session",
-          "fields": {}
-        },
-        {
-          "command": "get_messages",
-          "fields": {}
-        },
-        {
-          "command": "get_state",
-          "fields": {}
-        },
-        {
-          "command": "get_session_stats",
-          "fields": {}
+          "command": "follow_up",
+          "fields": {
+            "message": "After that"
+          }
         }
       ],
-      "changed": {
-        "items": 1,
-        "named": true,
-        "summary.title": "From the agent"
-      },
-      "refreshed": true
+      "changed": {},
+      "refreshed": false
+    },
+    "new session": {
+      "asked": [],
+      "changed": {},
+      "fails": "start a new session from the app instead",
+      "refreshed": false
     },
     "rename": {
       "answers": null,
@@ -197,6 +225,47 @@
     }
   },
   "pi": {
+    "abort": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "answer": {
+      "asked": [],
+      "changed": {},
+      "fails": "this agent does not ask questions",
+      "refreshed": false
+    },
+    "auto compaction": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "set_auto_compaction",
+          "fields": {
+            "enabled": false
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
     "clear the goal": {
       "asked": [],
       "changed": {},
@@ -232,6 +301,19 @@
           "command": "compact",
           "fields": {
             "customInstructions": "keep the plan"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "follow up": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "follow_up",
+          "fields": {
+            "message": "After that"
           }
         }
       ],
@@ -394,6 +476,24 @@
     }
   },
   "pi, stopped": {
+    "abort": {
+      "asked": [],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "answer": {
+      "asked": [],
+      "changed": {},
+      "fails": "this agent does not ask questions",
+      "refreshed": false
+    },
+    "auto compaction": {
+      "asked": [],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
     "clear the goal": {
       "asked": [],
       "changed": {},
@@ -413,6 +513,12 @@
       "refreshed": false
     },
     "compact with instructions": {
+      "asked": [],
+      "changed": {},
+      "fails": "session is not running",
+      "refreshed": false
+    },
+    "follow up": {
       "asked": [],
       "changed": {},
       "fails": "session is not running",
@@ -471,6 +577,47 @@
     }
   },
   "prime": {
+    "abort": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "abort",
+          "fields": {}
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "answer": {
+      "asked": [],
+      "changed": {},
+      "fails": "this agent does not ask questions",
+      "refreshed": false
+    },
+    "auto compaction": {
+      "answers": null,
+      "asked": [
+        {
+          "command": "set_auto_compaction",
+          "fields": {
+            "enabled": false
+          }
+        },
+        {
+          "command": "get_state",
+          "fields": {}
+        },
+        {
+          "command": "get_session_stats",
+          "fields": {}
+        }
+      ],
+      "changed": {
+        "named": true,
+        "summary.title": "From the agent"
+      },
+      "refreshed": true
+    },
     "clear the goal": {
       "answers": {},
       "asked": [
@@ -521,6 +668,19 @@
           "fields": {
             "message": "/compact keep the plan",
             "streamingBehavior": "followUp"
+          }
+        }
+      ],
+      "changed": {},
+      "refreshed": false
+    },
+    "follow up": {
+      "answers": {},
+      "asked": [
+        {
+          "command": "follow_up",
+          "fields": {
+            "message": "After that"
           }
         }
       ],
@@ -683,6 +843,24 @@
     }
   },
   "subagent": {
+    "abort": {
+      "asked": [],
+      "changed": {},
+      "fails": "Subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "answer": {
+      "asked": [],
+      "changed": {},
+      "fails": "this agent does not ask questions",
+      "refreshed": false
+    },
+    "auto compaction": {
+      "asked": [],
+      "changed": {},
+      "fails": "Subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
     "clear the goal": {
       "asked": [],
       "changed": {},
@@ -702,6 +880,12 @@
       "refreshed": false
     },
     "compact with instructions": {
+      "asked": [],
+      "changed": {},
+      "fails": "Subagents are read-only; steer the parent session instead",
+      "refreshed": false
+    },
+    "follow up": {
       "asked": [],
       "changed": {},
       "fails": "Subagents are read-only; steer the parent session instead",

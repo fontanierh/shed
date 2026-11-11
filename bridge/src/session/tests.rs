@@ -148,7 +148,22 @@ impl Live for ScriptedSession {
     fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
             // Recorded and answered as it goes to the agent.
-            let (kind, fields) = ask.wire();
+            let (kind, fields) = match ask.wire() {
+                Some(pair) => pair,
+                None => match &ask {
+                    Ask::Jobs => ("jobs", json!({})),
+                    Ask::JobOutput(job) => ("job_output", json!({ "jobId": job })),
+                    Ask::KillJob(job) => ("kill_job", json!({ "jobId": job })),
+                    Ask::Answer {
+                        question_id,
+                        answers,
+                    } => (
+                        "answer",
+                        json!({ "questionId": question_id, "answers": answers }),
+                    ),
+                    _ => unreachable!("handled by wire"),
+                },
+            };
             let kind = kind.to_string();
             self.script
                 .asked
@@ -1266,8 +1281,8 @@ async fn malformed_events() {
 async fn commands() {
     let rig = &Rig::new("commands", &[]);
     let answers = json!({
-        "prompt": {}, "steer": {}, "compact": {}, "abort": {}, "abort_and_send_queued": {},
-        "set_session_name": {}, "new_session": { "cancelled": false },
+        "prompt": {}, "steer": {}, "follow_up": {}, "compact": {}, "abort": {}, "abort_and_send_queued": {},
+        "set_session_name": {}, "set_auto_compaction": {}, "answer": {}, "new_session": { "cancelled": false },
         "get_state": { "model": { "provider": "example", "id": "model-1", "name": "Model One" },
             "thinkingLevel": "high", "sessionName": "From the agent", "sessionFile": "/work/sessions/s1.jsonl" },
         "get_session_stats": { "cost": 0.5, "contextUsage": { "tokens": 1000, "contextWindow": 200000, "percent": 0.5 } },
@@ -1300,12 +1315,16 @@ async fn commands() {
         "send",
         "send while it works",
         "send, and the agent is already streaming",
+        "follow up",
+        "abort",
         "compact",
         "compact with instructions",
         "compact with blank instructions",
+        "auto compaction",
         "clear the goal",
         "restart the kernel",
         "stop the tool",
+        "answer",
         "new session",
     ];
     let mut seen = serde_json::Map::new();
@@ -1353,7 +1372,21 @@ async fn commands() {
                 "compact with blank instructions" => app.compact(session, Some("  ".into())).await,
                 "clear the goal" => app.clear_goal(session).await,
                 "restart the kernel" => app.restart_kernel(session).await,
+                "follow up" => app.follow_up(session, "After that".into()).await,
+                "abort" => app.abort(session).await,
+                "auto compaction" => app
+                    .set_auto_compaction(session, false)
+                    .await
+                    .map(|()| Value::Null),
                 "stop the tool" => app.stop_tool(session).await,
+                "answer" => app
+                    .answer_question(
+                        session,
+                        "q1".into(),
+                        vec![json!({ "id": "mode", "selected": ["Fast"] })],
+                    )
+                    .await
+                    .map(|()| Value::Null),
                 "new session" => app.new_session(session).await,
                 _ => app.send_text(session, "Carry on".into(), None).await,
             };
@@ -2124,5 +2157,51 @@ async fn a_client_closes_then_deletes_a_session() {
         (reply["ok"].as_bool(), reply["error"].as_str()),
         (Some(false), Some("unknown session pi1"))
     );
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// What an agent has no command for is refused before reaching the agent.
+#[tokio::test]
+async fn commands_an_agent_lacks_are_refused_without_asking_it() {
+    let rig = Rig::new("serve-unsupported", &[]);
+    for (id, agent, backend) in [
+        ("pi1", AgentKind::Pi, Backend::Started),
+        ("dsh1", AgentKind::Deepseek, Backend::Started),
+        ("p1", AgentKind::Prime, Backend::Prime),
+    ] {
+        let summary = new_summary(id, agent, SessionKind::Root, "/work/project");
+        let state = SessionState::new(summary, None, own(&rig, id, backend, true));
+        let session = Arc::new(Session::new(
+            id.into(),
+            agent,
+            "/work/project".into(),
+            state,
+        ));
+        rig.app.sessions.write().await.push(session);
+    }
+    let mut client = Client::connect(&rig).await;
+    for (req, msg) in [
+        (
+            "q-pi",
+            json!({ "id": "q-pi", "op": "answer_question", "sessionId": "pi1", "questionId": "q1", "answers": [] }),
+        ),
+        (
+            "q-prime",
+            json!({ "id": "q-prime", "op": "answer_question", "sessionId": "p1", "questionId": "q1", "answers": [] }),
+        ),
+        (
+            "ac-dsh",
+            json!({ "id": "ac-dsh", "op": "set_auto_compaction", "sessionId": "dsh1", "enabled": false }),
+        ),
+        (
+            "ns-dsh",
+            json!({ "id": "ns-dsh", "op": "new_session", "sessionId": "dsh1" }),
+        ),
+    ] {
+        client.say(msg).await;
+        let sent = client.until_reply(req).await;
+        assert_eq!(sent.last().unwrap()["ok"], false, "{req}: {sent:?}");
+    }
+    assert!(rig.agents.asked.lock().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

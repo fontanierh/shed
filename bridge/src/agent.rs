@@ -23,8 +23,8 @@ pub trait Agent: Send + Sync {
     /// The models a session can start on, as `[{provider, id, name}]`.
     fn models(&self) -> BoxFuture<'_, Result<Value>>;
 
-    /// Whether it lists, shows and stops its background commands itself (`dsh_jobs`, `dsh_job_output`,
-    /// `dsh_kill_job`) and reports them as events. Otherwise the bridge reads them where the agent leaves them.
+    /// Whether it lists, shows and stops its background commands itself (`Ask::Jobs`, `Ask::JobOutput`,
+    /// `Ask::KillJob`) and reports them as events. Otherwise the bridge reads them where the agent leaves them.
     fn jobs(&self) -> JobsFrom;
 
     /// The session id it sends Open Codex with its requests, from the name of the session's file without its
@@ -38,14 +38,26 @@ pub trait Agent: Send + Sync {
     fn verbs(&self) -> &'static dyn Verbs;
 }
 
-/// What a session's commands become in one agent's words. None has a default: an agent says each, or names an
-/// agent it speaks as (Pi's RPC, which DeepSeek Harness speaks through Shed's plugin too).
+/// What a session's commands become in one agent's words. None has a default: an agent says each, with `None` when
+/// it has no such command.
 pub trait Verbs: Send + Sync {
     /// A message from the person, `busy` when the session is working.
     fn message(&self, text: String, busy: bool) -> Ask;
 
+    /// A message queued to run after the current turn.
+    fn follow_up(&self, text: String) -> Option<Ask>;
+
+    /// Stopping the current turn.
+    fn abort(&self) -> Ask;
+
     /// Compacting the conversation, with what to keep if the person said.
     fn compact(&self, instructions: Option<String>) -> Ask;
+
+    /// Turning automatic compaction on or off, for an agent that exposes a switch.
+    fn auto_compaction(&self, enabled: bool) -> Option<Ask>;
+
+    /// Starting a fresh conversation inside the same session, for an agent that supports it.
+    fn new_session(&self) -> Option<Ask>;
 
     /// Clearing the session's goal, for an agent whose sessions have one.
     fn clear_goal(&self) -> Option<Ask>;
@@ -62,12 +74,15 @@ pub trait Verbs: Send + Sync {
         session_file: Option<String>,
     ) -> Option<BoxFuture<'static, Result<Value>>>;
 
+    /// Answering a question the agent asked the user, for an agent that asks questions.
+    fn answer(&self, question_id: String, answers: Vec<Value>) -> Option<Ask>;
+
     /// Asking which thinking levels the session's model takes, for an agent that answers it. Otherwise they are read
     /// from the model list, where a level the model lacks is null.
     fn thinking_levels(&self) -> Option<Ask>;
 }
 
-/// Pi's RPC protocol, which DeepSeek Harness also speaks through Shed's plugin.
+/// Pi's RPC commands.
 pub struct PiRpc;
 
 impl Verbs for PiRpc {
@@ -83,8 +98,24 @@ impl Verbs for PiRpc {
         }
     }
 
+    fn follow_up(&self, text: String) -> Option<Ask> {
+        Some(Ask::FollowUp(text))
+    }
+
+    fn abort(&self) -> Ask {
+        Ask::Abort
+    }
+
     fn compact(&self, instructions: Option<String>) -> Ask {
         Ask::Compact { instructions }
+    }
+
+    fn auto_compaction(&self, enabled: bool) -> Option<Ask> {
+        Some(Ask::SetAutoCompaction(enabled))
+    }
+
+    fn new_session(&self) -> Option<Ask> {
+        Some(Ask::NewSession)
     }
 
     fn clear_goal(&self) -> Option<Ask> {
@@ -109,6 +140,78 @@ impl Verbs for PiRpc {
         None
     }
 
+    fn answer(&self, _: String, _: Vec<Value>) -> Option<Ask> {
+        None
+    }
+
+    fn thinking_levels(&self) -> Option<Ask> {
+        Some(Ask::ThinkingLevels)
+    }
+}
+
+/// DeepSeek Harness's commands: it compacts on its own, opens one conversation per session, and asks questions.
+pub struct DshVerbs;
+
+impl Verbs for DshVerbs {
+    fn message(&self, text: String, busy: bool) -> Ask {
+        match busy {
+            true => Ask::Steer(text),
+            false => Ask::Prompt {
+                message: text,
+                delivery: Delivery::Turn,
+            },
+        }
+    }
+
+    fn follow_up(&self, text: String) -> Option<Ask> {
+        Some(Ask::FollowUp(text))
+    }
+
+    fn abort(&self) -> Ask {
+        Ask::Abort
+    }
+
+    fn compact(&self, instructions: Option<String>) -> Ask {
+        Ask::Compact { instructions }
+    }
+
+    fn auto_compaction(&self, _: bool) -> Option<Ask> {
+        None
+    }
+
+    fn new_session(&self) -> Option<Ask> {
+        None
+    }
+
+    fn clear_goal(&self) -> Option<Ask> {
+        None
+    }
+
+    fn stop_tool(&self) -> Ask {
+        Ask::Abort
+    }
+
+    fn interrupt(&self, note: String) -> [Ask; 2] {
+        [
+            Ask::Abort,
+            Ask::Prompt {
+                message: note,
+                delivery: Delivery::Turn,
+            },
+        ]
+    }
+
+    fn restart_kernel(&self, _: Option<String>) -> Option<BoxFuture<'static, Result<Value>>> {
+        None
+    }
+
+    fn answer(&self, question_id: String, answers: Vec<Value>) -> Option<Ask> {
+        Some(Ask::Answer {
+            question_id,
+            answers,
+        })
+    }
+
     fn thinking_levels(&self) -> Option<Ask> {
         Some(Ask::ThinkingLevels)
     }
@@ -126,6 +229,14 @@ impl Verbs for PrimeVerbs {
         }
     }
 
+    fn follow_up(&self, text: String) -> Option<Ask> {
+        Some(Ask::FollowUp(text))
+    }
+
+    fn abort(&self) -> Ask {
+        Ask::Abort
+    }
+
     /// Prime's `compact` command aborts the session first, which drops the background-command and subagent notices
     /// waiting to wake it and holds the rest until the next prompt: an idle session waiting on its jobs never wakes.
     /// Its `/compact` slash command compacts without aborting, after the current turn if one is running.
@@ -138,6 +249,14 @@ impl Verbs for PrimeVerbs {
             message,
             delivery: Delivery::FollowUp,
         }
+    }
+
+    fn auto_compaction(&self, enabled: bool) -> Option<Ask> {
+        Some(Ask::SetAutoCompaction(enabled))
+    }
+
+    fn new_session(&self) -> Option<Ask> {
+        Some(Ask::NewSession)
     }
 
     /// `/goal clear`, steered in so a running turn picks it up at its next step instead of after the turn.
@@ -171,6 +290,10 @@ impl Verbs for PrimeVerbs {
         session_file: Option<String>,
     ) -> Option<BoxFuture<'static, Result<Value>>> {
         Some(Box::pin(crate::prime::restart_kernel(session_file)))
+    }
+
+    fn answer(&self, _: String, _: Vec<Value>) -> Option<Ask> {
+        None
     }
 
     /// Prime has no levels command.
@@ -413,7 +536,7 @@ impl Agent for Deepseek {
     }
 
     fn verbs(&self) -> &'static dyn Verbs {
-        &PiRpc
+        &DshVerbs
     }
 }
 
@@ -493,8 +616,11 @@ struct PrimeSession {
 impl Live for PrimeSession {
     fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async move {
-            let (kind, fields) = ask.wire();
-            self.daemon.session(&self.id, kind, fields).await
+            let limit = ask.limit();
+            let Some((kind, fields)) = ask.wire() else {
+                anyhow::bail!("Prime has no {ask:?} command");
+            };
+            self.daemon.session(&self.id, kind, fields, limit).await
         })
     }
 
@@ -505,10 +631,7 @@ impl Live for PrimeSession {
 
 impl Live for RpcChild {
     fn send(&self, ask: Ask) -> BoxFuture<'_, Result<Value>> {
-        Box::pin(async move {
-            let (kind, fields) = ask.wire();
-            RpcChild::send(self, kind, fields, ask.limit()).await
-        })
+        Box::pin(RpcChild::send(self, ask))
     }
 
     fn pid(&self) -> Option<u32> {

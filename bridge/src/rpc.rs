@@ -272,16 +272,14 @@ impl RpcChild {
         Ok((rpc, rx))
     }
 
-    /// `limit` is how long an agent that is there may take; dsh sets its own.
-    pub async fn send(
-        &self,
-        kind: &str,
-        fields: Value,
-        limit: std::time::Duration,
-    ) -> Result<Value> {
+    pub async fn send(&self, ask: crate::ask::Ask) -> Result<Value> {
         if let Some(dsh) = &self.dsh {
-            return dsh.send(kind, fields).await;
+            return dsh.send(ask).await;
         }
+        let limit = ask.limit();
+        let Some((kind, fields)) = ask.wire() else {
+            bail!("this agent has no {ask:?} command");
+        };
         let id = format!("b{}", self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let mut command = json!({ "id": id, "type": kind });
         if let (Some(obj), Value::Object(extra)) = (command.as_object_mut(), fields) {
