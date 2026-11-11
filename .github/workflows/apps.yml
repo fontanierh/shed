@@ -34,6 +34,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: xcodebuild -version
+      # The Xcode project and its plists are made from project.yml and committed: they must be what it makes. XcodeGen
+      # is pinned, since another version may write the same project differently.
+      - name: The Xcode project is what project.yml makes
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          (cd apps/iOS && "$RUNNER_TEMP/xcodegen/bin/xcodegen" generate --quiet)
+          git diff --exit-code -- apps/iOS
       - run: >
           xcodebuild -project apps/iOS/Shed.xcodeproj -scheme Shed
           -destination 'generic/platform=iOS Simulator'
