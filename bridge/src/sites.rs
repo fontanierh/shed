@@ -48,28 +48,6 @@ impl Published {
 /// Tailnet ports for sites whose own port is taken there. The agents are told to serve on these too.
 const SPARE_PORTS: std::ops::RangeInclusive<u16> = 8100..=8199;
 
-/// `sites` in config.json: `{ "publish": false }` keeps sites off the tailnet. Read each time, so editing the file
-/// takes effect without a restart.
-#[derive(Debug, Clone, Copy)]
-pub struct Config {
-    pub publish: bool,
-}
-
-impl Config {
-    pub fn read(dir: &std::path::Path) -> Config {
-        let raw = std::fs::read_to_string(dir.join("config.json")).unwrap_or_default();
-        Config::parse(&raw)
-    }
-
-    /// Published unless the file says not to: a site nobody can open from the phone is no use.
-    fn parse(raw: &str) -> Config {
-        let config = serde_json::from_str::<Value>(raw).unwrap_or(Value::Null);
-        Config {
-            publish: config["sites"]["publish"].as_bool().unwrap_or(true),
-        }
-    }
-}
-
 /// A command's output, or None when it can't run or takes too long. One watcher looks after every session's sites:
 /// a `tailscale` or `lsof` that waits must not stop it.
 async fn output(command: &mut tokio::process::Command) -> Option<std::process::Output> {
@@ -453,11 +431,13 @@ impl crate::session::App {
             let Some(listeners) = listeners().await else {
                 continue;
             };
-            let tree = ProcessTree::snapshot().await;
-            let found = self
-                .found_sites(&listeners, tree.as_ref(), &mut detached)
-                .await;
-            let config = Config::read(self.store.dir());
+            // Without the process list nobody can say whose a port is. That is not "no sites": a tick that read it
+            // so would take every route down.
+            let Some(tree) = ProcessTree::snapshot().await else {
+                continue;
+            };
+            let found = self.found_sites(&listeners, &tree, &mut detached).await;
+            let config = self.store.config().sites;
             // Every address a site's process listens on at its port, not just the first.
             let reaches: HashMap<u16, Reach> = found
                 .iter()
@@ -548,11 +528,7 @@ impl crate::session::App {
                 .map(|s| s.listener.port)
                 .filter(|port| matches!(reaches[port], Reach::Local(_)))
                 .collect();
-            let gone: Vec<(u16, u16)> = published
-                .iter()
-                .filter(|(port, _)| !config.publish || !live.contains(port))
-                .map(|(port, site)| (*port, site.tailnet_port()))
-                .collect();
+            let gone = gone(&published, &live, config.publish);
             // A route that wouldn't come down stays recorded, so the next tick tries again.
             for (port, to) in gone {
                 if unpublish(to).await {
@@ -629,12 +605,9 @@ impl crate::session::App {
     async fn found_sites(
         &self,
         listeners: &HashMap<u32, Vec<Listener>>,
-        tree: Option<&ProcessTree>,
+        tree: &ProcessTree,
         detached: &mut Detached,
     ) -> Vec<Found> {
-        let Some(tree) = tree else {
-            return Vec::new();
-        };
         let mut roots: Vec<(String, u32)> = Vec::new();
         let mut candidates: Vec<Candidate> = Vec::new();
         for session in self.sessions.read().await.clone() {
@@ -727,6 +700,16 @@ impl crate::session::App {
         });
         found
     }
+}
+
+/// The routes to take down, as (site port, tailnet port): every one when publishing is off, else those whose site is
+/// not among the `live` ones.
+fn gone(published: &BTreeMap<u16, Published>, live: &[u16], publish: bool) -> Vec<(u16, u16)> {
+    published
+        .iter()
+        .filter(|(port, _)| !publish || !live.contains(port))
+        .map(|(port, site)| (*port, site.tailnet_port()))
+        .collect()
 }
 
 /// The sites each session's processes listen on. A port is listed once, under the first session whose process tree
@@ -897,11 +880,21 @@ mod tests {
     }
 
     #[test]
-    fn sites_are_published_unless_the_config_says_not_to() {
-        assert!(Config::parse("").publish);
-        assert!(Config::parse(r#"{"token":"x"}"#).publish);
-        assert!(Config::parse(r#"{"sites":{"publish":true}}"#).publish);
-        assert!(!Config::parse(r#"{"sites":{"publish":false}}"#).publish);
+    fn a_route_comes_down_when_its_site_is_gone_or_publishing_is_off() {
+        let site = |port, served| Published {
+            port,
+            session_id: "a".into(),
+            served,
+        };
+        let published: BTreeMap<u16, Published> =
+            [(3000, site(3000, None)), (5173, site(5173, Some(8100)))].into();
+        assert_eq!(gone(&published, &[3000, 5173], true), []);
+        assert_eq!(gone(&published, &[3000], true), [(5173, 8100)]);
+        assert_eq!(gone(&published, &[], true), [(3000, 3000), (5173, 8100)]);
+        assert_eq!(
+            gone(&published, &[3000, 5173], false),
+            [(3000, 3000), (5173, 8100)]
+        );
     }
 
     #[test]

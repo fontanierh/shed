@@ -13,6 +13,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
+use crate::store::{Addresses, Routing};
+
 pub const PROVIDER: &str = "opencodex";
 /// Open Codex trusts its loopback listener, so the agents' key is a placeholder; dsh reads it from this variable.
 pub const KEY: &str = "unused";
@@ -47,61 +49,8 @@ fn list(value: &Value) -> &[Value] {
     value.as_array().map(Vec::as_slice).unwrap_or_default()
 }
 
-/// ~/.agent-remote/config.json, as far as Open Codex goes.
-struct Config {
-    opencodex: Routing,
-}
-
-impl Config {
-    fn read(config: &Value) -> Config {
-        Config {
-            opencodex: Routing::read(&config["opencodex"]),
-        }
-    }
-}
-
-/// The config's `opencodex` entry: `false`, nothing, or where Open Codex listens.
-enum Routing {
-    Off,
-    Unset,
-    On(Addresses),
-}
-
-impl Routing {
-    /// Anything but `false` and null turns routing on, an object or not.
-    fn read(entry: &Value) -> Routing {
-        match entry {
-            Value::Bool(false) => Routing::Off,
-            Value::Null => Routing::Unset,
-            on => Routing::On(Addresses::read(on)),
-        }
-    }
-}
-
-/// The `opencodex` entry when it is an object.
-#[derive(Default)]
-struct Addresses {
-    url: Option<String>,
-    management_url: Option<String>,
-    admin_token_file: Option<String>,
-}
-
-impl Addresses {
-    fn read(entry: &Value) -> Addresses {
-        Addresses {
-            url: text(&entry["url"]),
-            management_url: text(&entry["managementUrl"]),
-            admin_token_file: text(&entry["adminTokenFile"]),
-        }
-    }
-}
-
 fn gateway_in(home: &Path) -> Option<Gateway> {
-    let config: Value = std::fs::read_to_string(home.join(".agent-remote/config.json"))
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default();
-    let ours = match Config::read(&config).opencodex {
+    let ours = match crate::store::config_in(&home.join(".agent-remote")).opencodex {
         Routing::Off => return None,
         Routing::Unset if !home.join(".opencodex").is_dir() => return None,
         Routing::Unset => Addresses::default(),
@@ -712,6 +661,8 @@ mod tests {
     fn home_with(config: Option<&str>, installed: bool) -> PathBuf {
         let home = scratch("gateway");
         std::fs::create_dir_all(home.join(".agent-remote")).unwrap();
+        // A new home each time, under the same name: nothing is kept from the one before.
+        crate::store::forget(&home.join(".agent-remote"));
         if let Some(config) = config {
             std::fs::write(home.join(".agent-remote/config.json"), config).unwrap();
         }
@@ -735,7 +686,7 @@ mod tests {
             assert!(gateway_in(&home).is_none());
         }
 
-        // Unset, or a config that can't be read: on only where Open Codex is installed.
+        // Unset, or a config that can't be read and never could: on only where Open Codex is installed.
         for config in [
             None,
             Some("{}"),
@@ -776,6 +727,19 @@ mod tests {
         assert_eq!(gateway.url, "http://gateway.test:1");
         assert_eq!(gateway.management, "http://gateway.test:2");
         assert_eq!(gateway.token_file, PathBuf::from("/keys/admin"));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn routing_turned_off_stays_off_when_the_config_breaks() {
+        let home = scratch("gateway-broken");
+        std::fs::create_dir_all(home.join(".agent-remote")).unwrap();
+        std::fs::create_dir_all(home.join(".opencodex")).unwrap();
+        let config = home.join(".agent-remote/config.json");
+        std::fs::write(&config, r#"{ "opencodex": false }"#).unwrap();
+        assert!(gateway_in(&home).is_none());
+        std::fs::write(&config, r#"{ "opencodex": false, }"#).unwrap();
+        assert!(gateway_in(&home).is_none());
         let _ = std::fs::remove_dir_all(&home);
     }
 

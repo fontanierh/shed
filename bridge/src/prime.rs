@@ -2,7 +2,6 @@
 //! every Prime session, including subagents and sessions started from Prime's own TUI.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -57,23 +56,21 @@ pub struct PrimeDaemon {
     shown: Mutex<HashSet<String>>,
 }
 
-/// Where the bridge keeps the sessions it has listed, across restarts.
-fn shown_path() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".agent-remote/prime-sessions.json")
-}
-
+/// The sessions the bridge has listed, kept across restarts.
 fn load_shown() -> Option<HashSet<String>> {
-    serde_json::from_str(&std::fs::read_to_string(shown_path()).ok()?).ok()
+    match crate::store::Store::open() {
+        Ok(store) => Some(store.load_prime_sessions()),
+        Err(e) => {
+            eprintln!("failed to load the Prime session list: {e}");
+            None
+        }
+    }
 }
 
 fn save_shown(shown: &HashSet<String>) {
-    let mut ids: Vec<&String> = shown.iter().collect();
-    ids.sort();
-    if let Ok(json) = serde_json::to_vec_pretty(&ids) {
-        if let Err(e) = std::fs::write(shown_path(), json) {
-            eprintln!("failed to save the Prime session list: {e}");
-        }
+    let saved = crate::store::Store::open().and_then(|store| store.save_prime_sessions(shown));
+    if let Err(e) = saved {
+        eprintln!("failed to save the Prime session list: {e}");
     }
 }
 

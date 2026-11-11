@@ -18,6 +18,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::store::{Config, Web};
+
 /// Text longer than this goes to a file, and only its first `PREVIEW` characters are printed.
 pub const LONG: usize = 20_000;
 const PREVIEW: usize = 8_000;
@@ -92,7 +94,9 @@ async fn run(args: Vec<String>) -> Result<String> {
         return Ok(format!("{USAGE}\n"));
     }
     let request = Request::parse(&command, args.collect())?;
-    let provider = Provider::from_config()?;
+    // This runs inside an agent's tool call, where stderr is the agent's reading, and it has no earlier read to
+    // keep: a config that can't be read gives the defaults, quietly. The bridge reads the same file and logs it.
+    let provider = Provider::from_config(Config::load(&state_dir()).unwrap_or_default())?;
     let started = std::time::Instant::now();
     let result = match &request.what {
         What::Search(query) => provider.search(query, &request).await,
@@ -108,7 +112,7 @@ async fn run(args: Vec<String>) -> Result<String> {
 
 /// Whether a provider is set up here: the guide tells the agents about the web only then.
 pub fn configured() -> bool {
-    Provider::from_config().is_ok()
+    Provider::from_config(crate::store::config_in(&state_dir())).is_ok()
 }
 
 /// Link `shed-web` to the running binary in its folder, and write the Python module, for agents started from here.
@@ -147,9 +151,13 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default())
 }
 
+fn state_dir() -> PathBuf {
+    home().join(".agent-remote")
+}
+
 /// Where the `shed_web` Python module is, for Prime's PYTHONPATH.
 pub fn python_dir() -> PathBuf {
-    home().join(".agent-remote/python")
+    state_dir().join("python")
 }
 
 /// The folder `shed-web` is in, for the agents' PATH.
@@ -408,54 +416,16 @@ fn list(value: &Value) -> &[Value] {
     value.as_array().map(Vec::as_slice).unwrap_or_default()
 }
 
-/// ~/.agent-remote/config.json, as far as the web goes.
-struct Config {
-    web: Settings,
-}
-
-impl Config {
-    fn read(config: &Value) -> Config {
-        Config {
-            web: Settings::read(&config["web"]),
-        }
-    }
-}
-
-/// The config's `web` entry.
-struct Settings {
-    provider: Option<String>,
-    firecrawl_api_key: Option<String>,
-    firecrawl_url: Option<String>,
-}
-
-impl Settings {
-    fn read(web: &Value) -> Settings {
-        Settings {
-            provider: text(&web["provider"]),
-            firecrawl_api_key: text(&web["firecrawlApiKey"]),
-            firecrawl_url: text(&web["firecrawlUrl"]),
-        }
-    }
-}
-
 enum Provider {
     Firecrawl { key: String, base: String },
 }
 
 impl Provider {
-    fn from_config() -> Result<Provider> {
-        let config: Value = std::fs::read_to_string(home().join(".agent-remote/config.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str(&raw).ok())
-            .unwrap_or_default();
-        Self::in_config(&config, std::env::var("FIRECRAWL_API_KEY").ok())
+    fn from_config(config: Config) -> Result<Provider> {
+        Self::from(config.web, std::env::var("FIRECRAWL_API_KEY").ok())
     }
 
-    fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
-        Self::from(Config::read(config).web, env_key)
-    }
-
-    fn from(web: Settings, env_key: Option<String>) -> Result<Provider> {
+    fn from(web: Web, env_key: Option<String>) -> Result<Provider> {
         match web.provider.as_deref().unwrap_or("firecrawl") {
             "firecrawl" => {
                 let key = web
@@ -1146,17 +1116,15 @@ mod tests {
     fn the_key_comes_from_the_config_or_the_environment() {
         let config = json!({ "provider": "firecrawl", "firecrawlApiKey": "fc-config" });
         let Provider::Firecrawl { key, base } =
-            Provider::from(Settings::read(&config), Some("fc-env".into())).unwrap();
+            Provider::from(settings(&config), Some("fc-env".into())).unwrap();
         assert_eq!((key.as_str(), base.as_str()), ("fc-config", FIRECRAWL));
         let Provider::Firecrawl { key, .. } =
-            Provider::from(Settings::read(&Value::Null), Some("fc-env".into())).unwrap();
+            Provider::from(settings(&Value::Null), Some("fc-env".into())).unwrap();
         assert_eq!(key, "fc-env");
-        assert!(Provider::from(Settings::read(&Value::Null), None).is_err());
-        assert!(Provider::from(
-            Settings::read(&json!({ "provider": "other" })),
-            Some("k".into())
-        )
-        .is_err());
+        assert!(Provider::from(settings(&Value::Null), None).is_err());
+        assert!(
+            Provider::from(settings(&json!({ "provider": "other" })), Some("k".into())).is_err()
+        );
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1300,6 +1268,15 @@ mod tests {
         );
     }
 
+    /// The config's `web` entry, read.
+    fn settings(web: &Value) -> Web {
+        Config::read(&json!({ "web": web })).web
+    }
+
+    fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
+        Provider::from(Config::read(config).web, env_key)
+    }
+
     fn firecrawl_of(provider: Result<Provider>) -> (String, String) {
         let Provider::Firecrawl { key, base } = provider.unwrap();
         (key, base)
@@ -1316,13 +1293,13 @@ mod tests {
             "extra": true,
         });
         assert_eq!(
-            firecrawl_of(Provider::from(Settings::read(&web), None)),
+            firecrawl_of(Provider::from(settings(&web), None)),
             both("fc-config", "http://firecrawl.test")
         );
         // A key or an address that isn't text is as good as missing.
         let web = json!({ "firecrawlApiKey": 7, "firecrawlUrl": 7 });
         assert_eq!(
-            firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
+            firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
             both("fc-env", FIRECRAWL)
         );
         // So is a `web` that isn't an object.
@@ -1332,20 +1309,20 @@ mod tests {
             json!(true),
         ] {
             assert_eq!(
-                firecrawl_of(Provider::from(Settings::read(&web), Some("fc-env".into()))),
+                firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
                 both("fc-env", FIRECRAWL),
                 "{web}"
             );
         }
         // A blank key is no key, and one in the config hides the environment's.
-        assert!(Provider::from(Settings::read(&Value::Null), Some(" ".into())).is_err());
+        assert!(Provider::from(settings(&Value::Null), Some(" ".into())).is_err());
         assert!(Provider::from(
-            Settings::read(&json!({ "firecrawlApiKey": "" })),
+            settings(&json!({ "firecrawlApiKey": "" })),
             Some("fc-env".into())
         )
         .is_err());
         let Err(unknown) = Provider::from(
-            Settings::read(&json!({ "provider": "other" })),
+            settings(&json!({ "provider": "other" })),
             Some("fc-env".into()),
         ) else {
             panic!("an unknown provider was taken")
@@ -1358,7 +1335,7 @@ mod tests {
         // `web` within the whole config.
         let config = json!({ "web": { "firecrawlApiKey": "fc-config" }, "opencodex": false });
         assert_eq!(
-            firecrawl_of(Provider::in_config(&config, None)),
+            firecrawl_of(in_config(&config, None)),
             both("fc-config", FIRECRAWL)
         );
         for config in [
@@ -1367,9 +1344,9 @@ mod tests {
             json!({ "firecrawl": { "firecrawlApiKey": "fc-config" } }),
             Value::Null,
         ] {
-            assert!(Provider::in_config(&config, None).is_err(), "{config}");
+            assert!(in_config(&config, None).is_err(), "{config}");
             assert_eq!(
-                firecrawl_of(Provider::in_config(&config, Some("fc-env".into()))),
+                firecrawl_of(in_config(&config, Some("fc-env".into()))),
                 both("fc-env", FIRECRAWL),
                 "{config}"
             );
