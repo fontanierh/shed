@@ -167,6 +167,9 @@ pub struct SessionState {
     /// Deleted: late events (a Pi child exiting after the delete) must not publish it again.
     removed: bool,
     refresh_scheduled: bool,
+    /// How many times an event has moved the status: a refresh whose answer was asked for before the last move
+    /// holds an older status, and leaves the status alone.
+    status_moves: u64,
     levels_for: Option<String>,
     /// What Open Codex counted for the session (with its subagents, for Prime): its agent reports nothing for models
     /// Open Codex prices, so this is the least the session has cost.
@@ -296,6 +299,7 @@ impl SessionState {
             sent: Default::default(),
             removed: false,
             refresh_scheduled: false,
+            status_moves: 0,
             levels_for: None,
             gateway_cost: 0.0,
             stall: Default::default(),
@@ -1047,6 +1051,9 @@ impl App {
                     tokio::spawn(self.clone().save_registry());
                 }
             }
+        }
+        if st.summary.status != before {
+            st.status_moves += 1;
         }
         if summary_changed || st.summary.status != before {
             self.publish_summary(&st);
