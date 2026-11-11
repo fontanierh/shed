@@ -1,0 +1,79 @@
+{
+  "mode": "chain",
+  "agentScope": "user",
+  "projectAgentsDir": null,
+  "results": [
+    {
+      "agent": "scout",
+      "agentSource": "user",
+      "task": "Find the entry point",
+      "exitCode": 0,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Task: Find the entry point"
+            }
+          ],
+          "timestamp": 1700000100000
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "It is src/main.rs."
+            }
+          ],
+          "model": "example/model-1",
+          "stopReason": "stop",
+          "usage": {
+            "input": 800,
+            "output": 400,
+            "cacheRead": 0,
+            "cacheWrite": 0,
+            "totalTokens": 1200,
+            "cost": {
+              "total": 0.25
+            }
+          },
+          "timestamp": 1700000101000
+        }
+      ],
+      "stderr": "",
+      "usage": {
+        "input": 800,
+        "output": 400,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cost": 0.25,
+        "contextTokens": 1200,
+        "turns": 1
+      },
+      "model": "example/model-1",
+      "step": 1,
+      "stopReason": "stop"
+    },
+    {
+      "agent": "reviewer",
+      "agentSource": "user",
+      "task": "Review src/main.rs",
+      "exitCode": 1,
+      "messages": [],
+      "stderr": "provider rate limit\nretry later",
+      "usage": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cost": 0,
+        "contextTokens": 0,
+        "turns": 0
+      },
+      "step": 2,
+      "stopReason": "error"
+    }
+  ]
+}

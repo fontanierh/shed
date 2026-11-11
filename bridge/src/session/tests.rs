@@ -2504,3 +2504,159 @@ async fn a_deepseek_session_runs_through_the_dsh_driver() {
     );
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
+
+/// Pi's background-jobs records in the shared fixture are listed, tailed, marked lost when their process is gone,
+/// and cancelled through `App`.
+#[tokio::test]
+async fn pi_jobs_are_listed_tailed_lost_and_cancelled_from_the_store() {
+    use std::os::unix::process::CommandExt;
+
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../protocol/pi_job.json")).unwrap();
+    let rig = Rig::new("pi-jobs", &[("sessions.json", SAVED_SESSIONS)]);
+    let pi1 = rig.app.find("pi1").await.unwrap();
+    let dir = crate::jobs::pi_dir(&rig.app.store, "pi1");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 1. Finished record straight from the shared extension fixture.
+    let finished = &fixture["finished"];
+    let finished_id = finished["id"].as_str().unwrap();
+    std::fs::write(
+        dir.join(format!("{finished_id}.json")),
+        serde_json::to_vec(finished).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join(format!("{finished_id}.log")),
+        "line 1\nline 2\nall green\n",
+    )
+    .unwrap();
+
+    // 2. Running record from the shared fixture, backed by a real process in its own process group so kill_job stops it.
+    let mut sleeper = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let live_pid = sleeper.id();
+    let mut live_record = fixture["running"].clone();
+    live_record["id"] = json!("live1");
+    live_record["pid"] = json!(live_pid);
+    live_record["startedAt"] = json!("2026-11-11T10:05:00.000Z");
+    std::fs::write(
+        dir.join("live1.json"),
+        serde_json::to_vec(&live_record).unwrap(),
+    )
+    .unwrap();
+
+    // 3. Running record whose process has already exited: marked lost, and stays lost even if its pid is reused.
+    let mut exited = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+    let gone_pid = exited.id();
+    let _ = exited.wait();
+    let mut lost_record = fixture["running"].clone();
+    lost_record["id"] = json!("lost1");
+    lost_record["pid"] = json!(gone_pid);
+    lost_record["startedAt"] = json!("2026-11-11T10:02:00.000Z");
+    std::fs::write(
+        dir.join("lost1.json"),
+        serde_json::to_vec(&lost_record).unwrap(),
+    )
+    .unwrap();
+
+    let jobs = rig.app.list_jobs(&pi1).await.unwrap();
+    let by_id: HashMap<&str, &crate::protocol::BackgroundJob> =
+        jobs.iter().map(|j| (j.id.as_str(), j)).collect();
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(by_id["live1"].status, crate::protocol::JobStatus::Running);
+    assert_eq!(
+        by_id[finished_id].status,
+        crate::protocol::JobStatus::Finished
+    );
+    assert_eq!(by_id[finished_id].exit_code, Some(0));
+    assert_eq!(by_id[finished_id].duration_ms, Some(1250));
+    assert_eq!(by_id["lost1"].status, crate::protocol::JobStatus::Lost);
+    assert!(dir.join("lost1.lost").exists());
+
+    // Even if `lost1`'s pid is later reused by a live process, the `.lost` marker keeps it reported as Lost.
+    lost_record["pid"] = json!(live_pid);
+    std::fs::write(
+        dir.join("lost1.json"),
+        serde_json::to_vec(&lost_record).unwrap(),
+    )
+    .unwrap();
+    let jobs_again = rig.app.list_jobs(&pi1).await.unwrap();
+    assert_eq!(
+        jobs_again.iter().find(|j| j.id == "lost1").unwrap().status,
+        crate::protocol::JobStatus::Lost
+    );
+
+    let (running_count, waiting) = crate::jobs::pi_running(&rig.app.store, "pi1", None);
+    assert_eq!(running_count, 1);
+    assert_eq!(waiting.unwrap().command, "cargo test --locked");
+
+    assert_eq!(
+        rig.app.job_output(&pi1, finished_id, 2).await.unwrap(),
+        "line 2\nall green"
+    );
+    assert!(rig.app.job_output(&pi1, "../etc", 10).await.is_err());
+
+    assert!(!rig.app.kill_job(&pi1, finished_id).await.unwrap());
+    assert!(rig.app.kill_job(&pi1, "live1").await.unwrap());
+    let _ = sleeper.wait();
+
+    rig.app.delete_session(&pi1).await.unwrap();
+    assert!(!dir.exists());
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// The `details` shape built by `setup/pi/extensions/subagent` in `protocol/pi_subagents.json` parses into read-only
+/// child sessions with their model, cost, context tokens, transcript and error.
+#[tokio::test]
+async fn pi_subagents_fixture_from_the_extension_is_read() {
+    let details: Value =
+        serde_json::from_str(include_str!("../../../protocol/pi_subagents.json")).unwrap();
+    let rig = Rig::new("pi-subagents-fixture", &[("sessions.json", SAVED_SESSIONS)]);
+    let pi1 = rig.app.find("pi1").await.unwrap();
+    pi1.state.lock().await.summary.context = Some(crate::protocol::ContextUsage {
+        tokens: Some(4000),
+        window: 200_000,
+        percent: Some(2.0),
+    });
+    rig.app
+        .handle_event(
+            &pi1,
+            &json!({
+                "type": "tool_execution_end",
+                "toolName": "subagent",
+                "toolCallId": "call_fx",
+                "result": { "details": details },
+            }),
+        )
+        .await;
+
+    let scout = rig.app.find("pi1.callfx.0").await.unwrap();
+    let scout_st = scout.state.lock().await;
+    assert_eq!(scout_st.summary.status, SessionStatus::Done);
+    assert_eq!(scout_st.summary.title, "scout: Find the entry point");
+    assert_eq!(scout_st.summary.cost, 0.25);
+    assert_eq!(
+        scout_st.summary.context.as_ref().and_then(|c| c.tokens),
+        Some(1200)
+    );
+    assert_eq!(
+        scout_st.summary.model.as_ref().map(|m| m.id.as_str()),
+        Some("model-1")
+    );
+    assert_eq!(scout_st.transcript.items.len(), 2);
+    drop(scout_st);
+
+    let reviewer = rig.app.find("pi1.callfx.1").await.unwrap();
+    let reviewer_st = reviewer.state.lock().await;
+    assert_eq!(reviewer_st.summary.status, SessionStatus::Error);
+    assert_eq!(
+        reviewer_st.summary.error.as_deref(),
+        Some("provider rate limit")
+    );
+    drop(reviewer_st);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}

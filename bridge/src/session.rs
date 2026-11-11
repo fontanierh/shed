@@ -940,7 +940,7 @@ impl App {
         for id in family.iter().skip(1) {
             self.remove(id).await;
         }
-        crate::jobs::forget(&session.id);
+        crate::jobs::forget(&self.store, &session.id);
         self.remove(&session.id).await;
         tokio::spawn(self.clone().save_registry());
         Ok(())

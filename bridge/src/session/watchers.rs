@@ -241,7 +241,9 @@ impl App {
                 let (jobs, waiting) = match (session.backend, self.agent(session.agent).jobs()) {
                     // Reported by the agent as events.
                     (_, JobsFrom::Agent) | (Backend::Subagent, _) => continue,
-                    (_, JobsFrom::Files) => crate::jobs::pi_running(&session.id, tree.as_ref()),
+                    (_, JobsFrom::Files) => {
+                        crate::jobs::pi_running(&self.store, &session.id, tree.as_ref())
+                    }
                     (_, JobsFrom::Kernel) => {
                         let worker = session.state.lock().await.worker_pid();
                         let (Some(worker), Some(tree)) = (worker, &tree) else {
