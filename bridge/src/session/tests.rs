@@ -21,12 +21,13 @@ pub struct Script {
     /// Commands the agent refuses, and what it says.
     refusals: std::sync::Mutex<HashMap<String, String>>,
     asked: std::sync::Mutex<Vec<Value>>,
-    /// Sessions started and sessions closed, and how long a start takes.
+    /// Sessions started and sessions closed.
     starts: std::sync::atomic::AtomicUsize,
     closes: std::sync::atomic::AtomicUsize,
-    slow_start: std::sync::Mutex<Duration>,
     /// The session an agent that keeps its own makes when asked, as its roster would list it.
     made: std::sync::Mutex<Option<Value>>,
+    /// Held, a start waits here until the test lets it go.
+    start_gate: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// How long an answer takes, once it is decided.
     slow_answer: std::sync::Mutex<Duration>,
 }
@@ -50,7 +51,9 @@ struct ScriptedSession {
 impl Agent for Scripted {
     fn start(&self, _opts: &SpawnOptions) -> Result<Started> {
         self.script.starts.fetch_add(1, Ordering::SeqCst);
-        std::thread::sleep(*self.script.slow_start.lock().unwrap());
+        if let Some(gate) = self.script.start_gate.lock().unwrap().take() {
+            gate.recv().unwrap();
+        }
         let (_events, output) = mpsc::unbounded_channel();
         Ok((self.live("started"), output))
     }
@@ -153,6 +156,20 @@ struct Rig {
 }
 
 impl Rig {
+    /// The next start waits until the returned sender is sent to.
+    fn hold_starts(&self) -> std::sync::mpsc::Sender<()> {
+        let (release, gate) = std::sync::mpsc::channel();
+        *self.agents.start_gate.lock().unwrap() = Some(gate);
+        release
+    }
+
+    /// Until an agent is being started.
+    async fn a_start_waits(&self) {
+        while self.agents.starts.load(Ordering::SeqCst) == 0 {
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// A bridge over the files in `saved`, with nothing running but the loop that takes Prime's events.
     fn new(name: &str, saved: &[(&str, &str)]) -> Rig {
         let store = Store::temporary(&format!("pin-{name}"));
@@ -1035,16 +1052,13 @@ async fn malformed_state_and_stats() {
 /// Prime's daemon attached.
 fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
     match backend {
-        Backend::Pi => BackendState::Pi {
-            child: live.then(|| {
-                Arc::new(ScriptedSession {
-                    script: rig.agents.clone(),
-                    id: id.to_string(),
-                    rest: None,
-                    absent: "agent is not running",
-                }) as Arc<dyn Live>
-            }),
-        },
+        Backend::Pi if live => BackendState::Pi(Process::Running(Arc::new(ScriptedSession {
+            script: rig.agents.clone(),
+            id: id.to_string(),
+            rest: None,
+            absent: "agent is not running",
+        }))),
+        Backend::Pi => BackendState::pi(),
         Backend::Prime => BackendState::Prime(PrimeState {
             attached: live,
             ..Default::default()
@@ -1339,15 +1353,17 @@ fn starting_answers() -> HashMap<String, Value> {
 async fn two_resumes_start_one_agent() {
     let rig = Rig::new("resume-twice", &[("sessions.json", SAVED_SESSIONS)]);
     *rig.agents.answers.lock().unwrap() = starting_answers();
-    *rig.agents.slow_start.lock().unwrap() = Duration::from_millis(200);
+    let release = rig.hold_starts();
     let pi = rig.app.find("pi1").await.unwrap();
-    let resume = || {
+    let first = {
         let (app, pi) = (rig.app.clone(), pi.clone());
         tokio::spawn(async move { app.resume_session(&pi).await.map(|summary| summary.id) })
     };
-    let (first, second) = tokio::join!(resume(), resume());
-    assert_eq!(first.unwrap().unwrap(), "pi1");
-    assert_eq!(second.unwrap().unwrap(), "pi1");
+    rig.a_start_waits().await;
+    // The first is still starting its agent: the second is told the session is on its way.
+    assert_eq!(rig.app.resume_session(&pi).await.unwrap().id, "pi1");
+    release.send(()).unwrap();
+    assert_eq!(first.await.unwrap().unwrap(), "pi1");
     assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 1);
     // And once it runs, a repeated resume is still a success.
     assert_eq!(rig.app.resume_session(&pi).await.unwrap().id, "pi1");
@@ -1516,5 +1532,91 @@ async fn a_session_its_agent_made_is_answered_even_if_reading_it_fails() {
         .unwrap();
     assert_eq!(made.id, "p1");
     assert_eq!(rig.app.sessions.read().await.len(), 1);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A session deleted while its agent starts leaves no agent running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_delete_during_a_start_leaves_no_agent() {
+    let rig = Rig::new("delete-starting", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let release = rig.hold_starts();
+    let pi = rig.app.find("pi1").await.unwrap();
+    let resume = {
+        let (app, pi) = (rig.app.clone(), pi.clone());
+        tokio::spawn(async move { app.resume_session(&pi).await.map_err(|e| e.to_string()) })
+    };
+    rig.a_start_waits().await;
+    rig.app.delete_session(&pi).await.unwrap();
+    release.send(()).unwrap();
+    assert_eq!(
+        resume.await.unwrap().unwrap_err(),
+        "the session was closed while it started"
+    );
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    assert!(pi.state.lock().await.stopped());
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A session closed while its agent starts ends up stopped, not failed, and can be resumed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_close_during_a_start_stops_the_session() {
+    let rig = Rig::new("close-starting", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let release = rig.hold_starts();
+    let pi = rig.app.find("pi1").await.unwrap();
+    let resume = {
+        let (app, pi) = (rig.app.clone(), pi.clone());
+        tokio::spawn(async move { app.resume_session(&pi).await.map_err(|e| e.to_string()) })
+    };
+    rig.a_start_waits().await;
+    rig.app.close_session(&pi).await.unwrap();
+    release.send(()).unwrap();
+    assert!(resume.await.unwrap().is_err());
+    assert_eq!(rig.agents.closes.load(Ordering::SeqCst), 1);
+    {
+        let st = pi.state.lock().await;
+        assert!(st.stopped());
+        assert_eq!(st.summary.status, SessionStatus::Stopped);
+        assert_eq!(st.summary.error, None);
+    }
+    assert_eq!(rig.app.resume_session(&pi).await.unwrap().id, "pi1");
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A session closed while the bridge still reads its transcript from the agent it just started ends up stopped.
+#[tokio::test(start_paused = true)]
+async fn a_close_while_a_start_reads_the_transcript_stops_the_session() {
+    let rig = Rig::new("close-reading", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_secs(1);
+    let pi = rig.app.find("pi1").await.unwrap();
+    let resume = {
+        let (app, pi) = (rig.app.clone(), pi.clone());
+        tokio::spawn(async move { app.resume_session(&pi).await.map_err(|e| e.to_string()) })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    rig.app.close_session(&pi).await.unwrap();
+    assert!(resume.await.unwrap().is_err());
+    let st = pi.state.lock().await;
+    assert!(st.stopped());
+    assert_eq!(st.summary.status, SessionStatus::Stopped);
+    assert_eq!(st.summary.error, None);
+    drop(st);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Closing a running session leaves it stopped, and it can be resumed at once.
+#[tokio::test]
+async fn a_closed_session_is_stopped_and_resumes() {
+    let rig = Rig::new("close-resume", &[("sessions.json", SAVED_SESSIONS)]);
+    *rig.agents.answers.lock().unwrap() = starting_answers();
+    let pi = rig.app.find("pi1").await.unwrap();
+    rig.app.resume_session(&pi).await.unwrap();
+    rig.app.close_session(&pi).await.unwrap();
+    assert_eq!(pi.state.lock().await.summary.status, SessionStatus::Stopped);
+    rig.app.resume_session(&pi).await.unwrap();
+    assert_eq!(rig.agents.starts.load(Ordering::SeqCst), 2);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

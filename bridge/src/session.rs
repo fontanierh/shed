@@ -58,6 +58,9 @@ pub struct App {
     agents: Agents,
 }
 
+/// What a start answers when the session was closed or deleted before its agent was up.
+const CLOSED_WHILE_STARTING: &str = "the session was closed while it started";
+
 pub struct Session {
     pub id: String,
     pub agent: AgentKind,
@@ -83,12 +86,23 @@ impl Session {
     }
 }
 
+/// Where a session the bridge starts is between stopped and running. It changes only under the session's lock, and
+/// each step looks at it first, so a close, a delete and a start that cross cannot leave an agent nobody lists.
+enum Process {
+    Stopped,
+    /// Its agent is being started. `closed` once someone asked for the session to stop meanwhile: the start then
+    /// closes the agent it made.
+    Starting {
+        closed: bool,
+    },
+    Running(Arc<dyn Live>),
+    /// Asked to stop, and not gone yet.
+    Stopping(Arc<dyn Live>),
+}
+
 /// What the bridge keeps for one kind of session only.
 enum BackendState {
-    Pi {
-        /// None while the session is stopped.
-        child: Option<Arc<dyn Live>>,
-    },
+    Pi(Process),
     Prime(PrimeState),
     PiSubagent {
         /// Transcript length last sent, to avoid resending unchanged snapshots.
@@ -98,7 +112,7 @@ enum BackendState {
 
 impl BackendState {
     fn pi() -> BackendState {
-        BackendState::Pi { child: None }
+        BackendState::Pi(Process::Stopped)
     }
 
     fn prime() -> BackendState {
@@ -113,7 +127,7 @@ impl BackendState {
 
     fn backend(&self) -> Backend {
         match self {
-            BackendState::Pi { .. } => Backend::Pi,
+            BackendState::Pi(_) => Backend::Pi,
             BackendState::Prime(_) => Backend::Prime,
             BackendState::PiSubagent { .. } => Backend::PiSubagent,
         }
@@ -146,9 +160,6 @@ pub struct SessionState {
     named: bool,
     /// The ids of the last messages taken from the apps, so one sent again is not sent to the agent twice.
     sent: std::collections::VecDeque<String>,
-    /// Its agent is being started: a second start must not begin.
-    starting: bool,
-    stopping: bool,
     /// Deleted: late events (a Pi child exiting after the delete) must not publish it again.
     removed: bool,
     refresh_scheduled: bool,
@@ -287,8 +298,6 @@ impl SessionState {
             session_file,
             named: false,
             sent: Default::default(),
-            starting: false,
-            stopping: false,
             removed: false,
             refresh_scheduled: false,
             levels_for: None,
@@ -317,13 +326,14 @@ impl SessionState {
 
     /// A `Pi` session with no process: one that was closed, or whose agent exited.
     fn stopped(&self) -> bool {
-        matches!(&self.own, BackendState::Pi { child: None })
+        matches!(&self.own, BackendState::Pi(Process::Stopped))
     }
 
     /// The agent process of a running `Pi` session.
     fn child(&self) -> Option<&Arc<dyn Live>> {
         match &self.own {
-            BackendState::Pi { child } => child.as_ref(),
+            BackendState::Pi(Process::Running(child) | Process::Stopping(child)) => Some(child),
+            BackendState::Pi(Process::Stopped | Process::Starting { .. }) => None,
             BackendState::Prime(_) | BackendState::PiSubagent { .. } => None,
         }
     }
@@ -331,14 +341,14 @@ impl SessionState {
     fn prime(&self) -> Option<&PrimeState> {
         match &self.own {
             BackendState::Prime(prime) => Some(prime),
-            BackendState::Pi { .. } | BackendState::PiSubagent { .. } => None,
+            BackendState::Pi(_) | BackendState::PiSubagent { .. } => None,
         }
     }
 
     fn prime_mut(&mut self) -> Option<&mut PrimeState> {
         match &mut self.own {
             BackendState::Prime(prime) => Some(prime),
-            BackendState::Pi { .. } | BackendState::PiSubagent { .. } => None,
+            BackendState::Pi(_) | BackendState::PiSubagent { .. } => None,
         }
     }
 
@@ -348,7 +358,7 @@ impl SessionState {
             BackendState::PiSubagent { sent_messages } => {
                 std::mem::replace(sent_messages, messages) != messages
             }
-            BackendState::Pi { .. } | BackendState::Prime(_) => true,
+            BackendState::Pi(_) | BackendState::Prime(_) => true,
         }
     }
 
@@ -638,7 +648,9 @@ impl App {
         }
         let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         let summary = new_summary(&id, agent, SessionKind::Root, &cwd);
-        let state = SessionState::new(summary, None, BackendState::pi());
+        // Starting from its first moment in the list, so nothing else starts it too.
+        let starting = BackendState::Pi(Process::Starting { closed: false });
+        let state = SessionState::new(summary, None, starting);
         let session = Arc::new(Session::new(id, agent, cwd, state));
         self.sessions.write().await.push(session.clone());
         if let Err(e) = self.start_pi(&session, None, model, thinking).await {
@@ -663,15 +675,24 @@ impl App {
         }
         let resume = {
             let mut st = session.state.lock().await;
-            // Resuming twice does no harm: a session that runs, or is about to, is the answer.
-            if st.child().is_some() || st.starting {
-                return Ok(st.summary.clone());
+            match &st.own {
+                // Resuming twice does no harm: a session that runs, or is about to, is the answer.
+                BackendState::Pi(Process::Running(_) | Process::Starting { .. }) => {
+                    return Ok(st.summary.clone())
+                }
+                BackendState::Pi(Process::Stopping(_)) => {
+                    bail!("the session is still stopping; resume it in a moment")
+                }
+                BackendState::Pi(Process::Stopped) => {}
+                BackendState::Prime(_) | BackendState::PiSubagent { .. } => {
+                    unreachable!("checked above: only a started session gets here")
+                }
             }
             let resume = st
                 .session_file
                 .clone()
                 .ok_or_else(|| anyhow!("session has no saved transcript to resume"))?;
-            st.starting = true;
+            st.own = BackendState::Pi(Process::Starting { closed: false });
             resume
         };
         self.start_pi(session, Some(resume), None, None).await?;
@@ -718,19 +739,28 @@ impl App {
         let spawned = self.agents.get(session.agent).start(&opts);
         let (child, rx) = {
             let mut st = session.state.lock().await;
-            st.starting = false;
+            let closed = st.removed
+                || matches!(st.own, BackendState::Pi(Process::Starting { closed: true }));
             match spawned {
+                Ok(pair) if closed => {
+                    // Closed or deleted while its agent started: the agent goes, and the session is stopped.
+                    st.own = BackendState::pi();
+                    st.summary.status = SessionStatus::Stopped;
+                    st.summary.error = None;
+                    self.publish_summary(&st);
+                    drop(st);
+                    pair.0.close().await;
+                    bail!("{CLOSED_WHILE_STARTING}");
+                }
                 Ok(pair) => {
-                    if let BackendState::Pi { child } = &mut st.own {
-                        *child = Some(pair.0.clone());
-                    }
-                    st.stopping = false;
+                    st.own = BackendState::Pi(Process::Running(pair.0.clone()));
                     st.summary.status = SessionStatus::Starting;
                     st.summary.error = None;
                     self.publish_summary(&st);
                     pair
                 }
                 Err(e) => {
+                    st.own = BackendState::pi();
                     st.summary.status = SessionStatus::Error;
                     st.summary.error = Some(e.to_string());
                     self.publish_summary(&st);
@@ -747,20 +777,23 @@ impl App {
             self.refresh(session).await
         }
         .await;
-        if let Err(e) = &started {
-            // An agent that started and cannot be read is not left running behind a session marked as failed.
-            {
-                let mut st = session.state.lock().await;
-                if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
-                    st.own = BackendState::pi();
-                }
+        let mut st = session.state.lock().await;
+        let ours = |c: &Arc<dyn Live>| Arc::ptr_eq(c, &child);
+        match (&st.own, started) {
+            (BackendState::Pi(Process::Running(c)), Ok(())) if ours(c) => Ok(()),
+            (BackendState::Pi(Process::Running(c)), Err(e)) if ours(c) => {
+                // An agent that started and cannot be read is not left running behind a session marked as failed.
+                st.own = BackendState::pi();
                 st.summary.status = SessionStatus::Error;
                 st.summary.error = Some(e.to_string());
                 self.publish_summary(&st);
+                drop(st);
+                child.close().await;
+                Err(e)
             }
-            child.close().await;
+            // Closed meanwhile, and whoever closed it saw to the agent and to what the session shows.
+            _ => bail!("{CLOSED_WHILE_STARTING}"),
         }
-        started
     }
 
     pub async fn close_session(&self, session: &Session) -> Result<()> {
@@ -768,11 +801,32 @@ impl App {
             Backend::Pi => {
                 let child = {
                     let mut st = session.state.lock().await;
-                    st.stopping = true;
-                    st.child().cloned()
+                    match std::mem::replace(&mut st.own, BackendState::pi()) {
+                        BackendState::Pi(Process::Running(child) | Process::Stopping(child)) => {
+                            st.own = BackendState::Pi(Process::Stopping(child.clone()));
+                            Some(child)
+                        }
+                        // The start closes the agent it is making.
+                        BackendState::Pi(Process::Starting { .. }) => {
+                            st.own = BackendState::Pi(Process::Starting { closed: true });
+                            None
+                        }
+                        other => {
+                            st.own = other;
+                            None
+                        }
+                    }
                 };
-                if let Some(child) = child {
-                    child.close().await;
+                let Some(child) = child else { return Ok(()) };
+                child.close().await;
+                // It is gone now, whether or not its last word has been read yet.
+                let mut st = session.state.lock().await;
+                if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
+                    st.own = BackendState::pi();
+                    st.summary.question = None;
+                    st.summary.status = SessionStatus::Stopped;
+                    st.summary.error = None;
+                    self.publish_summary(&st);
                 }
                 Ok(())
             }
@@ -852,20 +906,33 @@ impl App {
     ) {
         while let Some(output) = rx.recv().await {
             match output {
-                ChildOutput::Event(event) => self.handle_event(&session, &event).await,
+                ChildOutput::Event(event) => {
+                    // What an agent the session no longer has says changes nothing.
+                    let ours = {
+                        let st = session.state.lock().await;
+                        st.child().is_some_and(|c| Arc::ptr_eq(c, &child))
+                    };
+                    if !ours {
+                        break;
+                    }
+                    self.handle_event(&session, &event).await
+                }
                 ChildOutput::Exited(reason) => {
                     let mut st = session.state.lock().await;
-                    if st.child().is_some_and(|c| Arc::ptr_eq(c, &child)) {
-                        st.own = BackendState::pi();
-                        st.summary.question = None;
-                        if st.stopping {
-                            st.summary.status = SessionStatus::Stopped;
-                        } else {
-                            st.summary.status = SessionStatus::Error;
-                            st.summary.error = Some(reason);
-                        }
-                        self.publish_summary(&st);
+                    let stopping = match &st.own {
+                        BackendState::Pi(Process::Running(c)) if Arc::ptr_eq(c, &child) => false,
+                        BackendState::Pi(Process::Stopping(c)) if Arc::ptr_eq(c, &child) => true,
+                        _ => break,
+                    };
+                    st.own = BackendState::pi();
+                    st.summary.question = None;
+                    if stopping {
+                        st.summary.status = SessionStatus::Stopped;
+                    } else {
+                        st.summary.status = SessionStatus::Error;
+                        st.summary.error = Some(reason);
                     }
+                    self.publish_summary(&st);
                     break;
                 }
             }
