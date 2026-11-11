@@ -111,8 +111,8 @@ async fn run(args: Vec<String>) -> Result<String> {
 }
 
 /// Whether a provider is set up here: the guide tells the agents about the web only then.
-pub fn configured() -> bool {
-    Provider::from_config(crate::store::config_in(&state_dir())).is_ok()
+pub fn configured(store: &crate::store::Store) -> bool {
+    Provider::from_config(store.config()).is_ok()
 }
 
 /// Link `shed-web` to the running binary in its folder, and write the Python module, for agents started from here.
@@ -147,12 +147,8 @@ pub fn install() {
 
 const PYTHON: &str = include_str!("../python/shed_web.py");
 
-fn home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default())
-}
-
 fn state_dir() -> PathBuf {
-    home().join(".agent-remote")
+    crate::host::home().join(".agent-remote")
 }
 
 /// Where the `shed_web` Python module is, for Prime's PYTHONPATH.
@@ -165,7 +161,7 @@ pub fn bin_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| home().join(".agent-remote/bin"))
+        .unwrap_or_else(|| crate::host::home().join(".agent-remote/bin"))
 }
 
 /// `dir` ahead of the folders in `path`, once.
@@ -536,7 +532,7 @@ fn log(request: &Request, result: &Result<Value>, took: Duration) {
         "pid": std::process::id(),
         "outcome": outcome,
     });
-    let dir = home().join(".agent-remote/logs");
+    let dir = crate::host::home().join(".agent-remote/logs");
     #[expect(
         clippy::let_underscore_must_use,
         reason = "this runs inside an agent's tool call, where stderr is the agent's reading: a log line lost is not \
@@ -1270,11 +1266,11 @@ mod tests {
 
     /// The config's `web` entry, read.
     fn settings(web: &Value) -> Web {
-        Config::read(&json!({ "web": web })).web
+        Config::read(&json!({ "web": web })).unwrap().web
     }
 
     fn in_config(config: &Value, env_key: Option<String>) -> Result<Provider> {
-        Provider::from(Config::read(config).web, env_key)
+        Provider::from(Config::read(config)?.web, env_key)
     }
 
     fn firecrawl_of(provider: Result<Provider>) -> (String, String) {
@@ -1283,11 +1279,10 @@ mod tests {
     }
 
     #[test]
-    fn the_web_config_s_mistyped_parts_fall_back() {
+    fn the_web_config_s_missing_parts_fall_back() {
         let both = |key: &str, base: &str| (key.to_string(), base.to_string());
-        // A provider that isn't text is Firecrawl, and an address loses its last slashes.
+        // No provider is Firecrawl, and an address loses its last slashes.
         let web = json!({
-            "provider": 7,
             "firecrawlApiKey": "fc-config",
             "firecrawlUrl": "http://firecrawl.test//",
             "extra": true,
@@ -1296,24 +1291,11 @@ mod tests {
             firecrawl_of(Provider::from(settings(&web), None)),
             both("fc-config", "http://firecrawl.test")
         );
-        // A key or an address that isn't text is as good as missing.
-        let web = json!({ "firecrawlApiKey": 7, "firecrawlUrl": 7 });
+        // Without a key or an address in the config, the environment's key and Firecrawl's own address.
         assert_eq!(
-            firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
+            firecrawl_of(Provider::from(settings(&json!({})), Some("fc-env".into()))),
             both("fc-env", FIRECRAWL)
         );
-        // So is a `web` that isn't an object.
-        for web in [
-            json!("other"),
-            json!(["other", "fc-config", "http://firecrawl.test"]),
-            json!(true),
-        ] {
-            assert_eq!(
-                firecrawl_of(Provider::from(settings(&web), Some("fc-env".into()))),
-                both("fc-env", FIRECRAWL),
-                "{web}"
-            );
-        }
         // A blank key is no key, and one in the config hides the environment's.
         assert!(Provider::from(settings(&Value::Null), Some(" ".into())).is_err());
         assert!(Provider::from(

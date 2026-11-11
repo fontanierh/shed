@@ -20,6 +20,32 @@ pub const QUICK: Duration = Duration::from_secs(120);
 /// For the requests an agent answers only once the model is done, such as a compaction.
 pub const SLOW: Duration = Duration::from_secs(30 * 60);
 
+/// The next JSON message of a stream that carries one on each line, or nothing once the stream ends. Lines end
+/// strictly on LF: U+2028 and U+2029 are valid inside JSON strings. A read that fails ends the stream and is logged;
+/// a line that is not JSON is skipped and logged by its length, not its text, which may be the user's.
+pub async fn next_message<R>(lines: &mut R, buf: &mut Vec<u8>, from: &str) -> Option<Value>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    loop {
+        buf.clear();
+        match lines.read_until(b'\n', buf).await {
+            Ok(0) => return None,
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("reading from {from} failed: {e}");
+                return None;
+            }
+        }
+        match serde_json::from_slice(buf) {
+            Ok(message) => return Some(message),
+            Err(_) if buf.iter().all(u8::is_ascii_whitespace) => {}
+            Err(e) => eprintln!("a line of {} bytes from {from} is not JSON: {e}", buf.len()),
+        }
+    }
+}
+
 /// Why a request got no answer.
 #[derive(Debug, PartialEq)]
 pub enum Unanswered {
@@ -154,5 +180,24 @@ mod tests {
         let requests = Requests::default();
         drop(requests.ask(1));
         assert_eq!(waiting(&requests), 0);
+    }
+
+    /// A line that is not JSON, and a blank one, are passed over; what follows is still read.
+    #[tokio::test]
+    async fn a_line_that_is_not_json_does_not_end_the_stream() {
+        let text = "{\"a\":1}\nnot json\n\n{\"b\":\"one\u{2028}line\"}\n";
+        let mut lines = tokio::io::BufReader::new(text.as_bytes());
+        let mut buf = Vec::new();
+        let mut read = Vec::new();
+        while let Some(message) = next_message(&mut lines, &mut buf, "a test").await {
+            read.push(message);
+        }
+        assert_eq!(
+            read,
+            vec![
+                serde_json::json!({ "a": 1 }),
+                serde_json::json!({ "b": "one\u{2028}line" })
+            ]
+        );
     }
 }

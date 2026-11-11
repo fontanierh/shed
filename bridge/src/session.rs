@@ -2,9 +2,10 @@
 //! subagents) live in Prime's daemon and are mirrored from its roster; the subagents of Pi and DeepSeek Harness are
 //! read-only views of what their parent session reports about them.
 
+use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::{json, Value};
@@ -56,6 +57,8 @@ pub struct App {
     costs: crate::cost::Costs,
     /// The agents this bridge can run a session of.
     agents: Agents,
+    /// The models each agent listed, kept a minute, since listing starts the agent.
+    models: std::sync::Mutex<HashMap<AgentKind, (std::time::Instant, Value)>>,
 }
 
 /// What a start answers when the session was closed or deleted before its agent was up.
@@ -189,8 +192,7 @@ fn log_loop(
         "reason": reason,
         "sample": sample,
     });
-    let path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
-        .join(".agent-remote/logs/loops.jsonl");
+    let path = crate::host::home().join(".agent-remote/logs/loops.jsonl");
     let written = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -199,13 +201,6 @@ fn log_loop(
     if let Err(e) = written {
         eprintln!("can't log the loop to {}: {e}", path.display());
     }
-}
-
-pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Parses `2026-10-30T09:49:57.304Z` into epoch milliseconds.
@@ -409,9 +404,9 @@ impl Session {
 impl App {
     /// The bridge's state as saved, connected to Prime's daemon and watching what its sessions do.
     pub fn new(store: Store) -> Result<Arc<App>> {
-        let (prime, prime_events) = PrimeDaemon::start(store.client_id()?);
+        let (prime, prime_events) = PrimeDaemon::start(store.client_id()?, store.clone());
         let mut limits = store.load_limits();
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = crate::host::home_text();
         if crate::store::adopt_stray_limits(
             &mut limits,
             std::path::Path::new(&format!("{home}/.prime/agent/daemon-workers")),
@@ -420,7 +415,7 @@ impl App {
                 eprintln!("failed to save context windows: {e}");
             }
         }
-        let agents = Agents::installed(prime.clone());
+        let agents = Agents::installed(prime.clone(), store.clone());
         let app = App::assemble(store, prime, limits, agents)?;
         tokio::spawn(app.clone().run_prime(prime_events));
         tokio::spawn(app.clone().watch_background_jobs());
@@ -464,6 +459,7 @@ impl App {
             compacting_for_limit: std::sync::Mutex::new(HashMap::new()),
             costs: crate::cost::Costs::default(),
             agents,
+            models: Default::default(),
         });
         Ok(app)
     }
@@ -603,7 +599,17 @@ impl App {
 
     /// The models a session of this agent can start on.
     pub async fn list_models(&self, agent: AgentKind) -> Result<Value> {
-        crate::rpc::list_models(&self.agents, agent).await
+        if let Some((at, models)) = self.models.lock().unwrap().get(&agent) {
+            if at.elapsed().as_secs() < 60 {
+                return Ok(models.clone());
+            }
+        }
+        let models = crate::rpc::list_models(&self.agents, agent, &self.store).await?;
+        self.models
+            .lock()
+            .unwrap()
+            .insert(agent, (std::time::Instant::now(), models.clone()));
+        Ok(models)
     }
 
     /// Run an agent command against a session: by the process the bridge runs for it, or else by the agent itself
@@ -709,7 +715,10 @@ impl App {
     ) -> Result<()> {
         // The guide as a file, for the subagents Pi starts: they get no system prompt from the bridge.
         let guide = self.store.dir().join("guide.md");
-        if let Err(e) = std::fs::write(&guide, crate::guide::text(crate::rpc::AgentKind::Pi)) {
+        if let Err(e) = std::fs::write(
+            &guide,
+            crate::guide::text(crate::rpc::AgentKind::Pi, &self.store),
+        ) {
             eprintln!(
                 "can't write the guide for Pi's subagents to {}: {e}",
                 guide.display()
@@ -1123,7 +1132,7 @@ pub async fn attach_snapshot(session: &Session) -> (u64, SessionSummary, ServerM
 
 pub fn expand_dir(path: &str) -> Result<String> {
     let path = match path.strip_prefix("~") {
-        Some(rest) => format!("{}{}", std::env::var("HOME").unwrap_or_default(), rest),
+        Some(rest) => format!("{}{}", crate::host::home_text(), rest),
         None => path.to_string(),
     };
     let canonical = std::fs::canonicalize(&path).map_err(|e| anyhow!("{path}: {e}"))?;

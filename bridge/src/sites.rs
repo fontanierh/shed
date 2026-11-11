@@ -658,8 +658,8 @@ impl crate::session::App {
                 detached.folders.insert(pid, folders.remove(&pid));
             }
         }
-        let home = std::env::var("HOME").unwrap_or_default();
-        let now = crate::session::now_ms();
+        let home = crate::host::home_text();
+        let now = crate::host::now_ms();
         for pid in &orphans {
             for listener in &listeners[pid] {
                 if found.iter().any(|site| site.listener.port == listener.port) {

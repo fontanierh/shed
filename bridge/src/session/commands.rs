@@ -152,10 +152,13 @@ impl App {
             .and_then(|s| s.to_str())
             .unwrap_or_default()
             .to_string();
-        let output = tokio::process::Command::new("ps")
+        let output = tokio::process::Command::new("/bin/ps")
             .args(["-axww", "-E", "-o", "pid=,ppid=,command="])
             .output()
             .await?;
+        if !output.status.success() {
+            bail!("the processes on this computer can't be listed");
+        }
         let table = String::from_utf8_lossy(&output.stdout);
         let processes: Vec<(u32, u32, &str)> = table
             .lines()
@@ -191,11 +194,20 @@ impl App {
             i += 1;
         }
         let pids: Vec<String> = doomed.iter().map(u32::to_string).collect();
-        tokio::process::Command::new("kill")
+        let killed = tokio::process::Command::new("/bin/kill")
             .arg("-9")
             .args(&pids)
-            .status()
+            .output()
             .await?;
+        // Some of them may have gone on their own meanwhile, which `kill` also reports as a failure: said, not
+        // answered as an error, since the kernel it was asked to end is ended either way.
+        if !killed.status.success() {
+            eprintln!(
+                "restarting the kernel of {}: kill said {}",
+                session.id,
+                String::from_utf8_lossy(&killed.stderr).trim()
+            );
+        }
         Ok(json!({ "killed": doomed.len() }))
     }
 

@@ -10,7 +10,7 @@ use crate::session::expand_dir;
 /// The folders inside `path` (default: home), sorted by name. Each says when it last changed, so a client can put the
 /// newest first.
 pub fn list_dir(path: Option<&str>, hidden: bool) -> Result<Value> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = crate::host::home_text();
     let dir = expand_dir(path.filter(|p| !p.is_empty()).unwrap_or("~"))?;
     let mut entries = Vec::new();
     for entry in std::fs::read_dir(&dir)?.flatten() {

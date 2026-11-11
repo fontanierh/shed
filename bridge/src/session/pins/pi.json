@@ -4,6 +4,16 @@
       "command": "get_messages",
       "fields": {},
       "session": "pi1"
+    },
+    {
+      "command": "get_state",
+      "fields": {},
+      "session": "pi1"
+    },
+    {
+      "command": "get_session_stats",
+      "fields": {},
+      "session": "pi1"
     }
   ],
   "saved": {

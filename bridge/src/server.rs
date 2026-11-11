@@ -239,7 +239,7 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
                 .await?;
             let mut models = crate::agent_wire::models(&data);
             // With Open Codex, a session switches among its models only, like the new-session list.
-            if crate::opencodex::gateway().is_some() {
+            if crate::opencodex::gateway(&app.store).is_some() {
                 models.retain(|m| m.provider == crate::opencodex::PROVIDER);
             }
             serde_json::to_value(models)?

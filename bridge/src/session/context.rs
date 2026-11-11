@@ -11,8 +11,6 @@ use super::{limit_key, App, Backend, Session, SessionState};
 use crate::agent_wire::{self, AgentState, AgentStats, ConversationId};
 use crate::protocol::{ModelInfo, SessionStatus};
 
-const ALL_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
 /// Room left for the next turn when compacting for a chosen window, as Pi's own auto-compaction leaves (16k), but
 /// never more than a fifth of a small window.
 fn compaction_reserve(window: u64) -> u64 {
@@ -53,7 +51,14 @@ impl App {
             self.command(session, "get_session_stats", json!({}))
         );
         let state = AgentState::read(&state?);
-        let stats = stats.ok().map(|stats| AgentStats::read(&stats));
+        // Without its figures the session still shows; they come with the next refresh.
+        let stats = match stats {
+            Ok(stats) => Some(AgentStats::read(&stats)),
+            Err(e) => {
+                eprintln!("session {}: no figures from its agent: {e:#}", session.id);
+                None
+            }
+        };
         let model_key = state
             .model
             .as_ref()
@@ -264,6 +269,6 @@ impl App {
             .command(session, "get_available_models", json!({}))
             .await
             .unwrap_or(Value::Null);
-        agent_wire::model_levels(&models, model, &ALL_LEVELS)
+        agent_wire::model_levels(&models, model, &agent_wire::THINKING_LEVELS)
     }
 }

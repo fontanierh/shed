@@ -1,13 +1,14 @@
 //! Watchers: what the bridge keeps an eye on for every session without being asked. What each has spent, the
 //! background commands it has running, and whether it is stuck waiting on one.
 
+use crate::host::now_ms;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
-use super::{now_ms, App, Backend, Session, SessionState};
+use super::{App, Backend, Session, SessionState};
 use crate::agent_wire;
 use crate::protocol::{SessionStatus, Spend, WaitingOn};
 use crate::transcript::Transcript;
@@ -84,7 +85,7 @@ impl App {
             HashMap::new();
         loop {
             ticker.tick().await;
-            let Some(gateway) = crate::opencodex::gateway() else {
+            let Some(gateway) = crate::opencodex::gateway(&self.store) else {
                 continue;
             };
             let sessions = self.sessions.read().await.clone();
@@ -229,7 +230,7 @@ impl App {
     /// each live worker's REPL kernel (`python -m rlm.repl`) instead; the list is fetched when asked for.
     pub(super) async fn watch_background_jobs(self: Arc<Self>) {
         let mut ticker = tokio::time::interval(Duration::from_secs(2));
-        let home = crate::jobs::home();
+        let home = crate::host::home_text();
         loop {
             ticker.tick().await;
             let sessions: Vec<Arc<Session>> = self

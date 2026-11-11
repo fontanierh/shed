@@ -8,6 +8,9 @@ use serde_json::Value;
 use crate::protocol::{ContextUsage, Goal, ModelInfo, Queue, SessionKind, SessionStatus};
 use crate::session::parse_iso_ms;
 
+/// Pi's thinking levels, lowest first.
+pub const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 fn text(value: &Value) -> Option<String> {
     value.as_str().map(str::to_string)
 }

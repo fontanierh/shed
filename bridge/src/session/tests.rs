@@ -3,6 +3,7 @@
 //! files saved with a file in `pins/`. `UPDATE_FIXTURES=1 cargo test` rewrites the files: read the diff before
 //! committing it, since it is the change in behaviour.
 
+use crate::host::now_ms;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -59,10 +60,13 @@ impl Agent for Scripted {
     }
 
     fn session(&self, id: &str) -> Option<Arc<dyn Live>> {
+        // Only where the agent it stands for has one: a stopped session of an agent the bridge starts has nobody
+        // to ask.
+        let rest = self.real.session(id)?;
         Some(Arc::new(ScriptedSession {
             script: self.script.clone(),
             id: id.to_string(),
-            rest: self.real.session(id),
+            rest: Some(rest),
             absent: "session is not running",
         }))
     }
@@ -177,9 +181,9 @@ impl Rig {
             std::fs::write(store.dir().join(file), text).unwrap();
         }
         let limits = store.load_limits();
-        let prime = PrimeDaemon::unconnected("test".into());
+        let prime = PrimeDaemon::unconnected("test".into(), store.clone());
         let script = Arc::new(Script::default());
-        let installed = Agents::installed(prime.clone());
+        let installed = Agents::installed(prime.clone(), store.clone());
         let agents = Agents::of(|kind| {
             Arc::new(Scripted {
                 script: script.clone(),
@@ -527,6 +531,8 @@ async fn pi_events() {
             { "role": "branchSummary", "summary": "From another branch", "timestamp": 1_700_000_206_000u64 },
         ] }),
     );
+    // Reading the conversation again asks the agent, so for this step the session has one, as a resumed one does.
+    pi.state.lock().await.own = own(&rig, "pi1", Backend::Pi, true);
     rig.events(
         &pi,
         &[
@@ -537,6 +543,7 @@ async fn pi_events() {
     .await;
     rig.settle("a compaction succeeds: the conversation is read again, subagents included")
         .await;
+    pi.state.lock().await.own = BackendState::pi();
 
     rig.events(
         &pi,
