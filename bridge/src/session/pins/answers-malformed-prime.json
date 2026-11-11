@@ -596,6 +596,7 @@
         "followUp": true,
         "newSession": true,
         "restartKernel": true,
+        "resume": false,
         "spendIncludesSubagents": true
       },
       "context": {

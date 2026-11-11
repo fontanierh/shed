@@ -242,6 +242,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(
             parent.can,
             SessionCapabilities(
+                resume: true,
                 restartKernel: true,
                 clearGoal: true,
                 newSession: false,
@@ -286,5 +287,16 @@ final class SessionStoreTests: XCTestCase {
 
         gate.continuation.finish()
         await loadingA.value
+    }
+
+    @MainActor func testStartedSessionWhoseAgentCrashedNeedsResumeWhileKeptSessionDoesNot() {
+        let crashedPi = summary("pi1", status: .error, agent: .pi)
+        let stoppedDsh = summary("dsh1", status: .stopped, agent: .deepseek)
+        let runningPi = summary("pi2", status: .idle, agent: .pi)
+        let disconnectedPrime = summary("p1", status: .error, agent: .prime)
+        XCTAssertTrue(crashedPi.needsResume)
+        XCTAssertTrue(stoppedDsh.needsResume)
+        XCTAssertFalse(runningPi.needsResume)
+        XCTAssertFalse(disconnectedPrime.needsResume)
     }
 }

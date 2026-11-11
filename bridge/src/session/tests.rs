@@ -2434,6 +2434,7 @@ async fn sessions_publish_their_capabilities_on_the_wire() {
     assert_eq!(
         caps("pi1"),
         json!({
+            "resume": true,
             "restartKernel": false,
             "clearGoal": false,
             "newSession": true,
@@ -2447,6 +2448,7 @@ async fn sessions_publish_their_capabilities_on_the_wire() {
     assert_eq!(
         caps("dsh1"),
         json!({
+            "resume": true,
             "restartKernel": false,
             "clearGoal": false,
             "newSession": false,
@@ -2460,6 +2462,7 @@ async fn sessions_publish_their_capabilities_on_the_wire() {
     assert_eq!(
         caps("p1"),
         json!({
+            "resume": false,
             "restartKernel": true,
             "clearGoal": true,
             "newSession": true,

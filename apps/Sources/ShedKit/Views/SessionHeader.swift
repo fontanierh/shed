@@ -58,7 +58,7 @@ struct SessionHeader: View {
             if !children.isEmpty { SubagentMenu(store: store, children: children) }
 
             // The composer shows the context gauge; read-only sessions have none.
-            if session.readOnly || session.status == .stopped, let context = session.context { ContextGauge(context: context) }
+            if session.readOnly || session.needsResume, let context = session.context { ContextGauge(context: context) }
             if session.can.backgroundCommands { BackgroundCommandsButton(store: store, session: session) }
             if session.hasSites { SitesButton(store: store, session: session) }
             Text(session.cost, format: .currency(code: "USD").precision(.fractionLength(2)))
@@ -74,21 +74,27 @@ struct SessionHeader: View {
                         Button("Rename…", action: rename)
                         Divider()
                     }
-                    Button("Compact Now") { store.compact() }
-                        .disabled(session.status.isBusy)
-                    if session.can.autoCompactionSwitch {
-                        Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                    if session.needsResume {
+                        Button("Resume Session") { store.resume() }
+                        Divider()
+                        Button("Copy Path") { Clipboard.copy(session.cwd) }
+                    } else {
+                        Button("Compact Now") { store.compact() }
+                            .disabled(session.status.isBusy)
+                        if session.can.autoCompactionSwitch {
+                            Toggle("Auto-compaction", isOn: Binding(get: { session.autoCompaction }, set: { store.setAutoCompaction($0) }))
+                        }
+                        if session.can.restartKernel {
+                            Button("Restart Python Kernel…") { restartingKernel = true }
+                        }
+                        Divider()
+                        if session.can.newSession {
+                            Button("New Session (same agent)") { store.newSession() }
+                        }
+                        Button("Copy Path") { Clipboard.copy(session.cwd) }
+                        Divider()
+                        Button("Stop Session", role: .destructive) { store.close() }
                     }
-                    if session.can.restartKernel {
-                        Button("Restart Python Kernel…") { restartingKernel = true }
-                    }
-                    Divider()
-                    if session.can.newSession {
-                        Button("New Session (same agent)") { store.newSession() }
-                    }
-                    Button("Copy Path") { Clipboard.copy(session.cwd) }
-                    Divider()
-                    Button("Stop Session", role: .destructive) { store.close() }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 13, weight: .semibold))

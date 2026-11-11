@@ -81,10 +81,10 @@ struct ComposerArea: View {
                 .frame(maxWidth: .infinity)
                 .padding(12)
                 .card(radius: 16)
-        } else if session.status == .stopped {
+        } else if session.needsResume {
             HStack {
                 AgentMark(agent: session.agent, size: 22, asleep: true)
-                Text("This session is stopped.").foregroundStyle(.secondary)
+                Text(session.status == .error ? "This session's agent exited." : "This session is stopped.").foregroundStyle(.secondary)
                 Spacer()
                 Button("Resume") { store.resume() }.buttonStyle(PrimaryButton())
             }

@@ -166,6 +166,7 @@ pub(crate) fn file_stem(path: Option<&str>) -> Option<&str> {
 pub fn capabilities(agent: &dyn Agent, read_only: bool) -> crate::protocol::Capabilities {
     if read_only {
         return crate::protocol::Capabilities {
+            resume: false,
             restart_kernel: false,
             clear_goal: false,
             new_session: false,
@@ -178,6 +179,7 @@ pub fn capabilities(agent: &dyn Agent, read_only: bool) -> crate::protocol::Capa
     }
     let verbs = agent.verbs();
     crate::protocol::Capabilities {
+        resume: matches!(agent.sessions(), Sessions::Started(_)),
         restart_kernel: verbs.restart_kernel(None).is_some(),
         clear_goal: verbs.clear_goal().is_some(),
         new_session: verbs.new_session().is_some(),
