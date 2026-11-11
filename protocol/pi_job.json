@@ -1,0 +1,20 @@
+{
+  "running": {
+    "id": "j1a2b3",
+    "command": "cargo test --locked",
+    "cwd": "/work/project",
+    "pid": 4242,
+    "startedAt": "2026-11-11T10:00:00.000Z",
+    "status": "running"
+  },
+  "finished": {
+    "id": "j1a2b3",
+    "command": "cargo test --locked",
+    "cwd": "/work/project",
+    "pid": 4242,
+    "startedAt": "2026-11-11T10:00:00.000Z",
+    "status": "finished",
+    "exitCode": 0,
+    "durationMs": 1250
+  }
+}

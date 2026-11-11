@@ -17,21 +17,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-interface Job {
-	id: string;
-	command: string;
-	cwd: string;
-	pid: number;
-	startedAt: string;
-	status: "running" | "finished";
-	/** Negative signal number when a signal ended it, as Prime reports (-15 for SIGTERM). */
-	exitCode?: number;
-	durationMs?: number;
-}
+import {
+	finishJobRecord,
+	formatDoneNotice,
+	type Job,
+	logFilePath,
+	saveJobRecord,
+	startJobRecord,
+	tailJobLog,
+} from "./records.ts";
 
 const DIR = process.env.AGENT_REMOTE_JOBS_DIR || path.join(os.homedir(), ".pi", "agent", "jobs", String(process.pid));
-const TAIL_LIMIT = 16 * 1024;
 
 const jobs = new Map<string, Job>();
 let ui: ExtensionContext["ui"] | undefined;
@@ -43,31 +39,15 @@ function showStatus() {
 }
 
 function save(job: Job) {
-	fs.mkdirSync(DIR, { recursive: true });
-	const file = path.join(DIR, `${job.id}.json`);
-	fs.writeFileSync(`${file}.tmp`, JSON.stringify(job));
-	fs.renameSync(`${file}.tmp`, file);
+	saveJobRecord(DIR, job);
 }
 
 function logPath(id: string) {
-	return path.join(DIR, `${id}.log`);
+	return logFilePath(DIR, id);
 }
 
-/** The last `lines` lines of a job's output, at most 16 KiB. */
 function tail(id: string, lines = 50): string {
-	let text = "";
-	try {
-		const fd = fs.openSync(logPath(id), "r");
-		const size = fs.fstatSync(fd).size;
-		const length = Math.min(size, TAIL_LIMIT);
-		const buffer = Buffer.alloc(length);
-		fs.readSync(fd, buffer, 0, length, size - length);
-		fs.closeSync(fd);
-		text = buffer.toString("utf8");
-	} catch {
-		return "";
-	}
-	return text.split("\n").slice(-Math.max(1, Math.min(lines, 500))).join("\n");
+	return tailJobLog(DIR, id, lines);
 }
 
 function find(id: string): Job {
@@ -123,28 +103,25 @@ export default function (pi: ExtensionAPI) {
 				child.once("error", (error) => console.error(`background job ${id}: ${error.message}`));
 				fs.closeSync(out);
 				if (child.pid === undefined) throw new Error(`Could not start: ${params.command}`);
-				const job: Job = {
+				const job = startJobRecord({
 					id,
 					command: params.command,
 					cwd,
 					pid: child.pid,
 					startedAt: new Date().toISOString(),
-					status: "running",
-				};
+				});
 				jobs.set(id, job);
 				save(job);
 				showStatus();
 				child.on("exit", (code, signal) => {
-					job.status = "finished";
-					job.exitCode = code ?? -(os.constants.signals[signal as NodeJS.Signals] ?? 0);
-					job.durationMs = Date.now() - Date.parse(job.startedAt);
+					const finished = finishJobRecord(job, code, signal, Date.now());
+					Object.assign(job, finished);
 					save(job);
 					showStatus();
-					const output = tail(id, 20).trim();
 					pi.sendMessage(
 						{
 							customType: "bash-done",
-							content: `[bash-done id:${id} pid:${job.pid} exit:${job.exitCode}]\n\nCommand: ${JSON.stringify(job.command)}${output ? `\n\n${output}` : ""}`,
+							content: formatDoneNotice(job, tail(id, 20)),
 							display: true,
 							details: job,
 						},

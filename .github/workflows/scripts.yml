@@ -6,10 +6,10 @@ name: scripts
 # for types: the packages they import are Pi's.
 on:
   pull_request:
-    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
+    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", "protocol/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
   push:
     branches: [main]
-    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
+    paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", "protocol/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
 
 concurrency:
   group: scripts-${{ github.ref }}
@@ -37,6 +37,8 @@ jobs:
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
       - name: TypeScript files parse
         run: git ls-files -z '*.ts' | xargs -0 node --no-warnings .github/scripts/ts-syntax.mjs
+      - name: Pi extension records match the shared fixtures
+        run: node --no-warnings --test setup/pi/extensions/records.test.mjs
       - name: The installer's JSON files parse
         run: git ls-files -z 'setup/*.json' 'setup/**/*.json' | xargs -0 -n1 python3 -m json.tool >/dev/null
       - name: The Open Codex patches are patches

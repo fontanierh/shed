@@ -492,7 +492,7 @@ impl Starts for Pi {
             // Where Pi's background-jobs extension keeps this session's jobs, for listing and cancelling them here.
             (
                 "AGENT_REMOTE_JOBS_DIR".to_string(),
-                crate::jobs::pi_dir(&opts.session_id)
+                crate::jobs::pi_dir(&self.0, &opts.session_id)
                     .to_string_lossy()
                     .into_owned(),
             ),

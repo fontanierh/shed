@@ -18,10 +18,8 @@ use crate::protocol::{BackgroundJob, JobStatus, WaitingOn};
 use crate::session::{parse_iso_ms, App, Backend, Session};
 
 /// Where a Pi session's background-jobs extension keeps its jobs.
-pub fn pi_dir(session_id: &str) -> PathBuf {
-    crate::host::home()
-        .join(".agent-remote/jobs")
-        .join(session_id)
+pub fn pi_dir(store: &crate::store::Store, session_id: &str) -> PathBuf {
+    store.dir().join("jobs").join(session_id)
 }
 
 /// Prime prefixes persistent shell ids so one list can hold both kinds.
@@ -369,7 +367,7 @@ impl App {
                 jobs
             }
             Some(JobsFrom::Files) => {
-                let mut jobs = pi_jobs(&session.id);
+                let mut jobs = pi_jobs(&self.store, &session.id);
                 mark_permission_prompts(&mut jobs, ProcessTree::snapshot().await.as_ref());
                 jobs
             }
@@ -424,9 +422,10 @@ impl App {
                     .to_string())
             }
             Some(JobsFrom::Files) => {
-                let log =
-                    std::fs::read(pi_dir(&session.id).join(format!("{}.log", safe_id(job_id)?)))
-                        .map_err(|_| anyhow!("This command is no longer available."))?;
+                let log = std::fs::read(
+                    pi_dir(&self.store, &session.id).join(format!("{}.log", safe_id(job_id)?)),
+                )
+                .map_err(|_| anyhow!("This command is no longer available."))?;
                 // At most 16 KiB, like Prime's tail.
                 let text = String::from_utf8_lossy(&log[log.len().saturating_sub(16 * 1024)..])
                     .into_owned();
@@ -486,7 +485,7 @@ impl App {
                 Ok(data["killed"].as_bool().unwrap_or(true))
             }
             Some(JobsFrom::Files) => {
-                let job = pi_jobs(&session.id)
+                let job = pi_jobs(&self.store, &session.id)
                     .into_iter()
                     .find(|job| job.id == job_id)
                     .ok_or_else(|| anyhow!("This command is no longer available."))?;
@@ -588,8 +587,8 @@ fn prime_job(a: &Value, prefix: &str) -> Option<BackgroundJob> {
 }
 
 /// A Pi job whose process is gone without a recorded exit (Pi was killed) is reported as lost.
-fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
-    let Ok(entries) = std::fs::read_dir(pi_dir(session_id)) else {
+fn pi_jobs(store: &crate::store::Store, session_id: &str) -> Vec<BackgroundJob> {
+    let Ok(entries) = std::fs::read_dir(pi_dir(store, session_id)) else {
         return Vec::new();
     };
     entries
@@ -633,8 +632,8 @@ fn pi_jobs(session_id: &str) -> Vec<BackgroundJob> {
 }
 
 /// A deleted session's job records and logs go with it.
-pub fn forget(session_id: &str) {
-    let dir = pi_dir(session_id);
+pub fn forget(store: &crate::store::Store, session_id: &str) {
+    let dir = pi_dir(store, session_id);
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => {}
         // A session that never ran a job has no folder.
@@ -645,8 +644,12 @@ pub fn forget(session_id: &str) {
 
 /// The running Pi jobs of a session, for the summary: how many, and the one stuck on a permission prompt or else
 /// the longest-running.
-pub fn pi_running(session_id: &str, tree: Option<&ProcessTree>) -> (u32, Option<WaitingOn>) {
-    let running: Vec<BackgroundJob> = pi_jobs(session_id)
+pub fn pi_running(
+    store: &crate::store::Store,
+    session_id: &str,
+    tree: Option<&ProcessTree>,
+) -> (u32, Option<WaitingOn>) {
+    let running: Vec<BackgroundJob> = pi_jobs(store, session_id)
         .into_iter()
         .filter(|job| job.status == JobStatus::Running)
         .collect();
@@ -670,6 +673,7 @@ pub fn pi_running(session_id: &str, tree: Option<&ProcessTree>) -> (u32, Option<
 fn alive(pid: u32) -> bool {
     std::process::Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
 }

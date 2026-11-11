@@ -32,6 +32,14 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.ts";
+import {
+	applySubagentLine,
+	buildSubagentDetails,
+	createSingleResult,
+	emptyUsage,
+	type SingleResult,
+	type SubagentDetails,
+} from "./records.ts";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -136,36 +144,7 @@ function formatToolCall(
 	}
 }
 
-interface UsageStats {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	cost: number;
-	contextTokens: number;
-	turns: number;
-}
 
-interface SingleResult {
-	agent: string;
-	agentSource: "user" | "project" | "unknown";
-	task: string;
-	exitCode: number;
-	messages: Message[];
-	stderr: string;
-	usage: UsageStats;
-	model?: string;
-	stopReason?: string;
-	errorMessage?: string;
-	step?: number;
-}
-
-interface SubagentDetails {
-	mode: "single" | "parallel" | "chain";
-	agentScope: AgentScope;
-	projectAgentsDir: string | null;
-	results: SingleResult[];
-}
 
 function getFinalOutput(messages: Message[]): string {
 	for (let i = messages.length - 1; i >= 0; i--) {
@@ -292,7 +271,7 @@ async function runSingleAgent(
 			exitCode: 1,
 			messages: [],
 			stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			usage: emptyUsage(),
 			step,
 		};
 	}
@@ -309,17 +288,13 @@ async function runSingleAgent(
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
 
-	const currentResult: SingleResult = {
+	const currentResult = createSingleResult({
 		agent: agentName,
 		agentSource: agent.source,
 		task,
-		exitCode: 0,
-		messages: [],
-		stderr: "",
-		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model,
 		step,
-	};
+	});
 
 	const emitUpdate = () => {
 		if (onUpdate) {
@@ -357,38 +332,7 @@ async function runSingleAgent(
 			let buffer = "";
 
 			const processLine = (line: string) => {
-				if (!line.trim()) return;
-				let event: any;
-				try {
-					event = JSON.parse(line);
-				} catch {
-					return;
-				}
-
-				if (event.type === "message_end" && event.message) {
-					const msg = event.message as Message;
-					currentResult.messages.push(msg);
-
-					if (msg.role === "assistant") {
-						currentResult.usage.turns++;
-						const usage = msg.usage;
-						if (usage) {
-							currentResult.usage.input += usage.input || 0;
-							currentResult.usage.output += usage.output || 0;
-							currentResult.usage.cacheRead += usage.cacheRead || 0;
-							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
-							currentResult.usage.contextTokens = usage.totalTokens || 0;
-						}
-						if (!currentResult.model && msg.model) currentResult.model = msg.model;
-						if (msg.stopReason) currentResult.stopReason = msg.stopReason;
-						if (msg.errorMessage) currentResult.errorMessage = msg.errorMessage;
-					}
-					emitUpdate();
-				}
-
-				if (event.type === "tool_result_end" && event.message) {
-					currentResult.messages.push(event.message as Message);
+				if (applySubagentLine(currentResult, line)) {
 					emitUpdate();
 				}
 			};
@@ -504,12 +448,8 @@ export default function (pi: ExtensionAPI) {
 
 			const makeDetails =
 				(mode: "single" | "parallel" | "chain") =>
-				(results: SingleResult[]): SubagentDetails => ({
-					mode,
-					agentScope,
-					projectAgentsDir: discovery.projectAgentsDir,
-					results,
-				});
+				(results: SingleResult[]): SubagentDetails =>
+					buildSubagentDetails(mode, agentScope, discovery.projectAgentsDir, results);
 
 			if (modeCount !== 1) {
 				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
