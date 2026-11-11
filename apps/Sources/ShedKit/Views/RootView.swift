@@ -21,6 +21,7 @@ public struct RootView: View {
             Group {
                 if let session = store.selected {
                     SessionView(store: store, session: session)
+                        .id(session.id)
                 } else if case .disconnected = store.connection {
                     Unreachable(store: store, showSettings: $showSettings)
                 } else {

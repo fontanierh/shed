@@ -108,7 +108,7 @@ struct PhoneSessionToolbar: ToolbarContent {
     }
 
     private var summary: String {
-        let cost = session.cost.formatted(.currency(code: "USD").precision(.fractionLength(2)))
+        let cost = store.cost(of: session).formatted(.currency(code: "USD").precision(.fractionLength(2)))
         return "\(session.agent.displayName) · \(cost) · \(session.folderName)"
     }
 

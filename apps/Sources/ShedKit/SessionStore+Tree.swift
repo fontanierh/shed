@@ -48,6 +48,10 @@ extension SessionStore {
 
     /// The session's spend with its subagents'. The bridge already counts Prime's subagents into their parent (they
     /// come and go, but its session file keeps their spending); Pi's and DeepSeek's are added here.
+    public func cost(of session: SessionSummary) -> Double {
+        Self.cost(of: session, in: sessions)
+    }
+
     static func cost(of session: SessionSummary, in sessions: [String: SessionSummary]) -> Double {
         guard !session.can.spendIncludesSubagents else { return session.cost }
         return sessions.values.filter { $0.parentId == session.id }.reduce(session.cost) { $0 + cost(of: $1, in: sessions) }

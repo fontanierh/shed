@@ -61,9 +61,10 @@ struct SessionHeader: View {
             if session.readOnly || session.needsResume, let context = session.context { ContextGauge(context: context) }
             if session.can.backgroundCommands { BackgroundCommandsButton(store: store, session: session) }
             if session.hasSites { SitesButton(store: store, session: session) }
-            Text(session.cost, format: .currency(code: "USD").precision(.fractionLength(2)))
+            let totalCost = store.cost(of: session)
+            Text(totalCost, format: .currency(code: "USD").precision(.fractionLength(2)))
                 .font(.system(size: 12.5).monospacedDigit())
-                .contentTransition(.numericText(value: session.cost))
+                .contentTransition(.numericText(value: totalCost))
                 .animation(.snappy, value: session.cost)
                 .pill()
                 .help("Cost of this session so far")

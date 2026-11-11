@@ -150,7 +150,7 @@ struct ToolDescription {
         if urls.count > 1, code.contains("gather") || code.contains("for ") {
             return .init(icon: "globe", title: "Fetched \(urls.count) pages", detail: Array(NSOrderedSet(array: urls.map(shortURL))).compactMap { $0 as? String }.joined(separator: ", "), language: "python")
         }
-        let line = code.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let line = code.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
             .first { !$0.isEmpty && !$0.hasPrefix("#") && !$0.hasPrefix("import ") && !$0.hasPrefix("from ") }
         return .init(icon: "chevron.left.forwardslash.chevron.right", title: "Ran Python", detail: line.map(oneLine), language: "python")
     }

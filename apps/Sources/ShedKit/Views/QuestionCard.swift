@@ -16,8 +16,13 @@ struct QuestionCard: View {
         question.questions.count == 1 && question.questions[0].multiSelect != true
     }
 
+    static func isComplete(questions: [AgentQuestion.Item], picked: [String: [String]]) -> Bool {
+        questions.contains { !($0.options ?? []).isEmpty }
+            && questions.allSatisfy { ($0.options ?? []).isEmpty || !(picked[$0.id] ?? []).isEmpty }
+    }
+
     private var complete: Bool {
-        question.questions.allSatisfy { !($0.options ?? []).isEmpty && !(picked[$0.id] ?? []).isEmpty }
+        Self.isComplete(questions: question.questions, picked: picked)
     }
 
     var body: some View {

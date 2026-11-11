@@ -22,7 +22,7 @@ final class FeedRow: Identifiable {
     /// The subagents the activity's steps started, in order.
     func spawned(_ activity: Activity) -> [SubagentMention] {
         activity.steps.flatMap { step in
-            let running = step.item.status == .running || step.item.status == .pending
+            let running = step.item.status?.isInFlight == true
             let names = spawnedBySettledStep[step.id] ?? ToolDescription(step.item).spawned
             if !running { spawnedBySettledStep[step.id] = names }
             return names.map { SubagentMention(name: $0, date: step.item.date, spawning: true, running: running) }
