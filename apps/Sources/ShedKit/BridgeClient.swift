@@ -14,9 +14,14 @@ public struct ConnectionLost: Error, Sendable {
     public let maybeDelivered: Bool
 }
 
-/// What the store asks of a connection, so a test can answer in its place.
+/// What the store asks of its connection to a computer, so a test can stand in for one.
 @MainActor
-protocol BridgeCalling: AnyObject {
+protocol BridgeConnection: AnyObject {
+    var onMessage: (ServerMessage) -> Void { get set }
+    var onState: (BridgeClient.State) -> Void { get set }
+    func connect(to url: URL)
+    func disconnect()
+    func checkAlive()
     /// Send an operation and wait for its reply; returns the raw reply JSON.
     @discardableResult
     func call(_ op: ClientOp) async throws -> Data
@@ -25,7 +30,7 @@ protocol BridgeCalling: AnyObject {
 struct Reply<T: Decodable>: Decodable { let data: T }
 
 @MainActor
-public final class BridgeClient: BridgeCalling {
+public final class BridgeClient: BridgeConnection {
     public enum State: Equatable, Sendable {
         case disconnected(String?)
         case connecting

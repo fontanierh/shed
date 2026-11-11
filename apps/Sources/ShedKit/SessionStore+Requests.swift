@@ -51,8 +51,8 @@ extension SessionStore {
         try JSONDecoder().decode(Reply<T>.self, from: try await call(env, op)).data
     }
 
-    private func client(_ env: String) throws -> any BridgeCalling {
-        guard let client = standIns[env] ?? clients[env] else { throw BridgeError("That computer is no longer in Shed") }
+    private func client(_ env: String) throws -> any BridgeConnection {
+        guard let client = clients[env] else { throw BridgeError("That computer is no longer in Shed") }
         return client
     }
 
@@ -91,7 +91,7 @@ extension SessionStore {
         // gives way to its parent. Any other failure (a bridge out of reach) says nothing about the subagent.
         if (error as? BridgeError)?.message == "session ended", let parent = sessions[id]?.parentId {
             ended.insert(id)
-            try? await Task.sleep(for: .milliseconds(1400))
+            await pause(.milliseconds(1400))
             if selectedId == id { select(sessions[parent] == nil ? nil : parent) }
             return
         }
@@ -151,13 +151,13 @@ extension SessionStore {
             do {
                 try await deliver(message, to: env) { [self] in
                     // The session's transcript, sent afresh on reconnecting, says whether it arrived after all.
-                    try? await Task.sleep(for: .seconds(2))
+                    await pause(.seconds(2))
                     let queued = sessions[id]?.queue
                     return busy ? (queued?.steering.contains(text) == true || queued?.followUp.contains(text) == true)
                                 : sending[id]?.contains { $0.id == local.id } != true
                 }
                 // Never echoed (it went to the queue after all): don't leave it sending forever.
-                try? await Task.sleep(for: .seconds(60))
+                await pause(.seconds(60))
                 sending[id]?.removeAll { $0.id == local.id }
             } catch {
                 sending[id]?.removeAll { $0.id == local.id }
