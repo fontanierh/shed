@@ -1,9 +1,7 @@
 name: scripts
 
 # The parts of Shed that are neither Rust nor Swift: the installer and what it installs, the DeepSeek Harness
-# plugins, Pi's extensions, the web module for Prime. Nothing here runs them. It checks that each file still parses,
-# and that the shell scripts have no error shellcheck is sure of. Pi's extensions are checked for syntax only, not
-# for types: the packages they import are Pi's.
+# plugins, Pi's extensions, the web module for Prime, and the Open Codex patches against the pinned version.
 on:
   pull_request:
     paths: ["**.sh", "**.mjs", "**.py", "**.ts", "setup/**", "protocol/**", ".github/scripts/**", ".github/workflows/scripts.yml"]
@@ -37,12 +35,22 @@ jobs:
         run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
       - name: TypeScript files parse
         run: git ls-files -z '*.ts' | xargs -0 node --no-warnings .github/scripts/ts-syntax.mjs
-      - name: Pi extension records match the shared fixtures
-        run: node --no-warnings --test setup/pi/extensions/records.test.mjs
+      - name: JavaScript and TypeScript unit tests
+        run: node --no-warnings --test setup/pi/extensions/records.test.mjs bridge/dsh/shed.test.mjs setup/lib/configure.test.mjs
+      - name: Python unit tests
+        run: python3 -m unittest discover -s bridge/python
       - name: The installer's JSON files parse
         run: git ls-files -z 'setup/*.json' 'setup/**/*.json' | xargs -0 -n1 python3 -m json.tool >/dev/null
-      - name: The Open Codex patches are patches
-        run: git ls-files -z '*.patch' | xargs -0 -n1 git apply --numstat
+      - name: The Open Codex patches apply to the pinned Open Codex version
+        run: |
+          ver="$(sed -n 's/^OPENCODEX_VERSION="\(.*\)"/\1/p' setup/install.sh)"
+          mkdir -p "$RUNNER_TEMP/ocx"
+          tarball="$(npm pack --quiet "@bitkyc08/opencodex@$ver" --pack-destination "$RUNNER_TEMP/ocx")"
+          tar -xzf "$RUNNER_TEMP/ocx/$tarball" -C "$RUNNER_TEMP/ocx"
+          for p in setup/opencodex/*.patch; do
+            git apply --numstat "$p"
+            patch -p1 --dry-run -s -f -d "$RUNNER_TEMP/ocx/package" <"$p"
+          done
 
   # The scripts run on macOS, whose /bin/bash is 3.2: what parses under the runner's bash 5 may not there (`|&`, `;&`).
   # Syntax only: a bash 4 builtin or option (`local -A`, `mapfile`) parses, and fails only when run.
