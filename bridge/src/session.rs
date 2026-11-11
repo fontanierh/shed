@@ -562,6 +562,13 @@ impl App {
         }
     }
 
+    /// The agent of a kind. Every kind a session can have is in the list: sessions are only made of listed kinds.
+    pub(crate) fn agent(&self, kind: AgentKind) -> &Arc<dyn crate::agent::Agent> {
+        self.agents
+            .get(kind)
+            .expect("a session's agent is one the bridge has")
+    }
+
     /// The models a session of this agent can start on.
     pub async fn list_models(&self, agent: AgentKind) -> Result<Value> {
         crate::rpc::list_models(&self.agents, agent).await
@@ -592,11 +599,13 @@ impl App {
         thinking: Option<String>,
     ) -> Result<SessionSummary> {
         let cwd = expand_dir(&cwd)?;
-        if agent == AgentKind::Prime {
-            let row = self
-                .prime
-                .create(&cwd, model.as_deref(), thinking.as_deref())
-                .await?;
+        // An agent that keeps its own sessions makes it, and it is taken in as its roster would announce it.
+        let kept = self
+            .agents
+            .get(agent)?
+            .create(cwd.clone(), model.clone(), thinking.clone());
+        if let Some(made) = kept {
+            let row = made.await?;
             let session = self.apply_prime_row(row).await;
             self.refresh(&session).await?;
             let summary = session.state.lock().await.summary.clone();

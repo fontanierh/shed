@@ -31,8 +31,9 @@ pub struct Script {
 /// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
 struct Scripted {
     script: Arc<Script>,
-    /// Who answers what the script does not: Prime's daemon, which no test has connected.
-    rest: Option<Arc<dyn Agent>>,
+    /// The agent it stands for: its ways are that agent's, and so is a session it keeps itself (Prime's daemon,
+    /// which no test has connected).
+    real: Arc<dyn Agent>,
 }
 
 struct ScriptedSession {
@@ -55,13 +56,34 @@ impl Agent for Scripted {
         Some(Arc::new(ScriptedSession {
             script: self.script.clone(),
             id: id.to_string(),
-            rest: self.rest.as_ref().and_then(|rest| rest.session(id)),
+            rest: self.real.session(id),
             absent: "session is not running",
         }))
     }
 
+    fn create(
+        &self,
+        cwd: String,
+        model: Option<String>,
+        thinking: Option<String>,
+    ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
+        self.real.create(cwd, model, thinking)
+    }
+
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
         Box::pin(async { Ok(json!([])) })
+    }
+
+    fn lists_own_jobs(&self) -> bool {
+        self.real.lists_own_jobs()
+    }
+
+    fn gateway_session(&self, file_name: &str) -> String {
+        self.real.gateway_session(file_name)
+    }
+
+    fn spend_includes_subagents(&self) -> bool {
+        self.real.spend_includes_subagents()
     }
 }
 
@@ -128,12 +150,11 @@ impl Rig {
         let limits = store.load_limits();
         let prime = PrimeDaemon::unconnected("test".into());
         let script = Arc::new(Script::default());
+        let installed = Agents::installed(prime.clone());
         let agents = Agents::of(AgentKind::iter().map(|kind| {
-            let rest = (kind == AgentKind::Prime)
-                .then(|| Agents::installed(prime.clone()).get(kind).unwrap().clone());
             let agent = Scripted {
                 script: script.clone(),
-                rest,
+                real: installed.get(kind).unwrap().clone(),
             };
             (kind, Arc::new(agent) as Arc<dyn Agent>)
         }));

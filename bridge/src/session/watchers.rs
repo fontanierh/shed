@@ -10,7 +10,6 @@ use serde_json::{json, Value};
 use super::{now_ms, App, Backend, Session, SessionState};
 use crate::agent_wire;
 use crate::protocol::{SessionStatus, Spend, WaitingOn};
-use crate::rpc::AgentKind;
 use crate::transcript::Transcript;
 
 /// What the stall check is told about a suspect target.
@@ -56,19 +55,16 @@ fn tool_code(item: &crate::protocol::Item) -> String {
         .unwrap_or(args)
 }
 
-/// The session id an agent sends Open Codex with its requests: Prime's own session id, dsh's session file id, and the
-/// id in a Pi session file's name (`<time>_<id>.jsonl`).
-fn agent_session_id(agent: AgentKind, st: &SessionState) -> Option<String> {
-    if agent == AgentKind::Prime {
-        let conversation = st.prime().and_then(|prime| prime.conversation.as_ref());
+/// The session id an agent sends Open Codex with its requests: Prime's own conversation id, and for the others what
+/// the agent makes of its session file's name.
+fn agent_session_id(agent: &dyn crate::agent::Agent, st: &SessionState) -> Option<String> {
+    if let Some(prime) = st.prime() {
+        let conversation = prime.conversation.as_ref();
         return conversation.map(|conversation| conversation.as_str().to_string());
     }
     let file = st.session_file.as_deref()?;
     let name = std::path::Path::new(file).file_stem()?.to_str()?;
-    Some(match agent {
-        AgentKind::Pi => name.rsplit('_').next().unwrap_or(name).to_string(),
-        _ => name.to_string(),
-    })
+    Some(agent.gateway_session(name))
 }
 
 impl App {
@@ -110,7 +106,7 @@ impl App {
                     s.clone(),
                     st.summary.parent_id.clone(),
                     working,
-                    agent_session_id(s.agent, &st),
+                    agent_session_id(self.agent(s.agent).as_ref(), &st),
                     gateway_model,
                 ));
             }
@@ -203,7 +199,9 @@ impl App {
                     let mut changed = false;
                     // Prime counts what its subagents spend into their parent; Pi's and dsh's add up in the apps.
                     let tally = own(member);
-                    let figure = if member.0.id == session.id && session.agent == AgentKind::Prime {
+                    let figure = if member.0.id == session.id
+                        && self.agent(session.agent).spend_includes_subagents()
+                    {
                         cost
                     } else {
                         tally.cost
@@ -248,8 +246,8 @@ impl App {
             // Also tells a command stuck on macOS's permission prompt, Pi's included.
             let tree = crate::jobs::ProcessTree::snapshot().await;
             for session in sessions {
-                // DeepSeek reports its own background commands as events.
-                if session.agent == AgentKind::Deepseek {
+                // An agent that lists its own background commands reports them as events.
+                if self.agent(session.agent).lists_own_jobs() {
                     continue;
                 }
                 let (jobs, waiting) = match session.backend {

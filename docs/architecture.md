@@ -112,6 +112,24 @@ The apps, in `apps/Sources/ShedKit`:
 
 Both sides' tests read the example messages in `protocol/`, so the Rust and Swift types for messages and operations can't drift apart without a test failing. Replies to operations are not covered.
 
+## Adding an agent
+
+An agent is one implementation of the `Agent` trait in `bridge/src/agent.rs`. The compiler asks for every answer below, so a new agent cannot take another's behaviour without saying so.
+
+1. Add a case to `AgentKind` in `bridge/src/rpc.rs`. The matches that list every agent (the guide's text in `guide.rs`, the `guide` command in `main.rs`) then fail to compile until the new one has its line.
+2. Implement `Agent` for it in `agent.rs`:
+   - `start`: the program, its arguments and its environment, handed to `RpcChild::spawn`. An agent that speaks Pi's JSONL protocol on its standard input and output needs nothing else. One that speaks its own needs a translator that implements `Live`, as `dsh.rs` is for DeepSeek Harness.
+   - `models`: the models a session can start on.
+   - `lists_own_jobs`, `gateway_session`, `spend_includes_subagents`: how it differs in background commands and in what Open Codex counts.
+   - An agent that keeps its sessions in its own daemon, as Prime does, implements `create` and `session` instead of `start`. It also needs the code that follows its roster, which today is written for Prime only (`session/prime.rs`).
+3. List it in `Agents::installed`.
+4. In the apps, add the case to `AgentKind` in `apps/Sources/ShedKit/Protocol.swift`. The compiler then points at its name, its colour and its card in the new-session sheet. A handful of views still ask "is this Prime?" or "is this DeepSeek?" to show or hide a feature (goals, automatic compaction, background commands): check each for the new agent.
+5. Give it its install step in `setup/` and, with Open Codex, its catalogue in `opencodex.rs`.
+
+The tests need nothing: they run every kind of agent through a scripted one that implements the same traits.
+
+What stays outside the trait: what an agent's events mean (`agent_wire.rs` reads Pi's vocabulary, which DeepSeek Harness is translated into), subagents (`session/subagents.rs`), and whether a session is a process here, a session in Prime's daemon or a read-only subagent (`Backend` in `session.rs`).
+
 ## Setup
 
 `setup/install.sh` provisions a Mac and can be run again at any time: Open Codex with your API keys and subscriptions, and Shed's fixes it hasn't released yet (`setup/opencodex`); Pi, Prime Agent and DeepSeek Harness at their latest versions; Pi's subagent and background-jobs extensions (`setup/pi`); the bridge as a launchd service; the Mac app; and the `tailscale serve` publication. With `--no-opencodex`, Pi and Prime get the keys directly, and the model definitions their catalogs lack come from `setup/pi/models.json` and `setup/prime/models.json`. `setup/sync-remote.sh` keeps the bridge on another Mac in step with a checkout, and `setup/uninstall.sh` removes the service, the publication, the routes of published sites, the sync agents and the app, and nothing of the agents or Open Codex.
