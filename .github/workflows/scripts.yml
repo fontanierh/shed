@@ -1,0 +1,32 @@
+name: scripts
+
+# The parts of Shed that are neither Rust nor Swift: the installer, the DeepSeek Harness plugins, the web module for
+# Prime. Nothing here runs them. It checks that each file still parses, and that the shell scripts have no error
+# shellcheck is sure of.
+on:
+  pull_request:
+    paths: ["**.sh", "**.mjs", "**.py", ".github/workflows/scripts.yml"]
+  push:
+    branches: [main]
+    paths: ["**.sh", "**.mjs", "**.py", ".github/workflows/scripts.yml"]
+
+concurrency:
+  group: scripts-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shell scripts parse
+        run: git ls-files -z '*.sh' | xargs -0 -n1 bash -n
+      - name: Shell scripts have no certain error
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck --severity=error
+      - name: JavaScript modules parse
+        run: git ls-files -z '*.mjs' | xargs -0 -n1 node --check
+      - name: Python files parse
+        run: git ls-files -z '*.py' | xargs -0 python3 -m py_compile
