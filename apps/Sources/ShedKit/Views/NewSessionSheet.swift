@@ -195,12 +195,9 @@ struct NewSessionSheet: View {
 
             VStack(alignment: .leading, spacing: 24) {
                 HStack(spacing: 14) {
-                    AgentCard(kind: .prime, selected: agent == .prime,
-                              detail: "Python REPL agent. Asynchronous subagents keep working in the background.") { agent = .prime }
-                    AgentCard(kind: .pi, selected: agent == .pi,
-                              detail: "Minimal coding agent with file and shell tools. Subagents run in sequence.") { agent = .pi }
-                    AgentCard(kind: .deepseek, selected: agent == .deepseek,
-                              detail: "DeepSeek Harness. Subagents and background commands on DeepSeek's models.") { agent = .deepseek }
+                    ForEach(AgentKind.cards) { kind in
+                        AgentCard(kind: kind, selected: agent == kind, detail: kind.cardDetail) { agent = kind }
+                    }
                 }
 
                 section("Folder", note: "Double-click or › to open a folder") {
@@ -320,12 +317,9 @@ struct NewSessionSheet: View {
                         }
                     }
                     VStack(spacing: 10) {
-                        AgentCard(kind: .prime, selected: agent == .prime,
-                                  detail: "Python REPL agent. Asynchronous subagents keep working in the background.") { agent = .prime }
-                        AgentCard(kind: .pi, selected: agent == .pi,
-                                  detail: "Minimal coding agent with file and shell tools. Subagents run in sequence.") { agent = .pi }
-                        AgentCard(kind: .deepseek, selected: agent == .deepseek,
-                                  detail: "DeepSeek Harness. Subagents and background commands on DeepSeek's models.") { agent = .deepseek }
+                        ForEach(AgentKind.cards) { kind in
+                            AgentCard(kind: kind, selected: agent == kind, detail: kind.cardDetail) { agent = kind }
+                        }
                     }
 
                     section("Folder") {
@@ -873,3 +867,16 @@ struct PhoneFolderPicker: View {
     }
 }
 #endif
+
+private extension AgentKind {
+    /// Every agent has a card: Prime first, then the others as they are listed.
+    static var cards: [AgentKind] { [.prime] + allCases.filter { $0 != .prime } }
+
+    var cardDetail: String {
+        switch self {
+        case .prime: "Python REPL agent. Asynchronous subagents keep working in the background."
+        case .pi: "Minimal coding agent with file and shell tools. Subagents run in sequence."
+        case .deepseek: "DeepSeek Harness. Subagents and background commands on DeepSeek's models."
+        }
+    }
+}

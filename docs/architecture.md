@@ -78,6 +78,7 @@ The bridge, in `bridge/src`:
 | `server.rs` | The WebSocket endpoint: one connection per app, and the sessions it is attached to. |
 | `agent.rs` | What the bridge asks of an agent: the `Agent` trait (start a session, list models), the `Live` trait (a running session: send a command, close) and the list of agents the bridge has. The tests run the session code against a scripted agent that implements the same two traits. |
 | `rpc.rs`, `dsh.rs`, `prime.rs` | One driver per agent: a Pi process, a DeepSeek Harness process made to speak Pi's protocol, and the connection to Prime's daemon. |
+| `requests.rs` | Matching an agent's answers to what it was asked, with a time limit on every request. The three drivers use it. |
 | `agent_wire.rs` | Everything an agent tells the bridge about a session, read into the bridge's own types. |
 | `transcript.rs` | Turns an agent's messages and streaming events into the flat list of transcript items. |
 | `session.rs` | The sessions themselves: the list, starting and stopping, and what each agent event does to a session. |
@@ -98,7 +99,7 @@ The rules the bridge keeps to:
 - **Data from outside is read once, where it arrives.** What an agent says about a session becomes a typed value in `agent_wire.rs`, by a `read` function written by hand, and the session code works with those types only. `opencodex.rs` and `web.rs` do the same for their two services. The readers are forgiving on purpose: a field that is missing or has the wrong type reads as absent, because the agents change between releases. `config.json` is read the same way, field by field, in `store.rs`; but a file that can't be read at all, or isn't a JSON object, is not an empty one: the bridge doesn't start on it, and one that breaks while the bridge runs changes nothing until it is mended (the bridge keeps the settings it last read, and logs the failure once). Not everything follows the rule yet. The drivers (`dsh.rs`, `prime.rs`, `rpc.rs`), `transcript.rs`, `jobs.rs`, `github.rs`, `history.rs`, `cost.rs`, `store.rs`, `sites.rs` and `stall.rs` still pick fields out of JSON in their own code, and a question an agent asks is passed to the apps as it came.
 - **Each kind of session keeps its own state.** `BackendState` has one case for a Pi or DeepSeek Harness process, one for a Prime session and one for a Pi subagent, and most code that does something different for each kind matches on all of them. It is not complete: about thirty yes-or-no checks are plain comparisons, and DeepSeek Harness, its subagents and Prime's subagents have no case of their own (a DeepSeek Harness session is a Pi one with a different `agent`).
 - **An error is handled, logged, or dropped with a stated reason.** The linter rejects `let _ = …` and a bare `.ok();` on a result, and a result dropped on purpose carries an `#[expect]` with its reason. A send to a channel nobody listens to any more is written `offer` (`channel.rs`). The linter does not see every form: `.ok()` in the middle of a chain, `unwrap_or_default()` and `if let Ok` can still drop an error unlogged.
-- **Behaviour is pinned.** `session/tests.rs` feeds each agent's events and malformed ones to the session code, with no agent running, and compares everything the apps would receive with the files in `session/pins/`. It covers what events do to a session and eight of the operations an app can ask for. Starting, stopping and attaching a session, and `server.rs`, have no test. A change that only moves code must leave those files as they are.
+- **Behaviour is pinned.** `session/tests.rs` feeds each agent's events and malformed ones to the session code, with no agent running, and compares everything the apps would receive with the files in `session/pins/`. It covers what events do to a session and eight of the operations an app can ask for. Resuming and creating a session and sending a message have tests of their own against a scripted agent. Closing, deleting and attaching a session, and `server.rs`, have none. A change that only moves code must leave those files as they are.
 
 The apps, in `apps/Sources/ShedKit`:
 
@@ -114,21 +115,33 @@ Both sides' tests read the example messages in `protocol/`, so the Rust and Swif
 
 ## Adding an agent
 
-An agent is one implementation of the `Agent` trait in `bridge/src/agent.rs`. The compiler asks for every answer below, so a new agent cannot take another's behaviour without saying so.
+An agent is one implementation of the `Agent` trait in `bridge/src/agent.rs`. The compiler asks for part of what a new agent needs and the rest is by hand; the two lists below say which is which. As the code stands, a new agent that speaks Pi's protocol is a day's work, and one that speaks its own is a new driver.
 
-1. Add a case to `AgentKind` in `bridge/src/rpc.rs`. The matches that list every agent (the guide's text in `guide.rs`, the `guide` command in `main.rs`) then fail to compile until the new one has its line.
-2. Implement `Agent` for it in `agent.rs`:
-   - `start`: the program, its arguments and its environment, handed to `RpcChild::spawn`. An agent that speaks Pi's JSONL protocol on its standard input and output needs nothing else. One that speaks its own needs a translator that implements `Live`, as `dsh.rs` is for DeepSeek Harness.
-   - `models`: the models a session can start on.
-   - `lists_own_jobs`, `gateway_session`, `spend_includes_subagents`: how it differs in background commands and in what Open Codex counts.
-   - An agent that keeps its sessions in its own daemon, as Prime does, implements `create` and `session` instead of `start`. It also needs the code that follows its roster, which today is written for Prime only (`session/prime.rs`).
-3. List it in `Agents::installed`.
-4. In the apps, add the case to `AgentKind` in `apps/Sources/ShedKit/Protocol.swift`. The compiler then points at its name, its colour and its card in the new-session sheet. A handful of views still ask "is this Prime?" or "is this DeepSeek?" to show or hide a feature (goals, automatic compaction, background commands): check each for the new agent.
-5. Give it its install step in `setup/` and, with Open Codex, its catalogue in `opencodex.rs`.
+**What the compiler asks for.** Add a case to `AgentKind` in `bridge/src/rpc.rs` and to `AgentKind` in `apps/Sources/ShedKit/Protocol.swift`. Neither side builds until the new agent has:
 
-The tests need nothing: they run every kind of agent through a scripted one that implements the same traits.
+- its guide text in `bridge/src/guide.rs`;
+- its place in `Agents` in `agent.rs` (a field, and its line in `installed`, `of` and `get`), which needs an implementation of `Agent`;
+- in that implementation, the four answers without a default: `models` (what a session can start on), `lists_own_jobs`, `gateway_session` and `spend_includes_subagents`;
+- in the apps, its name (`Protocol.swift`), its colour (`Views/Theme.swift`), its glyph (`Views/Atmosphere.swift`) and the line on its card in the new-session sheet (`Views/NewSessionSheet.swift`).
 
-What stays outside the trait: what an agent's events mean (`agent_wire.rs` reads Pi's vocabulary, which DeepSeek Harness is translated into), subagents (`session/subagents.rs`), and whether a session is a process here, a session in Prime's daemon or a read-only subagent (`Backend` in `session.rs`).
+The `agent-remote guide <agent>` command and the cards in the new-session sheet follow the list of agents, so they need nothing.
+
+**What the compiler does not ask for.** Each of these is silent: leave it out and the new agent gets another agent's behaviour, or none.
+
+- *How its sessions come about.* `start`, `session` and `create` all have defaults. An agent the bridge runs as a process implements `start`: the program, its arguments and its environment, handed to `RpcChild::spawn`. One that keeps its sessions in its own daemon, as Prime does, implements `create` and `session`, and needs code that follows its roster, which is written for Prime only (`session/prime.rs`, and `create` returns Prime's roster row). An agent that implements none of the three compiles, and fails when a session is made.
+- *Its protocol.* `RpcChild` speaks Pi's JSONL protocol on standard input and output. DeepSeek Harness does not implement `Live` on its own: it is a second protocol inside `RpcChild` (`Protocol::Dsh`, translated by `dsh.rs`). An agent with a third protocol needs the same treatment or its own `Live`.
+- *Everything that follows from being a started session.* Every session the bridge starts is a `Backend::Pi` one, whatever its agent. It is prompted or steered as Pi is, compacts as Pi does, has no goals and no kernel, is stopped as Pi is, and its cost and thinking levels are read as Pi's (`session/commands.rs`, `session/context.rs`). It is given Pi's guide file and the `AGENT_REMOTE_GUIDE` and `AGENT_REMOTE_JOBS_DIR` variables (`session.rs`).
+- *Background commands.* With `lists_own_jobs` false, the bridge reads the folder Pi's background-jobs extension writes; with true, it sends the DeepSeek plugin's commands (`dsh_jobs`, `dsh_job_output`, `dsh_kill_job`). A new agent fits one of the two or `jobs.rs` needs a third way.
+- *Events.* `agent_wire.rs` reads Pi's vocabulary, and jobs, questions and subagents from events named `dsh_…`. Answering a question sends `dsh_answer` whatever the agent (`server.rs`).
+- *Subagents.* `session/subagents.rs` labels the child sessions it makes as Pi's or DeepSeek's.
+- *Models.* `rpc::listed_models` parses the table Pi and Prime print. With Open Codex, the catalogue is written to a hand-kept list of folders in `opencodex.rs`.
+- *Time limits.* Only `compact` gets the long limit (`rpc.rs`).
+- *Error texts* that say "Pi" to any started session (`session.rs`).
+- *Tests.* The scripted agent stands in for every kind, but `protocol/server_messages.json` lists the agents and fails both sides' tests until it is written again with `UPDATE_FIXTURES=1`, and the commands pin lists the kinds it covers by hand (`session/tests.rs`), so a new agent has no pin until it is added there.
+- *The apps' features.* These compare with one agent and need a look each: `hasBackgroundCommands` and `controlsAutoCompaction` in `Protocol.swift`; the default models and the split of models by name in `Views/NewSessionSheet.swift`; goals and the header in `Views/SessionHeader.swift`, `Views/PhoneSessionToolbar.swift` and `Views/SessionView.swift`; the empty list in `Views/BackgroundCommands.swift`; the cost on the lock screen in `Views/LiveActivity.swift`.
+- *Setup.* Its install step in `setup/`.
+
+**Order of release.** The apps go first. An app from before the new agent leaves its sessions out of the list, and a bridge from before it cannot read a `sessions.json` that holds one of its sessions and sets the whole file aside. So: ship the apps, then the bridge, and do not go back to an older bridge once a session of the new agent is saved.
 
 ## Setup
 

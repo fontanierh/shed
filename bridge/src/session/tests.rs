@@ -7,7 +7,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use strum::IntoEnumIterator;
 
 use super::*;
 use crate::agent::{Agent, Started};
@@ -26,6 +25,8 @@ pub struct Script {
     starts: std::sync::atomic::AtomicUsize,
     closes: std::sync::atomic::AtomicUsize,
     slow_start: std::sync::Mutex<Duration>,
+    /// The session an agent that keeps its own makes when asked, as its roster would list it.
+    made: std::sync::Mutex<Option<Value>>,
     /// How long an answer takes, once it is decided.
     slow_answer: std::sync::Mutex<Duration>,
 }
@@ -69,7 +70,11 @@ impl Agent for Scripted {
         model: Option<String>,
         thinking: Option<String>,
     ) -> Option<BoxFuture<'_, Result<PrimeRow>>> {
-        self.real.create(cwd, model, thinking)
+        let made = self.script.made.lock().unwrap().clone();
+        match made.as_ref().and_then(PrimeRow::read) {
+            Some(row) => Some(Box::pin(async move { Ok(row) })),
+            None => self.real.create(cwd, model, thinking),
+        }
     }
 
     fn models(&self) -> BoxFuture<'_, Result<Value>> {
@@ -158,13 +163,12 @@ impl Rig {
         let prime = PrimeDaemon::unconnected("test".into());
         let script = Arc::new(Script::default());
         let installed = Agents::installed(prime.clone());
-        let agents = Agents::of(AgentKind::iter().map(|kind| {
-            let agent = Scripted {
+        let agents = Agents::of(|kind| {
+            Arc::new(Scripted {
                 script: script.clone(),
-                real: installed.get(kind).unwrap().clone(),
-            };
-            (kind, Arc::new(agent) as Arc<dyn Agent>)
-        }));
+                real: installed.get(kind).clone(),
+            })
+        });
         let app = App::assemble(store, prime, limits, agents).unwrap();
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(app.clone().run_prime(rx));
@@ -1496,5 +1500,21 @@ async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
         .filter(|asked| asked["command"] == "prompt")
         .count();
     assert_eq!(prompts, 2);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Once the agent has made the session, creating it has succeeded: failing to read its state then is not an error to
+/// answer with, since trying again would make a second one.
+#[tokio::test(start_paused = true)]
+async fn a_session_its_agent_made_is_answered_even_if_reading_it_fails() {
+    let rig = Rig::new("create-kept", &[]);
+    *rig.agents.made.lock().unwrap() = Some(prime_row("p1", json!({})));
+    let made = rig
+        .app
+        .create_session(AgentKind::Prime, "/tmp".into(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(made.id, "p1");
+    assert_eq!(rig.app.sessions.read().await.len(), 1);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }

@@ -46,6 +46,7 @@ impl App {
     ) -> Result<Value> {
         // One message with a send id at a time: a repeat that arrives while the first copy is still with the agent
         // waits here, and then finds the id kept (taken) or forgotten (refused, so this copy goes).
+        // The server runs each operation as its own task, so a send is not cut short when its connection goes.
         let _sending = match &send_id {
             Some(_) => Some(session.sending.lock().await),
             None => None,
