@@ -13,7 +13,7 @@ final class SessionStreamingTests: XCTestCase {
     }
 
     @MainActor func testSelectedSessionTransitionsAndItemsCommitText() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.select("test:reply")
         store.apply(.session(summary("reply")), from: "test")
         store.apply(.snapshot(sessionId: "reply", items: [Item(id: "text", kind: .text, text: "Start ")], earlier: 0), from: "test")
@@ -41,7 +41,7 @@ final class SessionStreamingTests: XCTestCase {
     }
 
     @MainActor func testThousandDeltaBurstStaysBatched() async {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.select("test:reply")
         store.apply(.session(summary("reply")), from: "test")
         store.apply(.snapshot(sessionId: "reply", items: [Item(id: "text", kind: .text, text: "Start ")], earlier: 0), from: "test")
@@ -63,7 +63,7 @@ final class SessionStreamingTests: XCTestCase {
     }
 
     @MainActor func testForcedFlushCancelsReadyTimer() {
-        let store = SessionStore()
+        let store = SessionStore(defaults: scratchDefaults())
         store.select("test:reply")
         store.apply(.session(summary("reply")), from: "test")
         store.apply(.snapshot(sessionId: "reply", items: [Item(id: "text", kind: .text, text: "Start ")], earlier: 0), from: "test")

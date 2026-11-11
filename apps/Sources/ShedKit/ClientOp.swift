@@ -84,6 +84,14 @@ enum ClientOp: Sendable {
         }
     }
 
+    /// It only asks, and changes nothing on the bridge.
+    var reads: Bool {
+        switch name {
+        case .ping, .listModels, .listJobs, .jobOutput, .loadEarlier, .listAgentModels, .listDir, .gitBranch, .githubOverview: true
+        default: false
+        }
+    }
+
     /// The message that asks for it, under the id its reply will carry.
     func message(id: String) throws -> String {
         var (name, payload) = wire

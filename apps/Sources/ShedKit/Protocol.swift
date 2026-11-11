@@ -37,6 +37,44 @@ public struct Item: Codable, Identifiable, Equatable, Sendable {
     public var date: Date? { at.map { Date(timeIntervalSince1970: $0 / 1000) } }
 }
 
+extension Item {
+    static let unreadableText = "This version of Shed can't show this part of the conversation."
+
+    /// The note that stands for an item this app cannot read, in its place. It keeps the item's id when that could
+    /// be read, so what the bridge sends about the item later is recognised as being about it.
+    static func unreadable(id: String?) -> Item {
+        Item(id: id ?? "unreadable-\(UUID().uuidString)", kind: .note, text: unreadableText)
+    }
+
+    var isUnreadable: Bool { kind == .note && text == Self.unreadableText }
+}
+
+/// An item from the bridge, or the note standing for it: a bridge newer than the app may send a kind of item, or a
+/// value in one, that the app does not know.
+private struct Shown: Decodable {
+    let item: Item
+
+    private enum Keys: CodingKey { case id }
+
+    init(from decoder: Decoder) {
+        do {
+            item = try Item(from: decoder)
+        } catch {
+            NSLog("Shed: an item from the bridge couldn't be read: %@", String(describing: error))
+            item = .unreadable(id: try? decoder.container(keyedBy: Keys.self).decode(String.self, forKey: .id))
+        }
+    }
+}
+
+/// A list of items from the bridge, each one read on its own.
+struct ShownItems: Decodable {
+    let items: [Item]
+
+    init(from decoder: Decoder) throws {
+        items = try decoder.singleValueContainer().decode([Shown].self).map(\.item)
+    }
+}
+
 /// A conversation's mention of a subagent: a call that started it, its report, its exit.
 public struct SubagentMention: Equatable, Sendable {
     public var name: String
@@ -318,6 +356,14 @@ public struct EarlierItems: Decodable, Sendable {
     public let items: [Item]
     /// Older items still left out.
     public let earlier: Int
+
+    private enum CodingKeys: CodingKey { case items, earlier }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        items = try c.decode(ShownItems.self, forKey: .items).items
+        earlier = try c.decode(Int.self, forKey: .earlier)
+    }
 }
 
 /// Messages pushed by the bridge (replies are handled by `BridgeClient`).
@@ -331,9 +377,10 @@ public enum ServerMessage: Sendable {
     case itemPatch(sessionId: String, itemId: String, set: ItemSet?, append: ItemAppend?)
 }
 
-/// What can be read of a list: one session the app can't decode must not hide all the others.
-private struct Readable<Value: Decodable>: Decodable {
+/// What can be read of a list: one element the app can't decode must not hide all the others.
+struct Readable<Value: Decodable>: Decodable {
     var values: [Value] = []
+    var skipped = 0
 
     private struct Skipped: Decodable {}
 
@@ -343,9 +390,10 @@ private struct Readable<Value: Decodable>: Decodable {
             do {
                 values.append(try list.decode(Value.self))
             } catch {
-                NSLog("Shed: a %@ in a list from the bridge couldn't be read: %@", String(describing: Value.self), String(describing: error))
+                NSLog("Shed: a %@ in a list couldn't be read: %@", String(describing: Value.self), String(describing: error))
                 // A failed decode leaves the list where it was: step over the element.
                 _ = try list.decode(Skipped.self)
+                skipped += 1
             }
         }
     }
@@ -363,10 +411,12 @@ extension ServerMessage: Decodable {
         case "session": self = .session(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(try c.decode(String.self, forKey: .sessionId))
         case "snapshot":
-            self = .snapshot(sessionId: try c.decode(String.self, forKey: .sessionId), items: try c.decode([Item].self, forKey: .items),
+            self = .snapshot(sessionId: try c.decode(String.self, forKey: .sessionId),
+                             items: try c.decode(ShownItems.self, forKey: .items).items,
                              earlier: try c.decodeIfPresent(Int.self, forKey: .earlier) ?? 0)
         case "item_add":
-            self = .itemAdd(sessionId: try c.decode(String.self, forKey: .sessionId), item: try c.decode(Item.self, forKey: .item))
+            self = .itemAdd(sessionId: try c.decode(String.self, forKey: .sessionId),
+                            item: (try? c.decode(Shown.self, forKey: .item))?.item ?? .unreadable(id: nil))
         case "item_patch":
             self = .itemPatch(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
