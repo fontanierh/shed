@@ -958,6 +958,13 @@ where
 }
 
 /// A session's summary and the rest of what the bridge keeps from the agent's messages.
+///
+/// Four of these never leave the bridge: `named`, `levelsFor`, `toolCalls`, `rosterMark`. They are pinned on
+/// purpose. Each is the only place a field of the agent's message shows at once (a roster row's activity and
+/// message count, its running tools, the model the levels were read for); what they later cause (a refresh, a
+/// stall notice, a title left alone) comes steps or minutes after. Without them a malformed value in those fields
+/// reads the same as a good one in every pin. The cost is that renaming or reshaping this bookkeeping changes the
+/// pins though nothing an app sees does: such a diff must touch these four keys and nothing else.
 async fn kept(rig: &Rig, session: &Session) -> Value {
     let st = session.state.lock().await;
     let mut kept = json!({
