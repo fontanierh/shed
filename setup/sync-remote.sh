@@ -80,17 +80,10 @@ if [ -n "${1:-}" ]; then
 else
   cargo build --release --quiet
 fi
-for extension in subagent background-jobs; do
-  rm -rf ~/.pi/agent/extensions/$extension
-  cp -R "$src/setup/pi/extensions/$extension" ~/.pi/agent/extensions/$extension
-done
-cp "$src"/setup/pi/agents/*.md ~/.pi/agent/agents/
-cp "$src"/setup/pi/prompts/*.md ~/.pi/agent/prompts/
 # The Node on the PATH, or the one Pi brought, as install.sh finds it.
 node="$(command -v node || echo "$HOME/.local/share/pi-node/current/bin/node")"
-"$node" "$src/setup/lib/configure.mjs" prime-models "$src/setup/prime/models.json" ~/.prime/agent/models.json >/dev/null
-"$node" "$src/setup/lib/configure.mjs" pi-models "$src/setup/pi/models.json" ~/.pi/agent/models.json >/dev/null
-"$node" "$src/setup/lib/configure.mjs" bridge-defaults "$src/setup/bridge-defaults.json" ~/.agent-remote/config.json >/dev/null
+# The same list install.sh applies.
+"$src/setup/lib/agent-files.sh" "$src/setup" "$node" >/dev/null
 # The same code signed again differs only in its signing time: compare the code's hash.
 cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
 new="$(cdhash target/release/agent-remote)"

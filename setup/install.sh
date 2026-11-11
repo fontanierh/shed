@@ -196,22 +196,11 @@ else
   configure default-model "$HOME/.prime/agent/settings.json" opencodex "$terra" medium
   configure opencodex "$HOME/.agent-remote/config.json" on
 fi
-# Prime's model catalog doesn't list GPT-6.1 Terra or Claude Haiku 5.5 yet. Both agents get its full 1M window; the bridge holds
-# sessions to 272k (the standard price) unless one picks a larger window.
-configure prime-models "$ROOT/setup/prime/models.json" "$HOME/.prime/agent/models.json"
-configure pi-models "$ROOT/setup/pi/models.json" "$HOME/.pi/agent/models.json"
-configure bridge-defaults "$ROOT/setup/bridge-defaults.json" "$HOME/.agent-remote/config.json"
+# The model lists, the bridge's defaults, and Pi's extensions, agents and prompts: the same list sync-remote.sh
+# applies on another Mac.
+"$ROOT/setup/lib/agent-files.sh" "$ROOT/setup" "$NODE"
 # Web search and page reading for every agent, through the bridge's shed-web command.
 configure web "$HOME/.agent-remote/config.json"
-# Pi's subagent extension (from Pi's examples) and its agents, which inherit the parent's model, plus background
-# commands like Prime's. Both load in Pi's own TUI too.
-mkdir -p "$HOME/.pi/agent/extensions" "$HOME/.pi/agent/agents" "$HOME/.pi/agent/prompts"
-for extension in subagent background-jobs; do
-  rm -rf "$HOME/.pi/agent/extensions/$extension"
-  cp -R "$ROOT/setup/pi/extensions/$extension" "$HOME/.pi/agent/extensions/$extension"
-done
-cp "$ROOT"/setup/pi/agents/*.md "$HOME/.pi/agent/agents/"
-cp "$ROOT"/setup/pi/prompts/*.md "$HOME/.pi/agent/prompts/"
 note "installed Pi's subagent and background-jobs extensions, agents and prompts"
 
 step "Bridge"
@@ -223,14 +212,19 @@ fi
 identity="$("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/release/agent-remote")"
 note "signed with $identity"
 mkdir -p "$HOME/.agent-remote/bin" "$HOME/.agent-remote/logs"
+# The same code signed again differs only in its signing time: the code's hash says whether the bridge changed.
+cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
+installed_code="$(cdhash "$HOME/.agent-remote/bin/agent-remote")"
 install -m 755 "$ROOT/bridge/target/release/agent-remote" "$HOME/.agent-remote/bin/agent-remote"
+new_code="$(cdhash "$HOME/.agent-remote/bin/agent-remote")"
 note "installed ~/.agent-remote/bin/agent-remote"
 
 if [ "$SERVICE" = 1 ]; then
   plist="$HOME/Library/LaunchAgents/$LABEL.plist"
   mkdir -p "$(dirname "$plist")"
   # The bridge spawns pi and starts Prime's daemon, so it needs the PATH the agents were installed with.
-  cat > "$plist" <<PLIST
+  wanted="$(mktemp)"
+  cat > "$wanted" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -256,8 +250,17 @@ if [ "$SERVICE" = 1 ]; then
 </dict>
 </plist>
 PLIST
-  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$plist"
+  # Restarted only when something changed: a restart ends every Pi and DeepSeek turn in progress, and a rerun of the
+  # installer for one setting should not.
+  if [ -n "$new_code" ] && [ "$new_code" = "$installed_code" ] && cmp -s "$wanted" "$plist" \
+    && launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+    rm -f "$wanted"
+    note "bridge unchanged, left running"
+  else
+    mv "$wanted" "$plist"
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$plist"
+  fi
   for _ in $(seq 1 20); do
     curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1 && break
     sleep 0.5
