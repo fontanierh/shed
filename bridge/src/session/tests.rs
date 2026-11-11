@@ -26,6 +26,8 @@ pub struct Script {
     starts: std::sync::atomic::AtomicUsize,
     closes: std::sync::atomic::AtomicUsize,
     slow_start: std::sync::Mutex<Duration>,
+    /// How long an answer takes, once it is decided.
+    slow_answer: std::sync::Mutex<Duration>,
 }
 
 /// Stands in for an agent of any kind: its sessions answer from the script, and are no process.
@@ -107,7 +109,12 @@ impl Live for ScriptedSession {
                 .lock()
                 .unwrap()
                 .push(json!({ "session": self.id, "command": kind, "fields": fields }));
-            if let Some(refusal) = self.script.refusals.lock().unwrap().get(&kind) {
+            let refusal = self.script.refusals.lock().unwrap().get(&kind).cloned();
+            let slow = *self.script.slow_answer.lock().unwrap();
+            if !slow.is_zero() {
+                tokio::time::sleep(slow).await;
+            }
+            if let Some(refusal) = refusal {
                 return Err(anyhow!("{refusal}"));
             }
             let scripted = self.script.answers.lock().unwrap().get(&kind).cloned();
@@ -1442,5 +1449,44 @@ async fn a_message_sent_again_under_its_id_goes_once() {
         .await
         .unwrap();
     assert_eq!(prompts(), 6);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// A message sent again while its first copy is still with the agent waits for that copy: if the agent then refuses
+/// it, the second one goes, and the message is not lost.
+#[tokio::test(start_paused = true)]
+async fn a_message_sent_again_while_the_first_is_out_waits_for_it() {
+    let rig = &Rig::new("send-again-early", &[]);
+    rig.script("prompt", json!({}));
+    let summary = new_summary("s1", AgentKind::Pi, SessionKind::Root, "/work/project");
+    let state = SessionState::new(summary, None, own(rig, "s1", Backend::Pi, true));
+    let session = Arc::new(Session::new(
+        "s1".into(),
+        AgentKind::Pi,
+        "/work/project".into(),
+        state,
+    ));
+    *rig.agents.slow_answer.lock().unwrap() = Duration::from_secs(1);
+    rig.agents
+        .refusals
+        .lock()
+        .unwrap()
+        .insert("prompt".into(), "no model is set".into());
+    let send = || {
+        let (app, session) = (rig.app.clone(), session.clone());
+        tokio::spawn(async move {
+            app.send_text(&session, "Carry on".into(), Some("a".into()))
+                .await
+                .map_err(|e| e.to_string())
+        })
+    };
+    let first = send();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The agent would take it now, but the first copy is already on its way to a refusal.
+    rig.agents.refusals.lock().unwrap().clear();
+    let second = send();
+    assert_eq!(first.await.unwrap(), Err("no model is set".to_string()));
+    assert!(second.await.unwrap().is_ok());
+    assert_eq!(rig.agents.asked.lock().unwrap().len(), 2);
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
