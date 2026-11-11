@@ -5,11 +5,11 @@ import XCTest
 /// so nothing connects.
 final class SessionStoreTests: XCTestCase {
     @MainActor private func summary(_ id: String, parent: String? = nil, createdAt: Double = 0, status: SessionStatus = .idle,
-                                    sites: [Site]? = nil) -> SessionSummary {
-        var summary = SessionSummary(id: id, agent: .prime, kind: parent == nil ? .root : .subagent, name: nil,
+                                    sites: [Site]? = nil, agent: AgentKind = .prime, cost: Double = 0) -> SessionSummary {
+        var summary = SessionSummary(id: id, agent: agent, kind: parent == nil ? .root : .subagent, name: nil,
                                      runningSubagents: false, readOnly: false, cwd: "/tmp", title: id, status: status, error: nil,
                                      createdAt: createdAt, model: nil, thinkingLevel: nil, thinkingLevels: [], context: nil,
-                                     cost: 0, queue: Queue(steering: [], followUp: []), autoCompaction: true,
+                                     cost: cost, queue: Queue(steering: [], followUp: []), autoCompaction: true,
                                      contextLimit: nil, standardWindow: nil, backgroundJobs: 0, waitingOn: nil,
                                      stuck: nil, lastActiveAt: nil, goal: nil, question: nil, spend: nil, sites: sites)
         summary.parentId = parent
@@ -150,6 +150,22 @@ final class SessionStoreTests: XCTestCase {
         store.select(nil)
         XCTAssertFalse(store.transcriptLoaded)
         XCTAssertTrue(store.items.isEmpty)
+    }
+
+    /// Open Codex counts a Prime subagent's requests into its parent. Pi's and DeepSeek's each carry their own.
+    @MainActor func testASessionsSpendHoldsItsSubagentsOnce() {
+        for agent in AgentKind.allCases {
+            let store = SessionStore(defaults: scratchDefaults())
+            store.apply(.sessions([
+                summary("p", agent: agent, cost: 4),
+                summary("c", parent: "p", agent: agent, cost: 2),
+                summary("g", parent: "c", agent: agent, cost: 1),
+                summary("other", agent: agent, cost: 8),
+            ]), from: "one")
+            let parent = store.sessions["one:p"]!
+            XCTAssertEqual(SessionStore.cost(of: parent, in: store.sessions), agent.spendIncludesSubagents ? 4 : 7, agent.rawValue)
+            XCTAssertEqual(agent.spendIncludesSubagents, agent == .prime, agent.rawValue)
+        }
     }
 
     @MainActor func testEverySiteNewestSessionFirstThenByPort() {

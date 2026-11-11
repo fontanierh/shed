@@ -12,6 +12,14 @@ public enum AgentKind: String, Codable, CaseIterable, Identifiable, Sendable {
         case .deepseek: "DeepSeek"
         }
     }
+    /// Whether a session's cost already holds what its subagents spent (`spend_includes_subagents` in the bridge's
+    /// agent.rs). Otherwise each subagent carries its own, and the app adds them up.
+    var spendIncludesSubagents: Bool {
+        switch self {
+        case .prime: true
+        case .pi, .deepseek: false
+        }
+    }
 }
 
 public enum ItemKind: String, Codable, Sendable {

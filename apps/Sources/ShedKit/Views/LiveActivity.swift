@@ -65,7 +65,7 @@ final class LiveActivities {
                 ending.removeValue(forKey: session.id)?.cancel()
                 let start = since[session.id] ?? .now
                 since[session.id] = start
-                let cost = Self.cost(of: session, in: sessions)
+                let cost = SessionStore.cost(of: session, in: sessions)
                 let first = startCost[session.id] ?? cost
                 startCost[session.id] = first
                 var state = ShedActivity.ContentState(phase: Self.phase(session), title: session.title, step: Self.step(session, store: store), since: start,
@@ -99,7 +99,7 @@ final class LiveActivities {
                     }
                 }
             } else if let existing, ending[session.id] == nil {
-                let cost = Self.cost(of: session, in: sessions)
+                let cost = SessionStore.cost(of: session, in: sessions)
                 let done = ShedActivity.ContentState(phase: session.status == .error ? "error" : "done", title: session.title,
                                                      step: session.status == .error ? (session.error ?? "Stopped with an error") : "Finished",
                                                      since: since[session.id] ?? .now,
@@ -153,13 +153,6 @@ final class LiveActivities {
 
     private static func descendants(of session: SessionSummary, in sessions: [String: SessionSummary]) -> [SessionSummary] {
         sessions.values.filter { $0.parentId == session.id }.flatMap { [$0] + descendants(of: $0, in: sessions) }
-    }
-
-    /// The session's spend with its subagents'. The bridge already counts Prime's subagents into their parent (they
-    /// come and go, but its session file keeps their spending); Pi's are added here.
-    private static func cost(of session: SessionSummary, in sessions: [String: SessionSummary]) -> Double {
-        guard session.agent == .pi else { return session.cost }
-        return sessions.values.filter { $0.parentId == session.id }.reduce(session.cost) { $0 + cost(of: $1, in: sessions) }
     }
 
     private static func phase(_ session: SessionSummary) -> String {
