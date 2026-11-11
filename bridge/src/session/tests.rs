@@ -1792,7 +1792,7 @@ async fn an_attach_sends_the_session_and_its_transcript_then_answers() {
 }
 
 /// Prime's daemon may take two minutes over an attach. The client's other requests are answered meanwhile.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_attach_that_waits_on_the_agent_does_not_hold_the_client() {
     let rig = Rig::new("serve-slow-attach", &[]);
     rig.script("attach", json!({ "snapshot": { "messages": [] } }));
@@ -1813,7 +1813,7 @@ async fn an_attach_that_waits_on_the_agent_does_not_hold_the_client() {
 }
 
 /// A detach that overtakes its attach wins: the attach is answered, and no transcript is sent.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_detach_during_an_attach_leaves_the_client_detached() {
     let rig = Rig::new("serve-detach", &[]);
     rig.script("attach", json!({ "snapshot": { "messages": [] } }));

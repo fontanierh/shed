@@ -320,7 +320,11 @@ export function apply(ctx) {
       let request;
       try {
         request = JSON.parse(line);
-      } catch {
+      } catch (error) {
+        // Answered when the line still shows its id, so the bridge is told now instead of waiting out its limit.
+        const id = /"id"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
+        process.stderr.write(`shed: a request that is not JSON: ${error.message}\n`);
+        if (id !== undefined) write({ id, error: `the request is not JSON: ${error.message}` });
         continue;
       }
       const handler = methods[request.method];
