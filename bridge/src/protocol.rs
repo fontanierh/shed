@@ -374,6 +374,10 @@ pub enum ClientOp {
         #[serde(rename = "sessionId")]
         session_id: String,
         text: String,
+        /// Names this message, so that sending it again after a lost reply does not send it twice. An app that
+        /// sends none is taken at its word each time.
+        #[serde(rename = "sendId", default, skip_serializing_if = "Option::is_none")]
+        send_id: Option<String>,
     },
     FollowUp {
         #[serde(rename = "sessionId")]

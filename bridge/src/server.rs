@@ -194,9 +194,13 @@ async fn run_op(app: &Arc<App>, op: ClientOp) -> Result<Value> {
             model,
             thinking,
         } => serde_json::to_value(app.create_session(agent, cwd, model, thinking).await?)?,
-        ClientOp::Send { session_id, text } => {
+        ClientOp::Send {
+            session_id,
+            text,
+            send_id,
+        } => {
             let session = app.find(&session_id).await?;
-            app.send_text(&session, text).await?
+            app.send_text(&session, text, send_id).await?
         }
         ClientOp::FollowUp { session_id, text } => {
             let session = app.find(&session_id).await?;

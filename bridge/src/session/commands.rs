@@ -42,6 +42,7 @@ impl App {
         self: &Arc<Self>,
         session: &Arc<Session>,
         text: String,
+        send_id: Option<String>,
     ) -> Result<Value> {
         let result = match session.backend {
             Backend::Prime => {
