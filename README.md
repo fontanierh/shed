@@ -140,6 +140,8 @@ To keep sites on the Mac, turn publishing off in `~/.agent-remote/config.json`:
 "sites": { "publish": false }
 ```
 
+An edit that leaves `config.json` invalid changes nothing while the bridge runs: it keeps the settings it last read, and says so in its log. It won't start on an invalid file.
+
 A server an agent starts detached (`nohup`, a daemon) stays its session's site: the bridge remembers whose it was, and one it never saw start goes to the session working in the folder the server runs in.
 
 ## Web search and page reading

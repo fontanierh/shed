@@ -1,11 +1,13 @@
-//! Bridge state on disk: the auth token and the registry of sessions, under ~/.agent-remote.
+//! Bridge state on disk, under ~/.agent-remote: the settings and the auth token in config.json, and the files the
+//! bridge keeps for itself.
 
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::rpc::AgentKind;
 
@@ -23,6 +25,184 @@ pub fn default_window(windows: &HashMap<String, u64>, provider: &str, id: &str) 
     let (namespace, model) = id.split_once('/').unwrap_or(("openai", id));
     let namespace = namespace.strip_suffix("-apikey").unwrap_or(namespace);
     windows.get(&format!("{namespace}/{model}")).copied()
+}
+
+/// config.json's settings. The installer and the user write the file, so it is read as `agent_wire.rs` reads an
+/// agent: a field that is missing, or of another type than expected, takes its default.
+#[derive(Clone)]
+pub struct Config {
+    /// `defaultContextWindows`: the window each model keeps to by default, by "provider/id". One entry that isn't a
+    /// number empties the whole table.
+    pub default_context_windows: HashMap<String, u64>,
+    /// `stallCheck`: the model asked whether a command that stopped moving is stuck, when the bridge is given an
+    /// OpenAI key for it.
+    pub stall_check: Option<crate::stall::Judge>,
+    pub sites: Sites,
+    pub opencodex: Routing,
+    pub web: Web,
+}
+
+/// `sites`: `{ "publish": false }` keeps sites off the tailnet.
+#[derive(Clone, Copy)]
+pub struct Sites {
+    pub publish: bool,
+}
+
+/// `opencodex`: `false`, nothing, or where Open Codex listens.
+#[derive(Clone)]
+pub enum Routing {
+    Off,
+    Unset,
+    On(Addresses),
+}
+
+/// The `opencodex` entry when it is an object.
+#[derive(Clone, Default)]
+pub struct Addresses {
+    pub url: Option<String>,
+    pub management_url: Option<String>,
+    pub admin_token_file: Option<String>,
+}
+
+/// `web`: the provider `shed-web` asks, and its key.
+#[derive(Clone)]
+pub struct Web {
+    pub provider: Option<String>,
+    pub firecrawl_api_key: Option<String>,
+    pub firecrawl_url: Option<String>,
+}
+
+fn text(value: &Value) -> Option<String> {
+    value.as_str().map(str::to_string)
+}
+
+impl Config {
+    pub fn read(config: &Value) -> Config {
+        let check = &config["stallCheck"];
+        let web = &config["web"];
+        Config {
+            default_context_windows: serde_json::from_value(
+                config["defaultContextWindows"].clone(),
+            )
+            .unwrap_or_default(),
+            stall_check: check["openaiApiKey"]
+                .as_str()
+                .filter(|key| !key.is_empty())
+                .map(|key| crate::stall::Judge {
+                    key: key.to_string(),
+                    model: check["model"]
+                        .as_str()
+                        .unwrap_or(crate::stall::DEFAULT_MODEL)
+                        .to_string(),
+                    threshold: check["threshold"]
+                        .as_f64()
+                        .unwrap_or(crate::stall::DEFAULT_THRESHOLD),
+                }),
+            // Published unless the file says not to: a site nobody can open from the phone is no use.
+            sites: Sites {
+                publish: config["sites"]["publish"].as_bool().unwrap_or(true),
+            },
+            // Anything but `false` and null turns routing on, an object or not.
+            opencodex: match &config["opencodex"] {
+                Value::Bool(false) => Routing::Off,
+                Value::Null => Routing::Unset,
+                on => Routing::On(Addresses {
+                    url: text(&on["url"]),
+                    management_url: text(&on["managementUrl"]),
+                    admin_token_file: text(&on["adminTokenFile"]),
+                }),
+            },
+            web: Web {
+                provider: text(&web["provider"]),
+                firecrawl_api_key: text(&web["firecrawlApiKey"]),
+                firecrawl_url: text(&web["firecrawlUrl"]),
+            },
+        }
+    }
+
+    /// What config.json in `dir` says now: nothing when there is no file, an error when there is one that can't
+    /// be read or isn't a JSON object. It keeps nothing and logs nothing; `config_in` does both.
+    pub fn load(dir: &Path) -> Result<Config> {
+        Ok(document(&dir.join("config.json"))?
+            .as_ref()
+            .map(Config::read)
+            .unwrap_or_default())
+    }
+}
+
+impl Default for Config {
+    /// What a config with nothing in it says.
+    fn default() -> Config {
+        Config::read(&Value::Null)
+    }
+}
+
+/// config.json as written, or nothing when there is no file.
+fn document(path: &Path) -> Result<Option<Value>> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(anyhow!("{} can't be read: {e}", path.display())),
+    };
+    let document: Value = serde_json::from_str(&raw)
+        .with_context(|| format!("{} is not valid JSON", path.display()))?;
+    if !document.is_object() {
+        return Err(anyhow!("{} is not a JSON object", path.display()));
+    }
+    Ok(Some(document))
+}
+
+/// What a config file last gave, and the failure last logged for it.
+#[derive(Default)]
+struct Kept {
+    good: Option<Config>,
+    failure: Option<String>,
+}
+
+impl Kept {
+    /// The settings to go by after this read, and the line to log: a file that stopped being readable keeps what
+    /// it last gave, and says so once for each different failure. Several watchers read the file every few seconds.
+    fn take(&mut self, read: Result<Config>) -> (Config, Option<String>) {
+        match read {
+            Ok(config) => {
+                self.good = Some(config.clone());
+                self.failure = None;
+                (config, None)
+            }
+            Err(e) => {
+                let failure = format!("{e:#}");
+                let line = (self.failure.as_ref() != Some(&failure)).then(|| match self.good {
+                    Some(_) => format!("{failure}: keeping the settings it last gave"),
+                    None => format!("{failure}: going by the defaults"),
+                });
+                self.failure = Some(failure);
+                (self.good.clone().unwrap_or_default(), line)
+            }
+        }
+    }
+}
+
+/// By folder, for the whole process: the readers that have no `Store` at hand share what the file last gave.
+static KEPT: Mutex<BTreeMap<PathBuf, Kept>> = Mutex::new(BTreeMap::new());
+
+fn keep(dir: &Path, read: Result<Config>) -> Config {
+    let (config, line) = KEPT
+        .lock()
+        .unwrap()
+        .entry(dir.to_path_buf())
+        .or_default()
+        .take(read);
+    if let Some(line) = line {
+        eprintln!("{line}");
+    }
+    config
+}
+
+/// The settings in `dir`'s config.json, read each time, so editing the file takes effect without a restart. A file
+/// that can't be read or understood changes nothing: an edit left half done must not turn back on what was turned
+/// off.
+pub fn config_in(dir: &Path) -> Config {
+    keep(dir, Config::load(dir))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,11 +230,9 @@ impl Store {
 
     pub fn token(&self) -> Result<String> {
         let path = self.dir.join("config.json");
-        let mut config = match std::fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str::<serde_json::Value>(&raw)
-                .with_context(|| format!("{} is not valid JSON", path.display()))?,
-            Err(_) => json!({}),
-        };
+        // An invalid file stops the bridge here, at its start. Read later, it keeps the settings of this read.
+        let mut config = document(&path)?.unwrap_or_else(|| json!({}));
+        keep(&self.dir, Ok(Config::read(&config)));
         if let Some(token) = config["token"].as_str() {
             return Ok(token.to_string());
         }
@@ -120,33 +298,31 @@ impl Store {
         )
     }
 
-    /// The window each model keeps to by default, by "provider/id" (`defaultContextWindows` in config.json, which
-    /// setup/install.sh fills in). `default_window` looks one model up in it.
-    pub fn default_windows(&self) -> HashMap<String, u64> {
-        std::fs::read_to_string(self.dir.join("config.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .and_then(|config| serde_json::from_value(config["defaultContextWindows"].clone()).ok())
-            .unwrap_or_default()
+    pub fn config(&self) -> Config {
+        config_in(&self.dir)
     }
 
-    /// The model asked whether a command that stopped moving is stuck: `stallCheck` in config.json, set only when
-    /// the bridge is given an OpenAI key for it. Read each time, so editing the file takes effect without a restart.
+    /// `setup/install.sh` fills these in. `default_window` looks one model up in them.
+    pub fn default_windows(&self) -> HashMap<String, u64> {
+        self.config().default_context_windows
+    }
+
     pub fn stall_check(&self) -> Option<crate::stall::Judge> {
-        let raw = std::fs::read_to_string(self.dir.join("config.json")).ok()?;
-        let config: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        let check = &config["stallCheck"];
-        let key = check["openaiApiKey"].as_str().filter(|k| !k.is_empty())?;
-        Some(crate::stall::Judge {
-            key: key.to_string(),
-            model: check["model"]
-                .as_str()
-                .unwrap_or(crate::stall::DEFAULT_MODEL)
-                .to_string(),
-            threshold: check["threshold"]
-                .as_f64()
-                .unwrap_or(crate::stall::DEFAULT_THRESHOLD),
-        })
+        self.config().stall_check
+    }
+
+    /// The top-level Prime sessions the bridge has listed, by `sessionId`.
+    pub fn load_prime_sessions(&self) -> HashSet<String> {
+        self.load("prime-sessions.json")
+    }
+
+    pub fn save_prime_sessions(&self, shown: &HashSet<String>) -> Result<()> {
+        let mut ids: Vec<&String> = shown.iter().collect();
+        ids.sort();
+        write_private(
+            &self.dir.join("prime-sessions.json"),
+            &serde_json::to_vec_pretty(&ids)?,
+        )
     }
 
     /// Context windows chosen per session, Pi's and Prime's alike, by session id.
@@ -169,7 +345,7 @@ impl Store {
         )
     }
 
-    /// The bridge's state folder, for reading `config.json` as it is now.
+    /// The bridge's state folder.
     pub fn dir(&self) -> &PathBuf {
         &self.dir
     }
@@ -228,8 +404,15 @@ impl Store {
         let dir = std::env::temp_dir().join(format!("shed-store-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
+        forget(&dir);
         Store { dir }
     }
+}
+
+/// Drops what `dir`'s config last gave, for a test that makes the folder anew.
+#[cfg(test)]
+pub(crate) fn forget(dir: &Path) {
+    KEPT.lock().unwrap().remove(dir);
 }
 
 #[cfg(test)]
@@ -257,6 +440,167 @@ mod tests {
         assert_eq!(store.default_windows()["a/b"], 272000);
         // And it is the same one from then on.
         assert_eq!(store.token().unwrap(), token);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_config_that_breaks_keeps_the_settings_it_last_gave() {
+        let store = store("config-broken");
+        let path = store.dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"defaultContextWindows": {"a/b": 272000}, "stallCheck": {"openaiApiKey": "sk-test"}}"#,
+        )
+        .unwrap();
+        assert_eq!(store.default_windows()["a/b"], 272000);
+        for broken in [
+            "{\"defaultContextWindows\": {\"a/b\": 1},}",
+            "",
+            "[]",
+            "\"text\"",
+        ] {
+            std::fs::write(&path, broken).unwrap();
+            assert_eq!(store.default_windows()["a/b"], 272000, "{broken}");
+            assert_eq!(store.stall_check().unwrap().key, "sk-test", "{broken}");
+        }
+        // Mended, it is read again.
+        std::fs::write(&path, r#"{"defaultContextWindows": {"a/b": 64000}}"#).unwrap();
+        assert_eq!(store.default_windows()["a/b"], 64000);
+        assert!(store.stall_check().is_none());
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn sites_stay_unpublished_when_the_config_breaks() {
+        let store = store("config-sites");
+        let path = store.dir.join("config.json");
+        std::fs::write(&path, r#"{"sites": {"publish": false}}"#).unwrap();
+        assert!(!store.config().sites.publish);
+        std::fs::write(&path, r#"{"sites": {"publish": false},}"#).unwrap();
+        assert!(!store.config().sites.publish);
+        // No file is not a broken one: the defaults again.
+        std::fs::remove_file(&path).unwrap();
+        assert!(store.config().sites.publish);
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_config_that_never_was_good_gives_the_defaults() {
+        let store = store("config-never");
+        assert!(Config::load(&store.dir).is_ok());
+        std::fs::write(store.dir.join("config.json"), "not json").unwrap();
+        assert!(Config::load(&store.dir).is_err());
+        assert_defaults(&store.config());
+        // The bridge does not start on it.
+        assert!(store.token().is_err());
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    fn assert_defaults(config: &Config) {
+        assert!(config.default_context_windows.is_empty());
+        assert!(config.stall_check.is_none());
+        assert!(config.sites.publish);
+        assert!(matches!(config.opencodex, Routing::Unset));
+        assert_eq!(config.web.provider, None);
+        assert_eq!(config.web.firecrawl_api_key, None);
+        assert_eq!(config.web.firecrawl_url, None);
+    }
+
+    #[test]
+    fn a_missing_or_mistyped_field_takes_its_default() {
+        let store = store("config-defaults");
+        assert_defaults(&store.config());
+        assert_defaults(&Config::default());
+        assert_defaults(&Config::read(&json!({})));
+        assert_defaults(&Config::read(&json!({ "token": "x", "other": 1 })));
+        assert_defaults(&Config::read(&json!({
+            "defaultContextWindows": { "a/b": 272000, "c/d": "wide" },
+            "stallCheck": { "openaiApiKey": "", "model": "m" },
+            "sites": { "publish": "no" },
+            "opencodex": null,
+            "web": ["firecrawl"],
+        })));
+        assert_defaults(&Config::read(&json!({
+            "defaultContextWindows": [],
+            "stallCheck": "sk-test",
+            "sites": false,
+            "web": { "provider": 7, "firecrawlApiKey": 7, "firecrawlUrl": 7 },
+        })));
+
+        let judge = |check: Value| Config::read(&json!({ "stallCheck": check })).stall_check;
+        let plain = judge(json!({ "openaiApiKey": "sk-test" })).unwrap();
+        assert_eq!(plain.model, crate::stall::DEFAULT_MODEL);
+        assert_eq!(plain.threshold, crate::stall::DEFAULT_THRESHOLD);
+        let mistyped =
+            judge(json!({ "openaiApiKey": "sk-test", "model": 7, "threshold": "high" })).unwrap();
+        assert_eq!(mistyped.model, crate::stall::DEFAULT_MODEL);
+        assert_eq!(mistyped.threshold, crate::stall::DEFAULT_THRESHOLD);
+        let chosen =
+            judge(json!({ "openaiApiKey": "sk-test", "model": "m", "threshold": 0.5 })).unwrap();
+        assert_eq!((chosen.model.as_str(), chosen.threshold), ("m", 0.5));
+
+        let publish = |config: Value| Config::read(&config).sites.publish;
+        assert!(publish(json!({ "sites": { "publish": true } })));
+        assert!(!publish(json!({ "sites": { "publish": false } })));
+
+        let routing = |entry: Value| Config::read(&json!({ "opencodex": entry })).opencodex;
+        assert!(matches!(routing(json!(false)), Routing::Off));
+        let Routing::On(bare) = routing(json!(true)) else {
+            panic!("`true` turns routing on")
+        };
+        assert_eq!(
+            (bare.url, bare.management_url, bare.admin_token_file),
+            (None, None, None)
+        );
+        std::fs::remove_dir_all(&store.dir).unwrap();
+    }
+
+    #[test]
+    fn a_config_s_failure_is_logged_once() {
+        let failed = |why: &str| Err(anyhow!("{why}"));
+        let mut kept = Kept::default();
+        let (config, line) = kept.take(failed("a stray comma"));
+        assert_defaults(&config);
+        assert_eq!(
+            line.as_deref(),
+            Some("a stray comma: going by the defaults")
+        );
+        assert_eq!(kept.take(failed("a stray comma")).1, None);
+
+        let good = Config::read(&json!({ "sites": { "publish": false } }));
+        assert_eq!(kept.take(Ok(good)).1, None);
+        let (config, line) = kept.take(failed("a stray comma"));
+        assert!(!config.sites.publish);
+        assert_eq!(
+            line.as_deref(),
+            Some("a stray comma: keeping the settings it last gave")
+        );
+        assert_eq!(kept.take(failed("a stray comma")).1, None);
+        // Another failure is said too.
+        let (config, line) = kept.take(failed("a stray brace"));
+        assert!(!config.sites.publish);
+        assert_eq!(
+            line.as_deref(),
+            Some("a stray brace: keeping the settings it last gave")
+        );
+    }
+
+    #[test]
+    fn the_prime_session_list_keeps_its_shape_and_a_broken_one_is_kept_aside() {
+        let store = store("prime-sessions");
+        let path = store.dir.join("prime-sessions.json");
+        assert!(store.load_prime_sessions().is_empty());
+        let list = "[\n  \"01a1-conversation\",\n  \"01a2-other\"\n]";
+        std::fs::write(&path, list).unwrap();
+        let shown = store.load_prime_sessions();
+        assert_eq!(shown.len(), 2);
+        store.save_prime_sessions(&shown).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), list);
+
+        // A write cut short.
+        std::fs::write(&path, "[\n  \"01a1-conver").unwrap();
+        assert!(store.load_prime_sessions().is_empty());
+        assert!(store.dir.join("prime-sessions.json.bad").is_file());
         std::fs::remove_dir_all(&store.dir).unwrap();
     }
 
