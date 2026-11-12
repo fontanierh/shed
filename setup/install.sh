@@ -217,7 +217,7 @@ identity="$("$ROOT/setup/lib/sign-bridge.sh" "$ROOT/bridge/target/release/agent-
 note "signed with $identity"
 mkdir -p "$HOME/.agent-remote/bin" "$HOME/.agent-remote/logs"
 # The same code signed again differs only in its signing time: the code's hash says whether the bridge changed.
-cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
+cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p' || true; }
 installed_code="$(cdhash "$HOME/.agent-remote/bin/agent-remote")"
 install -m 755 "$ROOT/bridge/target/release/agent-remote" "$HOME/.agent-remote/bin/agent-remote"
 new_code="$(cdhash "$HOME/.agent-remote/bin/agent-remote")"

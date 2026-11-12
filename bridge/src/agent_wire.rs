@@ -149,6 +149,19 @@ pub struct KeptRow {
 }
 
 impl KeptRow {
+    /// Reads an active `{ agentId, status, summary }` entry from `roster_subscribe` / `roster_update`.
+    pub fn read_entry(entry: &Value) -> Option<KeptRow> {
+        if entry["status"] == "inactive" {
+            return None;
+        }
+        let summary = entry.get("summary").unwrap_or(entry);
+        let mut row = Self::read(summary)?;
+        if row.conversation.is_none() {
+            row.conversation = text(&entry["agentId"]).map(ConversationId);
+        }
+        Some(row)
+    }
+
     /// `None` for a row without an `activeSessionId`: a session nobody can address.
     pub fn read(row: &Value) -> Option<KeptRow> {
         let conversation = text(&row["sessionId"]).map(ConversationId);
@@ -196,25 +209,35 @@ impl KeptRow {
 pub struct ConversationId(String);
 
 impl ConversationId {
+    pub fn new(id: String) -> Self {
+        Self(id)
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 /// A roster row of a Prime session that stopped. It has no `activeSessionId` left, only what the session was
-/// stored as.
+/// stored as (`sessionFile` or durable `sessionId` / `agentId`).
 pub struct InactiveRow {
     pub session_file: Option<String>,
     pub conversation: Option<ConversationId>,
 }
 
 impl InactiveRow {
-    /// `None` when the row names neither, and so no session.
-    pub fn read(row: &Value) -> Option<InactiveRow> {
+    /// Reads either an outer `{ agentId, summary }` roster entry or a bare summary object.
+    pub fn read(entry: &Value) -> Option<InactiveRow> {
+        let summary = entry
+            .get("summary")
+            .filter(|s| s.is_object())
+            .unwrap_or(entry);
         let row = InactiveRow {
-            session_file: text(&row["sessionFile"]),
-            conversation: text(&row["sessionId"])
-                .or_else(|| text(&row["id"]))
+            session_file: text(&summary["sessionFile"]).or_else(|| text(&entry["sessionFile"])),
+            conversation: text(&summary["sessionId"])
+                .or_else(|| text(&summary["id"]))
+                .or_else(|| text(&entry["sessionId"]))
+                .or_else(|| text(&entry["agentId"]))
                 .map(ConversationId),
         };
         (row.session_file.is_some() || row.conversation.is_some()).then_some(row)
@@ -380,7 +403,7 @@ impl PiSubagentRun {
         }
     }
 
-    /// A running child reports exit code 0 (or -1 as a parallel placeholder) until its process exits; it is
+    /// A running child reports exit code -1 until its process exits; it is
     /// finished once its last assistant message stopped for a reason other than calling tools.
     pub fn settled(&self) -> bool {
         self.exit_code != -1 && self.stop_reason.as_deref().is_some_and(|r| r != "toolUse")

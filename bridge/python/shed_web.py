@@ -39,10 +39,11 @@ def _flag(name):
     return "--" + name.replace("_", "-")
 
 
-def _run(args, timeout):
+# The query or URL goes after `--` so text starting with `-` is never read as an option; flags go before it.
+def _run(subcommand, options, target, timeout):
     try:
         done = subprocess.run(
-            [_command(), *args, "--json", "--full"],
+            [_command(), subcommand, *options, "--json", "--full", "--", target],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -82,12 +83,11 @@ def search(query, *, limit=5, sources=None, categories=None, tbs=None, location=
     sources: ["web", "news", "images"]; categories: ["github", "research", "pdf"]; tbs: "qdr:d" (past day), "qdr:w",
     "qdr:m", "qdr:y"; body: more fields for Firecrawl's search request.
     """
-    # The query after `--`, so one that starts with `--` is not read as an option.
-    args = ["search"] + _options(dict(
+    options = _options(dict(
         limit=limit, sources=sources, categories=categories, tbs=tbs, location=location, country=country,
         scrape=scrape, body=body,
-    )) + ["--", query]
-    return _run(args, timeout)["sources"]
+    ))
+    return _run("search", options, query, timeout)["sources"]
 
 
 def fetch(url, *, formats=None, prompt=None, schema=None, all_content=False, include_tags=None,
@@ -103,10 +103,10 @@ def fetch(url, *, formats=None, prompt=None, schema=None, all_content=False, inc
     country, languages: load the page from a country ("DE"), in languages (["de-DE"]).
     body: more fields for Firecrawl's scrape request.
     """
-    args = ["fetch"] + _options(dict(
+    options = _options(dict(
         format=formats, prompt=prompt, schema=schema, all_content=all_content, include_tags=include_tags,
         exclude_tags=exclude_tags, wait=wait, mobile=mobile, max_age=max_age, timeout=timeout, proxy=proxy,
         country=country, languages=languages, out=out, body=body,
-    )) + ["--", url]
+    ))
     seconds = (timeout or 60_000) / 1000 + 60
-    return _run(args, seconds)
+    return _run("fetch", options, url, seconds)

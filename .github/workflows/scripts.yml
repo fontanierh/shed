@@ -36,7 +36,7 @@ jobs:
       - name: TypeScript files parse
         run: git ls-files -z '*.ts' | xargs -0 node --no-warnings .github/scripts/ts-syntax.mjs
       - name: JavaScript and TypeScript unit tests
-        run: node --no-warnings --test setup/pi/extensions/records.test.mjs bridge/dsh/shed.test.mjs setup/lib/configure.test.mjs
+        run: git ls-files -z '*.test.mjs' | xargs -0 node --no-warnings --test
       - name: Python unit tests
         run: python3 -m unittest discover -s bridge/python
       - name: The installer's JSON files parse

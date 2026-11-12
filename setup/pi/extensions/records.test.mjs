@@ -20,6 +20,7 @@ import {
 	applySubagentLine,
 	buildSubagentDetails,
 	createSingleResult,
+	exitCodeFromClose,
 	formatToolCallRecord,
 	isSubagentDetails,
 	substitutePrevious,
@@ -82,6 +83,7 @@ test("subagent builds details.results matching protocol/pi_subagents.json", () =
 		model: "example/model-1",
 		step: 1,
 	});
+	assert.equal(scout.exitCode, -1);
 	assert.equal(
 		applySubagentLine(
 			scout,
@@ -120,6 +122,11 @@ test("subagent builds details.results matching protocol/pi_subagents.json", () =
 		),
 		true,
 	);
+
+	assert.equal(scout.exitCode, -1);
+	scout.exitCode = exitCodeFromClose(0, null);
+	assert.equal(exitCodeFromClose(null, "SIGKILL"), 128 + os.constants.signals.SIGKILL);
+	assert.equal(exitCodeFromClose(null, null), 1);
 
 	const reviewer = createSingleResult({
 		agent: "reviewer",

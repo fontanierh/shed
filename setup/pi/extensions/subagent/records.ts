@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import type { Message } from "@earendil-works/pi-ai";
 import type { AgentScope } from "./agents.ts";
 
@@ -47,7 +48,7 @@ export function createSingleResult(params: {
 		agent: params.agent,
 		agentSource: params.agentSource,
 		task: params.task,
-		exitCode: 0,
+		exitCode: -1,
 		messages: [],
 		stderr: "",
 		usage: emptyUsage(),
@@ -124,6 +125,12 @@ export type DisplayItem =
 
 function str(value: unknown, fallback = ""): string {
 	return typeof value === "string" && value.length > 0 ? value : fallback;
+}
+
+export function exitCodeFromClose(code: number | null, signal: NodeJS.Signals | null): number {
+	if (typeof code === "number") return code;
+	const sigNum = signal ? os.constants.signals[signal] : undefined;
+	return typeof sigNum === "number" ? 128 + sigNum : 1;
 }
 
 export function substitutePrevious(task: string, previousOutput: string): string {

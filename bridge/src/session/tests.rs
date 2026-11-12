@@ -1282,6 +1282,7 @@ fn own(rig: &Rig, id: &str, backend: Backend, live: bool) -> BackendState {
         }
         Backend::Started => BackendState::started(),
         Backend::Prime => BackendState::Prime(PrimeState {
+            wanted: live,
             attached: live,
             ..Default::default()
         }),
@@ -2661,5 +2662,116 @@ async fn pi_subagents_fixture_from_the_extension_is_read() {
         Some("provider rate limit")
     );
     drop(reviewer_st);
+    let _ = std::fs::remove_dir_all(rig.app.store.dir());
+}
+
+/// Closing or retiring a Prime subagent also removes any nested subagents it spawned, so orphaned grandchildren
+/// never stay listed as running; and `parse_iso_ms` handles non-ASCII fractions, RFC 3339 offsets, and pre-1970 dates.
+#[tokio::test(start_paused = true)]
+async fn closing_a_prime_session_removes_its_descendant_subagents_and_parses_rfc3339() {
+    assert_eq!(parse_iso_ms("2026-10-30T09:49:57.12µs"), None);
+    assert_eq!(parse_iso_ms("1969-12-31T23:59:59Z"), None);
+    assert_eq!(
+        parse_iso_ms("2026-10-30T09:49:57.304-07:00"),
+        parse_iso_ms("2026-10-30T16:49:57.304Z")
+    );
+    assert_eq!(
+        parse_iso_ms("2026-10-30T09:49:57+00:00"),
+        Some(1_793_353_797_000)
+    );
+
+    let rig = Rig::new("prime-orphan-grandchildren", &[]);
+    prime_session(&rig, "root", None).await;
+    prime_session(&rig, "review5", Some("root")).await;
+    let grandchild = prime_session(&rig, "rust-features-review", Some("review5")).await;
+    grandchild.state.lock().await.summary.status = SessionStatus::Running;
+
+    rig.prime
+        .send(DaemonEvent::SessionClosed("review5".into()))
+        .ok()
+        .unwrap();
+    tokio::task::yield_now().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(rig.app.find("review5").await.is_err());
+    assert!(
+        rig.app.find("rust-features-review").await.is_err(),
+        "orphaned grandchild subagent stayed in app.sessions"
+    );
+
+    // Outer `agentId` on an inactive roster entry removes a subagent whose summary lost its sessionFile/sessionId.
+    let sub2 = KeptRow::read_entry(&json!({
+        "agentId": "durable-sub-2",
+        "status": "active",
+        "summary": { "activeSessionId": "sub2-live", "runtimeKind": "subagent", "parentActiveSessionId": "root", "cwd": "/work" }
+    }))
+    .unwrap();
+    rig.prime
+        .send(DaemonEvent::RosterUpdate(vec![sub2]))
+        .ok()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(rig.app.find("sub2-live").await.is_ok());
+    let inactive = crate::agent_wire::InactiveRow::read(&json!({
+        "agentId": "durable-sub-2",
+        "status": "inactive",
+        "summary": {}
+    }))
+    .unwrap();
+    rig.prime
+        .send(DaemonEvent::Inactive(inactive))
+        .ok()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(rig.app.find("sub2-live").await.is_err());
+
+    // Disconnecting clears `attached` while preserving `wanted`, so attach fails while disconnected and retries if the
+    // first reconnect's attach transiently fails.
+    let root = rig.app.find("root").await.unwrap();
+    rig.script(
+        "attach",
+        json!({ "messages": [{ "role": "user", "content": "hi" }] }),
+    );
+    rig.app.ensure_attached(&root).await.unwrap();
+    assert!(root.state.lock().await.prime().unwrap().attached);
+
+    rig.prime
+        .send(DaemonEvent::Disconnected("socket reset".into()))
+        .ok()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!root.state.lock().await.prime().unwrap().attached);
+    assert!(root.state.lock().await.prime().unwrap().wanted);
+
+    // First Roster reconnect: attach fails transiently (`SessionRecovering`), leaving `wanted == true && !attached`.
+    rig.agents
+        .refusals
+        .lock()
+        .unwrap()
+        .insert("attach".into(), "session recovering".into());
+    let root_row = || {
+        KeptRow::read(&json!({ "activeSessionId": "root", "sessionId": "s-root", "cwd": "/work" }))
+            .unwrap()
+    };
+    rig.prime
+        .send(DaemonEvent::Roster(vec![root_row()]))
+        .ok()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!root.state.lock().await.prime().unwrap().attached);
+    assert!(root.state.lock().await.prime().unwrap().wanted);
+
+    // Next Roster tick: attach succeeds and restores `attached == true`.
+    rig.agents.refusals.lock().unwrap().remove("attach");
+    rig.script(
+        "attach",
+        json!({ "messages": [{ "role": "user", "content": "back" }] }),
+    );
+    rig.prime
+        .send(DaemonEvent::Roster(vec![root_row()]))
+        .ok()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(root.state.lock().await.prime().unwrap().attached);
+
     let _ = std::fs::remove_dir_all(rig.app.store.dir());
 }
