@@ -46,11 +46,13 @@ impl App {
                             self.remove(&s.id).await;
                             continue;
                         }
-                        let was_attached = match s.state.lock().await.prime_mut() {
-                            Some(prime) => std::mem::replace(&mut prime.attached, false),
-                            None => false,
-                        };
-                        if was_attached {
+                        let needs_attach = s
+                            .state
+                            .lock()
+                            .await
+                            .prime()
+                            .is_some_and(|prime| prime.wanted && !prime.attached);
+                        if needs_attach {
                             let app = self.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = app.ensure_attached(&s).await {
@@ -74,7 +76,6 @@ impl App {
                     }
                 }
                 DaemonEvent::SessionClosed(id) => self.remove(&id).await,
-                // The row has no id left to find the session by, only what it was stored as.
                 DaemonEvent::Inactive(InactiveRow {
                     session_file,
                     conversation,
@@ -90,8 +91,6 @@ impl App {
                     for s in prime {
                         let ended = {
                             let st = s.state.lock().await;
-                            // A subagent's row may come without its file. Its session id never changes, unlike a
-                            // top-level session's, which `new_session` replaces.
                             (session_file.is_some() && st.session_file == session_file)
                                 || (st.summary.kind == SessionKind::Subagent
                                     && conversation.is_some()
@@ -118,6 +117,12 @@ impl App {
                         .collect();
                     for s in prime {
                         let mut st = s.state.lock().await;
+                        if let Some(prime) = st.prime_mut() {
+                            if prime.attached {
+                                prime.wanted = true;
+                                prime.attached = false;
+                            }
+                        }
                         st.summary.status = SessionStatus::Error;
                         st.summary.error = Some(format!("Prime daemon unavailable: {error}"));
                         self.publish_summary(&st);
@@ -246,7 +251,10 @@ impl App {
             return Ok(());
         }
         let current = {
-            let st = session.state.lock().await;
+            let mut st = session.state.lock().await;
+            if let Some(prime) = st.prime_mut() {
+                prime.wanted = true;
+            }
             st.prime().is_some_and(|prime| prime.attached).then(|| {
                 st.transcript
                     .items

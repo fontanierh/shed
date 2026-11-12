@@ -264,6 +264,15 @@ fn top_level(row: &KeptRow) -> Option<String> {
         .flatten()
 }
 
+fn roster_rows(roster: &Value) -> Vec<KeptRow> {
+    roster["roster"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(KeptRow::read_entry)
+        .collect()
+}
+
 /// Where the daemon may listen: newer Prime builds use `prime-agent-rust-<uid>`, older ones `prime-agent-<uid>`.
 pub fn socket_paths() -> Vec<String> {
     if let Ok(path) = std::env::var("PRIME_AGENT_DAEMON_SOCKET") {
@@ -434,18 +443,33 @@ impl PrimeDaemon {
                 return Err(e);
             }
         };
-        let rows: Vec<KeptRow> = roster["roster"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|row| KeptRow::read(&row["summary"]))
-            .collect();
+        let rows = roster_rows(&roster);
         let running: HashSet<String> = rows.iter().filter_map(top_level).collect();
         tx.offer(DaemonEvent::Roster(rows));
         tokio::spawn(self.clone().wake_open_sessions(running));
+        // Reconcile the live roster once a minute so subagents purged without a close event never linger.
+        let resync = {
+            let daemon = self.clone();
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(Duration::from_secs(60));
+                tick.tick().await;
+                loop {
+                    tick.tick().await;
+                    let Ok(roster) = daemon
+                        .supervisor("roster_subscribe", json!({}), QUICK)
+                        .await
+                    else {
+                        break;
+                    };
+                    tx.offer(DaemonEvent::Roster(roster_rows(&roster)));
+                }
+            })
+        };
         if let Err(e) = reader.await {
             eprintln!("prime daemon: the reader stopped: {e}");
         }
+        resync.abort();
         Ok(())
     }
 
@@ -478,11 +502,27 @@ impl PrimeDaemon {
                 let mut rows = Vec::new();
                 for row in message["changed"].as_array().into_iter().flatten() {
                     if row["status"] == "inactive" {
-                        if let Some(row) = InactiveRow::read(&row["summary"]) {
+                        if let Some(row) = InactiveRow::read(row) {
                             tx.offer(DaemonEvent::Inactive(row));
                         }
                     } else {
-                        rows.extend(KeptRow::read(&row["summary"]));
+                        rows.extend(KeptRow::read_entry(row));
+                    }
+                }
+                for removed in message["removed"].as_array().into_iter().flatten() {
+                    if let Some(id) = removed.as_str() {
+                        tx.offer(DaemonEvent::SessionClosed(id.into()));
+                        tx.offer(DaemonEvent::Inactive(InactiveRow {
+                            session_file: None,
+                            conversation: Some(crate::agent_wire::ConversationId::new(id.into())),
+                        }));
+                    } else if let Some(id) = removed["activeSessionId"]
+                        .as_str()
+                        .or_else(|| removed["summary"]["activeSessionId"].as_str())
+                    {
+                        tx.offer(DaemonEvent::SessionClosed(id.into()));
+                    } else if let Some(row) = InactiveRow::read(removed) {
+                        tx.offer(DaemonEvent::Inactive(row));
                     }
                 }
                 self.note_shown(&rows);
@@ -494,6 +534,8 @@ impl PrimeDaemon {
                     .or_else(|| message["summary"]["activeSessionId"].as_str());
                 if let Some(id) = id {
                     tx.offer(DaemonEvent::SessionClosed(id.into()));
+                } else if let Some(row) = InactiveRow::read(&message) {
+                    tx.offer(DaemonEvent::Inactive(row));
                 }
             }
             _ => {}

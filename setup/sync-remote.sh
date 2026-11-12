@@ -85,7 +85,7 @@ node="$(command -v node || echo "$HOME/.local/share/pi-node/current/bin/node")"
 # The same list install.sh applies.
 "$src/setup/lib/agent-files.sh" "$src/setup" "$node" >/dev/null
 # The same code signed again differs only in its signing time: compare the code's hash.
-cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'; }
+cdhash() { codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p' || true; }
 new="$(cdhash target/release/agent-remote)"
 # The port its service was registered with (install.sh's AGENT_REMOTE_PORT on that Mac).
 port="$(plutil -extract ProgramArguments json -o - ~/Library/LaunchAgents/dev.agentremote.bridge.plist 2>/dev/null | sed -n 's/.*"--port","\([0-9]*\)".*/\1/p' || true)"

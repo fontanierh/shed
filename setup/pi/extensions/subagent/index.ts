@@ -36,6 +36,7 @@ import {
 	applySubagentLine,
 	buildSubagentDetails,
 	createSingleResult,
+	exitCodeFromClose,
 	type DisplayItem,
 	emptyUsage,
 	formatToolCallRecord,
@@ -283,9 +284,9 @@ async function runSingleAgent(
 				currentResult.stderr += data.toString();
 			});
 
-			proc.on("close", (code) => {
+			proc.on("close", (code, signal) => {
 				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
+				resolve(exitCodeFromClose(code, signal));
 			});
 
 			proc.on("error", () => {

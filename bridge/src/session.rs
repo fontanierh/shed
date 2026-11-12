@@ -138,7 +138,9 @@ impl BackendState {
 
 #[derive(Default)]
 struct PrimeState {
-    /// Attached to the daemon, so its events arrive and the transcript is live.
+    /// A client has opened this session, so reconnects re-attach it.
+    wanted: bool,
+    /// Attached on the current daemon connection, so its events arrive and the transcript is live.
     attached: bool,
     /// Roster fields whose change warrants a stats refresh.
     roster_mark: (String, u64),
@@ -205,15 +207,62 @@ fn log_loop(
     }
 }
 
-/// Parses `2026-10-30T09:49:57.304Z` into epoch milliseconds.
+/// Parses an RFC 3339 / ISO 8601 timestamp (`2026-10-30T09:49:57.304Z`, `...-07:00`) into epoch milliseconds.
 pub fn parse_iso_ms(s: &str) -> Option<u64> {
-    let (date, time) = s.trim_end_matches('Z').split_once('T')?;
+    if !s.is_ascii() {
+        return None;
+    }
+    let (date, rest) = s.split_once('T').or_else(|| s.split_once('t'))?;
+    let (time, offset_secs) = if let Some(t) = rest.strip_suffix(['Z', 'z']) {
+        (t, 0_i64)
+    } else if let Some(idx) = rest.rfind(['+', '-']).filter(|&i| i > 0) {
+        let (t, tz) = rest.split_at(idx);
+        let sign = if tz.as_bytes()[0] == b'+' {
+            1_i64
+        } else {
+            -1_i64
+        };
+        let body = &tz[1..];
+        let (oh, om) = if let Some((h, m)) = body.split_once(':') {
+            (h.parse::<i64>().ok()?, m.parse::<i64>().ok()?)
+        } else if body.len() == 4 {
+            (
+                body[..2].parse::<i64>().ok()?,
+                body[2..].parse::<i64>().ok()?,
+            )
+        } else {
+            return None;
+        };
+        if !(0..=23).contains(&oh) || !(0..=59).contains(&om) {
+            return None;
+        }
+        (t, sign * (oh * 3600 + om * 60))
+    } else {
+        (rest, 0_i64)
+    };
     let mut d = date.split('-').map(|p| p.parse::<i64>().ok());
     let (y, m, day) = (d.next()??, d.next()??, d.next()??);
+    if d.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
     let (hms, frac) = time.split_once('.').unwrap_or((time, "0"));
+    if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     let mut t = hms.split(':').map(|p| p.parse::<i64>().ok());
     let (hh, mm, ss) = (t.next()??, t.next()??, t.next()??);
-    let ms: i64 = format!("{frac:0<3}")[..3].parse().ok()?;
+    if t.next().is_some()
+        || !(0..=23).contains(&hh)
+        || !(0..=59).contains(&mm)
+        || !(0..=60).contains(&ss)
+    {
+        return None;
+    }
+    let mut ms = 0_i64;
+    for i in 0..3 {
+        let digit = frac.as_bytes().get(i).map_or(0, |b| (b - b'0') as i64);
+        ms = ms * 10 + digit;
+    }
     // Days from civil (Howard Hinnant).
     let y = if m <= 2 { y - 1 } else { y };
     let era = y.div_euclid(400);
@@ -221,7 +270,11 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
-    Some(((days * 86400 + hh * 3600 + mm * 60 + ss) * 1000 + ms) as u64)
+    let secs = days
+        .checked_mul(86400)?
+        .checked_add(hh * 3600 + mm * 60 + ss - offset_secs)?;
+    let total_ms = secs.checked_mul(1000)?.checked_add(ms)?;
+    u64::try_from(total_ms).ok()
 }
 
 fn default_title(cwd: &str) -> String {
@@ -581,19 +634,48 @@ impl App {
         self.broadcast_session(session_id, st, &msg);
     }
 
+    /// Removes `id` and any nested subagent sessions under it (for both `Subagent` and `Prime` trees).
     async fn remove(&self, id: &str) {
-        let removed: Vec<Arc<Session>> = {
-            let mut sessions = self.sessions.write().await;
-            let gone = sessions.iter().filter(|s| s.id == id).cloned().collect();
-            sessions.retain(|s| s.id != id);
-            gone
-        };
-        for session in removed {
-            session.state.lock().await.removed = true;
+        let all = self.sessions.read().await.clone();
+        let mut subagents = Vec::new();
+        for s in &all {
+            let st = s.state.lock().await;
+            if st.summary.kind == SessionKind::Subagent {
+                subagents.push((s.id.clone(), st.summary.parent_id.clone()));
+            }
         }
-        self.broadcast_global(&ServerMessage::SessionRemoved {
-            session_id: id.to_string(),
-        });
+        let mut family = vec![id.to_string()];
+        let mut i = 0;
+        while i < family.len() {
+            let parent = family[i].clone();
+            for (child_id, parent_id) in &subagents {
+                if parent_id.as_deref() == Some(parent.as_str()) && !family.contains(child_id) {
+                    family.push(child_id.clone());
+                }
+            }
+            i += 1;
+        }
+        // Broadcast children first so clients never briefly hold an orphaned subagent row.
+        for target in family.iter().skip(1).chain(family.first()) {
+            let removed: Vec<Arc<Session>> = {
+                let mut sessions = self.sessions.write().await;
+                let gone = sessions
+                    .iter()
+                    .filter(|s| s.id == *target)
+                    .cloned()
+                    .collect();
+                sessions.retain(|s| s.id != *target);
+                gone
+            };
+            for session in &removed {
+                session.state.lock().await.removed = true;
+            }
+            if !removed.is_empty() || target == id {
+                self.broadcast_global(&ServerMessage::SessionRemoved {
+                    session_id: target.clone(),
+                });
+            }
+        }
     }
 
     /// Persist the registry of Pi sessions. Never call while holding a session lock.
@@ -918,27 +1000,6 @@ impl App {
             .remove(&session.id);
         if session.backend == Backend::Prime {
             return Ok(());
-        }
-        // Its subagents and theirs: dsh nests them.
-        let mut subagents = Vec::new();
-        let all = self.sessions.read().await.clone();
-        for s in all.iter().filter(|s| s.backend == Backend::Subagent) {
-            subagents.push((s.id.clone(), s.state.lock().await.summary.parent_id.clone()));
-        }
-        let mut family = vec![session.id.clone()];
-        let mut i = 0;
-        while i < family.len() {
-            let parent = family[i].clone();
-            family.extend(
-                subagents
-                    .iter()
-                    .filter(|s| s.1.as_deref() == Some(parent.as_str()))
-                    .map(|s| s.0.clone()),
-            );
-            i += 1;
-        }
-        for id in family.iter().skip(1) {
-            self.remove(id).await;
         }
         crate::jobs::forget(&self.store, &session.id);
         self.remove(&session.id).await;

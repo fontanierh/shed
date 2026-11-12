@@ -307,14 +307,21 @@ test("shed-web.mjs passes -- before queries and URLs and surfaces errors", async
     fakeCmd,
     `#!/usr/bin/env node
 const args = process.argv.slice(2);
-if (args.includes("fail-now")) {
+const sep = args.indexOf("--");
+const flags = args.slice(0, sep);
+const positional = args.slice(sep + 1);
+if (sep < 0 || positional.length !== 1 || !flags.includes("--json")) {
+  process.stderr.write("shed-web: unexpected argument after --\\n");
+  process.exit(2);
+}
+if (positional[0] === "fail-now") {
   process.stderr.write("shed-web: provider quota exceeded\\n");
   process.exit(1);
 }
-if (args[0] === "search") {
+if (flags[0] === "search") {
   process.stdout.write(JSON.stringify({ sources: [{ url: "https://example.com", title: args.join(" ") }] }));
 } else {
-  process.stdout.write(JSON.stringify({ url: args.at(-2), statusCode: 200, markdown: "Hello", markdownFile: "/tmp/full.md", truncated: true }));
+  process.stdout.write(JSON.stringify({ url: positional[0], statusCode: 200, markdown: "Hello", markdownFile: "/tmp/full.md", truncated: true }));
 }
 `,
     { mode: 0o755 },
@@ -338,7 +345,7 @@ if (args[0] === "search") {
     );
 
     const hits = await searchProvider.search({ query: "--locked cargo", maxResults: 3 });
-    assert.equal(hits.sources[0].title, "search --limit 3 -- --locked cargo --json");
+    assert.equal(hits.sources[0].title, "search --limit 3 --json -- --locked cargo");
 
     const page = await fetchProvider.fetch({ url: "https://example.com/doc" });
     assert.equal(page.url, "https://example.com/doc");

@@ -18,13 +18,18 @@ class ShedWebTests(unittest.TestCase):
             "#!/usr/bin/env python3\n"
             "import json, sys\n"
             "args = sys.argv[1:]\n"
-            "if 'boom' in args:\n"
+            "sep = args.index('--')\n"
+            "flags, positional = args[:sep], args[sep + 1:]\n"
+            "if len(positional) != 1 or '--json' not in flags or '--full' not in flags:\n"
+            "    sys.stderr.write(f'shed-web: unexpected argument after --: {positional!r}\\n')\n"
+            "    sys.exit(2)\n"
+            "if positional[0] == 'boom':\n"
             "    sys.stderr.write('shed-web: bad gateway\\n')\n"
             "    sys.exit(1)\n"
-            "if args[0] == 'search':\n"
+            "if flags[0] == 'search':\n"
             "    print(json.dumps({'sources': [{'url': 'https://example.com', 'argv': args}]}))\n"
             "else:\n"
-            "    print(json.dumps({'url': args[-3], 'statusCode': 200, 'markdown': 'ok', 'argv': args}))\n"
+            "    print(json.dumps({'url': positional[0], 'statusCode': 200, 'markdown': 'ok', 'argv': args}))\n"
         )
         self.cmd.chmod(self.cmd.stat().st_mode | stat.S_IXUSR)
         self.old_path = os.environ.get("PATH", "")
@@ -34,14 +39,14 @@ class ShedWebTests(unittest.TestCase):
         os.environ["PATH"] = self.old_path
         self.tmp.cleanup()
 
-    def test_search_passes_double_dash_and_flags(self):
+    def test_search_passes_flags_before_double_dash(self):
         hits = shed_web.search("--locked flag", limit=3, sources=["web", "news"], scrape=True)
         self.assertEqual(
             hits[0]["argv"],
-            ["search", "--limit", "3", "--sources", "web,news", "--scrape", "--", "--locked flag", "--json", "--full"],
+            ["search", "--limit", "3", "--sources", "web,news", "--scrape", "--json", "--full", "--", "--locked flag"],
         )
 
-    def test_fetch_passes_formats_and_strips_error_prefix(self):
+    def test_fetch_passes_formats_before_double_dash_and_strips_error_prefix(self):
         page = shed_web.fetch("https://example.com", formats=["markdown", "links"], all_content=True, timeout=5000)
         self.assertEqual(
             page["argv"],
@@ -52,10 +57,10 @@ class ShedWebTests(unittest.TestCase):
                 "--all-content",
                 "--timeout",
                 "5000",
-                "--",
-                "https://example.com",
                 "--json",
                 "--full",
+                "--",
+                "https://example.com",
             ],
         )
         with self.assertRaises(shed_web.WebError) as ctx:
