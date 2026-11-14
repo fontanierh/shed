@@ -133,6 +133,12 @@ extension SessionStore {
 
     public func connection(of env: String) -> BridgeClient.State { connections[env] ?? .disconnected(nil) }
 
+    /// Where files are uploaded on `envId` before a session exists.
+    public func media(in envId: String) -> MediaSource {
+        guard let env = environments.first(where: { $0.id == envId }) else { return MediaSource(bridgeURL: "", token: "") }
+        return MediaSource(bridgeURL: env.url, token: token(of: env))
+    }
+
     /// Where a session's transcript loads embedded media from: its own computer.
     public func media(for sessionId: String) -> MediaSource {
         guard let env = environment(of: sessionId) else { return MediaSource(bridgeURL: "", token: "") }

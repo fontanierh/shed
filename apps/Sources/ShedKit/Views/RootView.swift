@@ -25,7 +25,7 @@ public struct RootView: View {
                 } else if case .disconnected = store.connection {
                     Unreachable(store: store, showSettings: $showSettings)
                 } else {
-                    HomeView(store: store) { newSession = NewSessionDraft(message: $0) }
+                    HomeView(store: store) { newSession = $0 }
                 }
             }
             .transition(.opacity)
@@ -39,7 +39,7 @@ public struct RootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(item: $newSession) { draft in
-            NewSessionSheet(store: store, initialMessage: draft.message)
+            NewSessionSheet(store: store, initialMessage: draft.message, initialAttachments: draft.attachments)
         }
         .sheet(isPresented: $showSettings) { EnvironmentSettings(store: store) }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
@@ -57,6 +57,7 @@ public struct RootView: View {
 struct NewSessionDraft: Identifiable {
     let id = UUID()
     var message = ""
+    var attachments: [Attachment] = []
 }
 
 /// The bridge can't be reached: a computer with a red dot, and the way back.

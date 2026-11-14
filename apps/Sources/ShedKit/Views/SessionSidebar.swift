@@ -7,7 +7,7 @@ struct SessionSidebar: View {
     /// The computers Shed controls.
     var openSettings: () -> Void = {}
     /// The home page's composer on iPhone, which has no home page of its own: it opens New Session with a first message.
-    var start: ((_ message: String) -> Void)? = nil
+    var start: ((_ draft: NewSessionDraft) -> Void)? = nil
     @State private var query = ""
     /// Sessions whose subagents are shown.
     @State private var expanded: Set<String> = []

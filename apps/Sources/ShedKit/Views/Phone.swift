@@ -41,7 +41,7 @@ public struct PhoneRootView: View {
                     NavigationStack {
                         SessionSidebar(store: store, newSession: { newSession = NewSessionDraft() },
                                        openSettings: { showSettings = true },
-                                       start: { newSession = NewSessionDraft(message: $0) })
+                                       start: { newSession = $0 })
                             .toolbar(.hidden, for: .navigationBar)
                             .containerBackground(.clear, for: .navigation)
                             .safeAreaInset(edge: .top, spacing: 0) {
@@ -129,7 +129,7 @@ public struct PhoneRootView: View {
         .environment(\.lightbox, lightbox)
         .overlay { LightboxView(lightbox: lightbox) }
         .sheet(item: $newSession) { draft in
-            NewSessionSheet(store: store, initialMessage: draft.message)
+            NewSessionSheet(store: store, initialMessage: draft.message, initialAttachments: draft.attachments)
         }
         .sheet(isPresented: $showSettings) { NavigationStack { EnvironmentSettings(store: store) } }
         .alert("Error", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {

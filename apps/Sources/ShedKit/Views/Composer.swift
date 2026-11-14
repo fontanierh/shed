@@ -1,10 +1,6 @@
 // Where messages are written: the text field with its send, steer and stop buttons, the model and context row below,
 // and the dock under the conversation that holds them.
 import SwiftUI
-import UniformTypeIdentifiers
-#if os(iOS)
-import PhotosUI
-#endif
 
 /// What sits under the conversation: a warning or an error when there is one, the composer, and the dark behind them
 /// that the conversation slides under.
@@ -108,10 +104,6 @@ struct Composer: View {
     @State private var focused = false
     #else
     @FocusState private var focused: Bool
-    @State private var pickingPhotos = false
-    @State private var pickedPhotos: [PhotosPickerItem] = []
-    @State private var pickingFiles = false
-    @State private var showingCamera = false
     #endif
     @State private var showModels = false
     /// Bumped on each send, to kick the button.
@@ -176,12 +168,7 @@ struct Composer: View {
                     }
                     .padding(.vertical, 8)
                 #else
-                PhoneAttachButton(
-                    pickPhotos: { pickingPhotos = true },
-                    openCamera: { showingCamera = true },
-                    pickFiles: { pickingFiles = true },
-                    pasteClipboard: { attach { await PhoneAttachments.loadClipboard() } }
-                )
+                PhoneAttachButton { files in attach(files) }
 
                 TextField(placeholder, text: text, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -304,22 +291,6 @@ struct Composer: View {
         #if os(macOS)
         // On iPhone the keyboard would cover the transcript, so it waits for a tap.
         .onAppear { focused = true }
-        #else
-        .photosPicker(isPresented: $pickingPhotos, selection: $pickedPhotos, matching: .any(of: [.images, .videos]))
-        .onChange(of: pickedPhotos) { _, items in
-            guard !items.isEmpty else { return }
-            pickedPhotos = []
-            attach { await PhoneAttachments.loadPhotos(items) }
-        }
-        .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result, !urls.isEmpty {
-                attach { await PhoneAttachments.loadFiles(urls) }
-            }
-        }
-        .fullScreenCover(isPresented: $showingCamera) {
-            CameraPicker { file in attach { [file] } }
-                .ignoresSafeArea()
-        }
         #endif
         // Anywhere on the composer: files from Finder, the screenshot thumbnail, images dragged out of other apps.
         .onDrop(of: attachableTypes, isTargeted: $dropping) { providers in
@@ -362,8 +333,7 @@ struct Composer: View {
 
     /// The text with the uploaded files' embeds after it.
     private var message: String {
-        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        return ([trimmed].filter { !$0.isEmpty } + attachments.compactMap(\.embed)).joined(separator: "\n\n")
+        Attachment.compose(message: draft, attachments: attachments)
     }
 
     private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
