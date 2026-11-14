@@ -57,7 +57,9 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
           NSAllowsLocalNetworking: true
+        NSCameraUsageDescription: Shed uses the camera to attach photos and videos to a message.
         NSLocalNetworkUsageDescription: Shed connects to the bridge on your Mac.
+        NSMicrophoneUsageDescription: Shed uses the microphone when recording a video to attach.
   ShedLive:
     type: app-extension
     platform: iOS

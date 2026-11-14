@@ -1,9 +1,15 @@
-// Files dropped on the composer: uploaded to the session's computer as soon as they land, then sent with the message
-// as Markdown embeds of their paths there, which the agents open with their read tools and the transcript shows.
+// Files attached to the composer (dropped/pasted on Mac, picked from Photos, Camera, Files or Pasteboard on iPhone):
+// uploaded to the session's computer as soon as they land, then sent with the message as Markdown embeds of their
+// paths there, which the agents open with their read tools and the transcript shows.
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(iOS)
+import PhotosUI
+import UIKit
+#endif
 
-/// A dropped file, uploading until it has a path on the session's computer.
+/// An attached file, uploading until it has a path on the session's computer.
 struct Attachment: Identifiable, Equatable {
     let id = UUID()
     let name: String
@@ -14,6 +20,25 @@ struct Attachment: Identifiable, Equatable {
 
     /// How the message carries it: an embed, as the agents write theirs.
     var embed: String? { path.map { "![\(name)](<\($0)>)" } }
+
+    /// Re-encodes HEIC/HEIF/TIFF photos as JPEG so agent vision tools (`attach_image`, `read`) accept them alongside
+    /// Shed's own viewer; leaves PNG, JPEG, GIF, WebP, videos, audio and documents untouched.
+    static func prepared(name: String, data: Data) -> (name: String, data: Data) {
+        let ext = (name as NSString).pathExtension.lowercased()
+        guard ["heic", "heif", "tif", "tiff"].contains(ext),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) > 0
+        else { return (name, data) }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else {
+            return (name, data)
+        }
+        CGImageDestinationAddImageFromSource(dest, source, 0,
+                                             [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return (name, data) }
+        let stem = (name as NSString).deletingPathExtension
+        return ("\(stem.isEmpty ? "Image" : stem).jpg", out as Data)
+    }
 }
 
 /// What a drop or paste can carry: files (Finder, the screenshot thumbnail) and image or video data.
@@ -90,7 +115,7 @@ private func representation(from provider: NSItemProvider) async -> (name: Strin
     }
 }
 
-/// The dropped files above the text field, each with a remove button.
+/// The attached files above the text field, each with a remove button.
 struct AttachmentStrip: View {
     let attachments: [Attachment]
     let remove: (Attachment) -> Void
@@ -105,12 +130,18 @@ struct AttachmentStrip: View {
                         } else if attachment.error != nil {
                             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.danger)
                         } else {
-                            Image(systemName: MediaKind(URL(fileURLWithPath: attachment.name)) == .image ? "photo" : "doc")
+                            Image(systemName: Self.icon(for: attachment.name))
                                 .foregroundStyle(Palette.accent.opacity(0.9))
                         }
-                        Text(attachment.name).lineLimit(1).truncationMode(.middle).frame(maxWidth: 180)
+                        Text(attachment.error.map { "\(attachment.name) · \($0)" } ?? attachment.name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: attachment.error == nil ? 180 : 240)
                         Button { remove(attachment) } label: {
-                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                            Image(systemName: "xmark")
+                                .font(.system(size: 8, weight: .bold))
+                                .frame(width: 20, height: 26)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -118,7 +149,7 @@ struct AttachmentStrip: View {
                     }
                     .font(.system(size: 12))
                     .foregroundStyle(Palette.moon)
-                    .padding(.horizontal, 10).frame(height: 26)
+                    .padding(.leading, 10).padding(.trailing, 4).frame(height: 26)
                     .card(radius: 13, fill: Palette.raised)
                     .help(attachment.error ?? attachment.path ?? "Uploading…")
                 }
@@ -126,9 +157,18 @@ struct AttachmentStrip: View {
         }
         .scrollIndicators(.never)
     }
+
+    private static func icon(for name: String) -> String {
+        switch MediaKind(URL(fileURLWithPath: name)) {
+        case .image: "photo"
+        case .video: "film"
+        case .audio: "waveform"
+        case .file: "doc"
+        }
+    }
 }
 
-/// A user message's trailing embeds, split from its text: what the composer appends for dropped files.
+/// A user message's trailing embeds, split from its text: what the composer appends for attached files.
 enum MessageAttachments {
     static func split(_ text: String) -> (text: String, paths: [String]) {
         var lines = text.components(separatedBy: "\n")
@@ -150,3 +190,179 @@ enum MessageAttachments {
         return path.hasPrefix("/") ? path : nil
     }
 }
+
+#if os(iOS)
+/// The `+` button inside the iPhone composer: opens Photos & Videos, Camera, Files, or Paste from clipboard.
+struct PhoneAttachButton: View {
+    let pickPhotos: () -> Void
+    let openCamera: () -> Void
+    let pickFiles: () -> Void
+    let pasteClipboard: () -> Void
+    @State private var canPaste = false
+
+    var body: some View {
+        Menu {
+            Button(action: pickPhotos) {
+                Label("Photos & Videos", systemImage: "photo.on.rectangle")
+            }
+            if CameraPicker.isAvailable {
+                Button(action: openCamera) {
+                    Label("Camera", systemImage: "camera")
+                }
+            }
+            Button(action: pickFiles) {
+                Label("Files", systemImage: "folder")
+            }
+            if canPaste {
+                Divider()
+                Button(action: pasteClipboard) {
+                    Label("Paste", systemImage: "doc.on.clipboard")
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.moon.opacity(0.85))
+                .frame(width: 36, height: 36)
+                .background(Palette.raised, in: Circle())
+                .overlay(Circle().strokeBorder(Palette.border))
+        }
+        .buttonStyle(PressStyle())
+        .accessibilityLabel("Attach media or files")
+        .onAppear { canPaste = PhoneAttachments.hasClipboardItems }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            canPaste = PhoneAttachments.hasClipboardItems
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            canPaste = PhoneAttachments.hasClipboardItems
+        }
+    }
+}
+
+private struct PickedAttachmentFile: Transferable, Sendable {
+    let name: String
+    let data: Data
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(importedContentType: .item) { received in
+            let url = received.file
+            let data = try Data(contentsOf: url)
+            return PickedAttachmentFile(name: url.lastPathComponent, data: data)
+        }
+    }
+}
+
+enum PhoneAttachments {
+    @MainActor
+    static var hasClipboardItems: Bool {
+        UIPasteboard.general.hasImages || UIPasteboard.general.hasURLs
+    }
+
+    static func loadPhotos(_ items: [PhotosPickerItem]) async -> [(name: String, data: Data)] {
+        var out: [(name: String, data: Data)] = []
+        for (index, item) in items.enumerated() {
+            let preferredExt = item.supportedContentTypes.first?.preferredFilenameExtension
+            if let picked = try? await item.loadTransferable(type: PickedAttachmentFile.self) {
+                var name = picked.name
+                if (name as NSString).pathExtension.isEmpty, let ext = preferredExt, !ext.isEmpty {
+                    name += ".\(ext)"
+                }
+                out.append((name, picked.data))
+            } else if let data = try? await item.loadTransferable(type: Data.self) {
+                let ext = preferredExt ?? "jpg"
+                out.append(("Attachment \(index + 1).\(ext)", data))
+            }
+        }
+        return out
+    }
+
+    static func loadFiles(_ urls: [URL]) async -> [(name: String, data: Data)] {
+        await Task.detached {
+            urls.compactMap { url -> (name: String, data: Data)? in
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                var coordError: NSError?
+                var loaded: (name: String, data: Data)?
+                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
+                    guard (try? readURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) != true,
+                          let data = try? Data(contentsOf: readURL) else { return }
+                    loaded = (readURL.lastPathComponent, data)
+                }
+                return coordError == nil ? loaded : nil
+            }
+        }.value
+    }
+
+    @MainActor
+    static func loadClipboard() async -> [(name: String, data: Data)] {
+        let urls = (UIPasteboard.general.urls ?? []).filter(\.isFileURL)
+        if !urls.isEmpty {
+            return await loadFiles(urls)
+        }
+        let images = UIPasteboard.general.images ?? []
+        return images.enumerated().compactMap { index, image in
+            guard let png = image.pngData() else { return nil }
+            let name = images.count == 1 ? "Image.png" : "Image \(index + 1).png"
+            return (name, png)
+        }
+    }
+}
+
+struct CameraPicker: UIViewControllerRepresentable {
+    let onPick: @MainActor ((name: String, data: Data)) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @MainActor
+    static var isAvailable: Bool {
+        UIImagePickerController.isSourceTypeAvailable(.camera)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        if let types = UIImagePickerController.availableMediaTypes(for: .camera), !types.isEmpty {
+            picker.mediaTypes = types
+        }
+        picker.videoQuality = .typeHigh
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UINavigationControllerDelegate, UIImagePickerControllerDelegate {
+        let parent: CameraPicker
+
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let movieURL = info[.mediaURL] as? URL, let data = try? Data(contentsOf: movieURL) {
+                let ext = movieURL.pathExtension.isEmpty ? "mov" : movieURL.pathExtension.lowercased()
+                parent.onPick(("Video.\(ext)", data))
+            } else if let image = (info[.editedImage] ?? info[.originalImage]) as? UIImage,
+                      let jpeg = image.uprightJPEG(quality: 0.9) {
+                parent.onPick(("Photo.jpg", jpeg))
+            }
+            parent.dismiss()
+        }
+    }
+}
+
+private extension UIImage {
+    func uprightJPEG(quality: CGFloat) -> Data? {
+        guard imageOrientation != .up else { return jpegData(compressionQuality: quality) }
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = scale
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { _ in draw(in: CGRect(origin: .zero, size: size)) }
+            .jpegData(compressionQuality: quality)
+    }
+}
+#endif
