@@ -5,7 +5,12 @@ struct NewSessionSheet: View {
     let store: SessionStore
     /// What to send once the session starts, from the home page's composer.
     var initialMessage = ""
+    var initialAttachments: [Attachment] = []
     @State private var message = ""
+    @State private var attachments: [Attachment] = []
+    @State private var uploads: [Task<Void, Never>] = []
+    @State private var dropping = false
+    @State private var seeded = false
     @Environment(\.dismiss) private var dismiss
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
     @AppStorage("newSession.environment") private var chosenEnv = ""
@@ -147,10 +152,22 @@ struct NewSessionSheet: View {
         }
         .onAppear {
             restoreFolder()
-            if message.isEmpty { message = initialMessage }
+            if !seeded {
+                seeded = true
+                if message.isEmpty { message = initialMessage }
+                if attachments.isEmpty { attachments = initialAttachments }
+            }
             fitModel()
+            syncUploads(for: env)
         }
-        .onChange(of: env) { restoreFolder() }
+        .onDisappear {
+            uploads.forEach { $0.cancel() }
+            uploads = []
+        }
+        .onChange(of: env) { _, newEnv in
+            restoreFolder()
+            syncUploads(for: newEnv)
+        }
         .onChange(of: agent) { fitModel() }
         .task(id: "\(env) \(agent.rawValue)") { await loadModels(); fitModel() }
         .task(id: env) { await pruneFolders() }
@@ -228,7 +245,7 @@ struct NewSessionSheet: View {
                 }
                 .buttonStyle(PrimaryButton())
                 .keyboardShortcut(.defaultAction)
-                .disabled(cwd.isEmpty || creating)
+                .disabled(cwd.isEmpty || creating || attachments.contains(where: \.uploading))
             }
             .padding(.horizontal, 32).padding(.vertical, 16)
         }
@@ -278,12 +295,28 @@ struct NewSessionSheet: View {
 
     /// What the agent gets as soon as it starts; empty starts it waiting.
     private var messageField: some View {
-        TextField("First message", text: $message, prompt: Text("What should \(agent.displayName) do?"), axis: .vertical)
-            .textFieldStyle(.plain)
-            .lineLimit(2...6)
-            .font(.system(size: 14))
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .card(radius: 12, fill: Palette.sunken)
+        VStack(alignment: .leading, spacing: 8) {
+            if !attachments.isEmpty {
+                AttachmentStrip(attachments: attachments) { gone in attachments.removeAll { $0.id == gone.id } }
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                #if os(iOS)
+                PhoneAttachButton(size: 32) { files in attach(files) }
+                #endif
+                TextField("First message", text: $message, prompt: Text("What should \(agent.displayName) do?"), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(2...6)
+                    .font(.system(size: 14))
+                    .padding(.vertical, 4)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .card(radius: 12, fill: Palette.sunken,
+                  border: dropping ? Palette.accent.opacity(0.85) : Palette.border)
+            .onDrop(of: attachableTypes, isTargeted: $dropping) { providers in
+                attach { await droppedFiles(providers) }
+                return true
+            }
+        }
     }
 
     private var effortPicker: some View {
@@ -349,7 +382,7 @@ struct NewSessionSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button(creating ? "Starting…" : "Start", action: start)
                         .fontWeight(.semibold)
-                        .disabled(cwd.isEmpty || creating)
+                        .disabled(cwd.isEmpty || creating || attachments.contains(where: \.uploading))
                 }
             }
         }
@@ -370,17 +403,73 @@ struct NewSessionSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
+        let targetEnv = env
+        let media = store.media(in: targetEnv)
+        let task = Task {
+            for raw in await files() {
+                let file = Attachment.prepared(name: raw.name, data: raw.data)
+                guard !Task.isCancelled else { return }
+                let attachment = Attachment(name: file.name, data: file.data)
+                attachments.append(attachment)
+                guard !targetEnv.isEmpty else { continue }
+                await uploadAttachment(id: attachment.id, data: file.data, name: file.name, to: targetEnv, media: media)
+            }
+        }
+        uploads.append(task)
+    }
+
+    private func syncUploads(for targetEnv: String) {
+        guard !targetEnv.isEmpty else { return }
+        uploads.forEach { $0.cancel() }
+        uploads = []
+        let media = store.media(in: targetEnv)
+        var pending: [(id: UUID, name: String, data: Data)] = []
+        for i in attachments.indices {
+            if (attachments[i].path == nil || attachments[i].uploadedEnv != targetEnv), let data = attachments[i].data {
+                attachments[i].path = nil
+                attachments[i].error = nil
+                attachments[i].uploadedEnv = nil
+                pending.append((attachments[i].id, attachments[i].name, data))
+            }
+        }
+        guard !pending.isEmpty else { return }
+        let task = Task {
+            for item in pending {
+                guard !Task.isCancelled, env == targetEnv else { return }
+                await uploadAttachment(id: item.id, data: item.data, name: item.name, to: targetEnv, media: media)
+            }
+        }
+        uploads.append(task)
+    }
+
+    private func uploadAttachment(id: UUID, data: Data, name: String, to targetEnv: String, media: MediaSource) async {
+        do {
+            let path = try await media.upload(data, name: name)
+            guard !Task.isCancelled, env == targetEnv else { return }
+            if let i = attachments.firstIndex(where: { $0.id == id }) {
+                attachments[i].path = path
+                attachments[i].uploadedEnv = targetEnv
+            }
+        } catch {
+            guard !Task.isCancelled, env == targetEnv else { return }
+            if let i = attachments.firstIndex(where: { $0.id == id }) {
+                attachments[i].error = error.localizedDescription
+            }
+        }
+    }
+
     private func start() {
         creating = true
         let folder = cwd
         let chosenModel = model
         let env = env
-        let message = message
+        let firstMessage = Attachment.compose(message: message, attachments: attachments)
         startError = nil
         Task {
             do {
                 try await store.createSession(in: env, agent: agent, cwd: folder, model: chosenModel, thinking: thinking,
-                                              firstMessage: message.trimmingCharacters(in: .whitespacesAndNewlines))
+                                              firstMessage: firstMessage)
                 creating = false
                 func line(_ entry: (env: String, path: String)) -> String { "\(entry.env)\t\(entry.path)" }
                 let others = folders(recentFolders).filter { $0.env != env }

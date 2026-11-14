@@ -13,6 +13,9 @@ import UIKit
 struct Attachment: Identifiable, Equatable {
     let id = UUID()
     let name: String
+    /// Kept on pre-session drafts so switching computers in New Session re-uploads onto the chosen machine.
+    var data: Data?
+    var uploadedEnv: String?
     var path: String?
     var error: String?
 
@@ -20,6 +23,12 @@ struct Attachment: Identifiable, Equatable {
 
     /// How the message carries it: an embed, as the agents write theirs.
     var embed: String? { path.map { "![\(name)](<\($0)>)" } }
+
+    /// Joins trimmed message text with the Markdown embeds of every uploaded attachment.
+    static func compose(message: String, attachments: [Attachment]) -> String {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ([trimmed].filter { !$0.isEmpty } + attachments.compactMap(\.embed)).joined(separator: "\n\n")
+    }
 
     /// Re-encodes HEIC/HEIF/TIFF photos as JPEG so agent vision tools (`attach_image`, `read`) accept them alongside
     /// Shed's own viewer; leaves PNG, JPEG, GIF, WebP, videos, audio and documents untouched.
@@ -192,43 +201,60 @@ enum MessageAttachments {
 }
 
 #if os(iOS)
-/// The `+` button inside the iPhone composer: opens Photos & Videos, Camera, Files, or Paste from clipboard.
+/// The `+` button inside the iPhone composers: opens Photos & Videos, Camera, Files, or Paste from clipboard.
 struct PhoneAttachButton: View {
-    let pickPhotos: () -> Void
-    let openCamera: () -> Void
-    let pickFiles: () -> Void
-    let pasteClipboard: () -> Void
+    var size: CGFloat = 36
+    let attach: (@escaping @MainActor () async -> [(name: String, data: Data)]) -> Void
+    @State private var pickingPhotos = false
+    @State private var pickedPhotos: [PhotosPickerItem] = []
+    @State private var pickingFiles = false
+    @State private var showingCamera = false
     @State private var canPaste = false
 
     var body: some View {
         Menu {
-            Button(action: pickPhotos) {
+            Button { pickingPhotos = true } label: {
                 Label("Photos & Videos", systemImage: "photo.on.rectangle")
             }
             if CameraPicker.isAvailable {
-                Button(action: openCamera) {
+                Button { showingCamera = true } label: {
                     Label("Camera", systemImage: "camera")
                 }
             }
-            Button(action: pickFiles) {
+            Button { pickingFiles = true } label: {
                 Label("Files", systemImage: "folder")
             }
             if canPaste {
                 Divider()
-                Button(action: pasteClipboard) {
+                Button { attach { await PhoneAttachments.loadClipboard() } } label: {
                     Label("Paste", systemImage: "doc.on.clipboard")
                 }
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: size <= 30 ? 14 : 16, weight: .semibold))
                 .foregroundStyle(Palette.moon.opacity(0.85))
-                .frame(width: 36, height: 36)
+                .frame(width: size, height: size)
                 .background(Palette.raised, in: Circle())
                 .overlay(Circle().strokeBorder(Palette.border))
         }
         .buttonStyle(PressStyle())
         .accessibilityLabel("Attach media or files")
+        .photosPicker(isPresented: $pickingPhotos, selection: $pickedPhotos, matching: .any(of: [.images, .videos]))
+        .onChange(of: pickedPhotos) { _, items in
+            guard !items.isEmpty else { return }
+            pickedPhotos = []
+            attach { await PhoneAttachments.loadPhotos(items) }
+        }
+        .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result, !urls.isEmpty {
+                attach { await PhoneAttachments.loadFiles(urls) }
+            }
+        }
+        .fullScreenCover(isPresented: $showingCamera) {
+            CameraPicker { file in attach { [file] } }
+                .ignoresSafeArea()
+        }
         .onAppear { canPaste = PhoneAttachments.hasClipboardItems }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             canPaste = PhoneAttachments.hasClipboardItems

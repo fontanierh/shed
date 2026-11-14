@@ -82,5 +82,17 @@ final class ComposerTextTests: XCTestCase {
         XCTAssertEqual(split.paths, ["/tmp/shed-uploads/1/spec v2.pdf"])
         uploaded.path = nil
         XCTAssertTrue(uploaded.uploading)
+
+        let readyA = Attachment(name: "shot.jpg", uploadedEnv: "mac-a", path: "/tmp/shed-uploads/1/shot.jpg")
+        let failedB = Attachment(name: "bad.bin", error: "Upload failed (500)")
+        XCTAssertEqual(
+            Attachment.compose(message: "  Fix this layout  \n", attachments: [readyA, failedB]),
+            "Fix this layout\n\n![shot.jpg](</tmp/shed-uploads/1/shot.jpg>)"
+        )
+        XCTAssertEqual(
+            Attachment.compose(message: "   ", attachments: [readyA]),
+            "![shot.jpg](</tmp/shed-uploads/1/shot.jpg>)"
+        )
+        XCTAssertEqual(Attachment.compose(message: "", attachments: []), "")
     }
 }

@@ -5,8 +5,8 @@ import SwiftUI
 /// No session open on the Mac: the beam at full strength, the composer, and the dashboard below it.
 struct HomeView: View {
     let store: SessionStore
-    /// Opens New Session with a first message.
-    let start: (_ message: String) -> Void
+    /// Opens New Session with a first message and any attached files.
+    let start: (_ draft: NewSessionDraft) -> Void
     @State private var shown = false
 
     var body: some View {
@@ -46,25 +46,37 @@ struct HomeView: View {
 /// with the message in it, to pick or confirm the folder.
 struct HomeComposer: View {
     let store: SessionStore
-    let start: (_ message: String) -> Void
+    let start: (_ draft: NewSessionDraft) -> Void
     @AppStorage("newSession.agent") private var agent: AgentKind = .prime
     @AppStorage("newSession.environment") private var chosenEnv = ""
     @AppStorage("newSession.model") private var model = ""
     @AppStorage("newSession.thinking") private var thinking = ""
     @AppStorage("newSession.folders") private var lastFolders = ""
     @State private var message = ""
+    @State private var attachments: [Attachment] = []
+    @State private var uploads: [Task<Void, Never>] = []
+    @State private var dropping = false
     @FocusState private var focused: Bool
     var compact = false
 
+    private var targetEnv: String {
+        store.environments.contains { $0.id == chosenEnv } ? chosenEnv : store.environments.first?.id ?? ""
+    }
+
     /// The folder New Session will open with: the last one on the computer it will pick.
     private var folder: String? {
-        let env = store.environments.contains { $0.id == chosenEnv } ? chosenEnv : store.environments.first?.id ?? ""
+        let env = targetEnv
         let lines = lastFolders.split(separator: "\n").map { $0.split(separator: "\t", maxSplits: 1).map(String.init) }
         return lines.first { $0.count == 2 && $0[0] == env }?[1]
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 16) {
+            if !attachments.isEmpty {
+                AttachmentStrip(attachments: attachments) { gone in attachments.removeAll { $0.id == gone.id } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
             TextField("Ask an agent", text: $message, prompt: Text(compact ? "Ask an agent…" : "Ask an agent to build, fix or explore in a folder"),
                       axis: .vertical)
                 .textFieldStyle(.plain)
@@ -76,39 +88,52 @@ struct HomeComposer: View {
                 .onSubmit(send)
                 .padding(.top, compact ? 2 : 4)
 
-            HStack(spacing: 8) {
-                if compact { chips } else { ScrollView(.horizontal, showsIndicators: false) { chips } }
+            HStack(spacing: compact ? 6 : 8) {
+                #if os(iOS)
+                PhoneAttachButton(size: 30) { files in attach(files) }
+                #endif
+                ScrollView(.horizontal, showsIndicators: false) { chips }
                 Spacer(minLength: 4)
                 SendButton(enabled: store.connection == .connected, kick: 0, action: send)
             }
         }
         .padding(.horizontal, compact ? 14 : 18).padding(.vertical, compact ? 16 : 18)
-        .card(radius: compact ? 22 : 20, fill: Palette.surface.opacity(0.7), border: focused ? Palette.accent.opacity(0.55) : Palette.border, frost: true)
+        .card(radius: compact ? 22 : 20, fill: Palette.surface.opacity(0.7),
+              border: dropping ? Palette.accent.opacity(0.85) : focused ? Palette.accent.opacity(0.55) : Palette.border, frost: true)
         .shadow(color: focused ? Palette.accent.opacity(0.18) : .black.opacity(0.35), radius: 22, y: 8)
         .animation(.easeOut(duration: 0.18), value: focused)
+        .animation(.spring(response: 0.38, dampingFraction: 0.78), value: attachments.count)
         .contentShape(Rectangle())
         .onTapGesture { focused = true }
+        .onDrop(of: attachableTypes, isTargeted: $dropping) { providers in
+            attach { await droppedFiles(providers) }
+            return true
+        }
+        .onDisappear {
+            uploads.forEach { $0.cancel() }
+            uploads = []
+        }
     }
 
     /// The folder, agent and model. On the phone they never scroll or clip: the folder shows its own name and the
     /// model's name gives way in the middle, so every chip ends in a whole capsule.
     private var chips: some View {
-                    HStack(spacing: compact ? 6 : 8) {
-                        // Always there: where the agent works is the first thing to choose.
-                        chip(folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder", icon: "folder")
-                            .fixedSize()
-                        Button { start(message) } label: {
-                            HStack(spacing: 6) {
-                                AgentMark(agent: agent, size: 16, glow: false)
-                                Text(agent.displayName)
-                            }
-                            .chipStyle(compact: compact)
-                        }
-                        .buttonStyle(PressStyle())
-                        .fixedSize()
-                        chip(modelLabel, icon: "cube", menu: true)
-                        if !thinking.isEmpty { chip(thinking == "xhigh" ? "Max" : thinking.capitalized, icon: "dial.medium", menu: true).fixedSize() }
-                    }
+        HStack(spacing: compact ? 6 : 8) {
+            // Always there: where the agent works is the first thing to choose.
+            chip(folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder", icon: "folder")
+                .fixedSize()
+            Button(action: openSheet) {
+                HStack(spacing: 6) {
+                    AgentMark(agent: agent, size: 16, glow: false)
+                    Text(agent.displayName)
+                }
+                .chipStyle(compact: compact)
+            }
+            .buttonStyle(PressStyle())
+            .fixedSize()
+            chip(modelLabel, icon: "cube", menu: true)
+            if !thinking.isEmpty { chip(thinking == "xhigh" ? "Max" : thinking.capitalized, icon: "dial.medium", menu: true).fixedSize() }
+        }
     }
 
     private var modelLabel: String {
@@ -118,7 +143,7 @@ struct HomeComposer: View {
     }
 
     private func chip(_ text: String, icon: String, menu: Bool = false) -> some View {
-        Button { start(message) } label: {
+        Button(action: openSheet) {
             HStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
                 Text(text).lineLimit(1).truncationMode(.middle)
@@ -130,11 +155,48 @@ struct HomeComposer: View {
         .buttonStyle(PressStyle())
     }
 
+    private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
+        let env = targetEnv
+        let media = store.media(in: env)
+        let task = Task {
+            for raw in await files() {
+                let file = Attachment.prepared(name: raw.name, data: raw.data)
+                guard !Task.isCancelled else { return }
+                let attachment = Attachment(name: file.name, data: file.data)
+                attachments.append(attachment)
+                guard !env.isEmpty else { continue }
+                do {
+                    let path = try await media.upload(file.data, name: file.name)
+                    guard !Task.isCancelled else { return }
+                    if let i = attachments.firstIndex(where: { $0.id == attachment.id }) {
+                        attachments[i].path = path
+                        attachments[i].uploadedEnv = env
+                    }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    if let i = attachments.firstIndex(where: { $0.id == attachment.id }) {
+                        attachments[i].error = error.localizedDescription
+                    }
+                }
+            }
+        }
+        uploads.append(task)
+    }
+
+    private func openSheet() {
+        uploads.forEach { $0.cancel() }
+        uploads = []
+        let outgoing = attachments
+        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        attachments = []
+        message = ""
+        focused = false
+        start(NewSessionDraft(message: text, attachments: outgoing))
+    }
+
     private func send() {
         guard store.connection == .connected else { return }
-        let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        start(text)
-        message = ""
+        openSheet()
     }
 }
 
