@@ -35,4 +35,22 @@ final class ThemeRenderTests: XCTestCase {
         XCTAssertNotNil(image)
         XCTAssertGreaterThan(image?.height ?? 0, 200)
     }
+
+    @MainActor func testHomeComposerCompactRendersMergedModelAndEffortAcrossPhoneWidths() {
+        let defaults = scratchDefaults()
+        defaults.set(AgentKind.prime.rawValue, forKey: "newSession.agent")
+        defaults.set("e1", forKey: "newSession.environment")
+        defaults.set("opencodex/google/gemini-4-carbon", forKey: "newSession.model")
+        defaults.set("high", forKey: "newSession.thinking")
+        defaults.set("e1\t/Users/jim/dev", forKey: "newSession.folders")
+        let store = SessionStore(defaults: defaults)
+        store.environments = [BridgeEnvironment(id: "e1", name: "mac", url: "ws://127.0.0.1:7878/ws", token: "t")]
+
+        for width: CGFloat in [440, 393, 375] {
+            let view = HomeComposer(store: store, start: { _ in }, compact: true)
+                .defaultAppStorage(defaults)
+                .frame(width: width)
+            XCTAssertNotNil(ImageRenderer(content: view).cgImage)
+        }
+    }
 }

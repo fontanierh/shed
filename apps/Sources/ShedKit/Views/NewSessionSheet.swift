@@ -365,8 +365,12 @@ struct NewSessionSheet: View {
                         .buttonStyle(.plain)
                     }
 
-                    section("Model") { modelField(height: 44) }
-                    section("Reasoning effort") { effortPicker }
+                    section("Model & effort") {
+                        VStack(spacing: 10) {
+                            modelField(height: 44)
+                            effortPicker
+                        }
+                    }
                     section("First message") { messageField }
                     startErrorBanner
                 }

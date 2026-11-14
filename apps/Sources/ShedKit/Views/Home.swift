@@ -59,6 +59,8 @@ struct HomeComposer: View {
     @FocusState private var focused: Bool
     var compact = false
 
+    private static let effortLevels = ["low", "medium", "high", "xhigh"]
+
     private var targetEnv: String {
         store.environments.contains { $0.id == chosenEnv } ? chosenEnv : store.environments.first?.id ?? ""
     }
@@ -71,33 +73,56 @@ struct HomeComposer: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 16) {
+        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
             if !attachments.isEmpty {
                 AttachmentStrip(attachments: attachments) { gone in attachments.removeAll { $0.id == gone.id } }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            TextField("Ask an agent", text: $message, prompt: Text(compact ? "Ask an agent…" : "Ask an agent to build, fix or explore in a folder"),
-                      axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: compact ? 16 : 17))
-                .foregroundStyle(Palette.moon)
-                // Two lines' room on the phone: a place to write, not a search box.
-                .lineLimit(compact ? 2...6 : 1...6)
-                .focused($focused)
-                .onSubmit(send)
-                .padding(.top, compact ? 2 : 4)
+            if compact {
+                // On iPhone: `+` and Send flank the input row (just like inside a session), leaving the full width of
+                // the card below for the folder, agent and model+effort capsules so none of them ever clips.
+                HStack(alignment: .bottom, spacing: 10) {
+                    #if os(iOS)
+                    PhoneAttachButton(size: 36) { files in attach(files) }
+                    #endif
 
-            HStack(spacing: compact ? 6 : 8) {
-                #if os(iOS)
-                PhoneAttachButton(size: 30) { files in attach(files) }
-                #endif
-                ScrollView(.horizontal, showsIndicators: false) { chips }
-                Spacer(minLength: 4)
-                SendButton(enabled: store.connection == .connected, kick: 0, action: send)
+                    TextField("Ask an agent", text: $message, prompt: Text("Ask an agent…"), axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16))
+                        .foregroundStyle(Palette.moon)
+                        .lineLimit(1...6)
+                        .focused($focused)
+                        .onSubmit(send)
+                        .padding(.vertical, 7)
+
+                    SendButton(enabled: store.connection == .connected, kick: 0, action: send)
+                }
+
+                chipsRow
+            } else {
+                TextField("Ask an agent", text: $message, prompt: Text("Ask an agent to build, fix or explore in a folder"),
+                          axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 17))
+                    .foregroundStyle(Palette.moon)
+                    .lineLimit(1...6)
+                    .focused($focused)
+                    .onSubmit(send)
+                    .padding(.top, 4)
+
+                HStack(spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        chipsLine(effortWord: true, squeezeFolder: false, squeezeModel: false)
+                    }
+                    Spacer(minLength: 4)
+                    SendButton(enabled: store.connection == .connected, kick: 0, action: send)
+                }
             }
         }
-        .padding(.horizontal, compact ? 14 : 18).padding(.vertical, compact ? 16 : 18)
+        .padding(.horizontal, compact ? 12 : 18)
+        .padding(.top, compact ? 12 : 18)
+        .padding(.bottom, compact ? 12 : 18)
         .card(radius: compact ? 22 : 20, fill: Palette.surface.opacity(0.7),
               border: dropping ? Palette.accent.opacity(0.85) : focused ? Palette.accent.opacity(0.55) : Palette.border, frost: true)
         .shadow(color: focused ? Palette.accent.opacity(0.18) : .black.opacity(0.35), radius: 22, y: 8)
@@ -115,13 +140,34 @@ struct HomeComposer: View {
         }
     }
 
-    /// The folder, agent and model. On the phone they never scroll or clip: the folder shows its own name and the
-    /// model's name gives way in the middle, so every chip ends in a whole capsule.
-    private var chips: some View {
-        HStack(spacing: compact ? 6 : 8) {
-            // Always there: where the agent works is the first thing to choose.
-            chip(folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder", icon: "folder")
-                .fixedSize()
+    /// Measured across the whole row so unused width from a short folder goes straight to the model+effort capsule:
+    /// drops the effort word first, then middle-truncates the model, then middle-truncates long folders too.
+    private var chipsRow: some View {
+        ViewThatFits(in: .horizontal) {
+            chipsLine(effortWord: true, squeezeFolder: false, squeezeModel: false)
+            if !thinking.isEmpty {
+                chipsLine(effortWord: false, squeezeFolder: false, squeezeModel: false)
+            }
+            chipsLine(effortWord: false, squeezeFolder: false, squeezeModel: true)
+            chipsLine(effortWord: false, squeezeFolder: true, squeezeModel: true)
+        }
+    }
+
+    private func chipsLine(effortWord: Bool, squeezeFolder: Bool, squeezeModel: Bool) -> some View {
+        let folderText = folder.map { compact ? ($0 as NSString).lastPathComponent : Format.path($0) } ?? "Choose folder"
+        return HStack(spacing: compact ? 6 : 8) {
+            Button(action: openSheet) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
+                    Text(folderText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: !squeezeFolder, vertical: false)
+                }
+                .chipStyle(compact: compact)
+            }
+            .buttonStyle(PressStyle())
+
             Button(action: openSheet) {
                 HStack(spacing: 6) {
                     AgentMark(agent: agent, size: 16, glow: false)
@@ -131,8 +177,31 @@ struct HomeComposer: View {
             }
             .buttonStyle(PressStyle())
             .fixedSize()
-            chip(modelLabel, icon: "cube", menu: true)
-            if !thinking.isEmpty { chip(thinking == "xhigh" ? "Max" : thinking.capitalized, icon: "dial.medium", menu: true).fixedSize() }
+
+            Button(action: openSheet) {
+                HStack(spacing: compact ? 6 : 7) {
+                    Image(systemName: "cube").font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
+                    Text(modelLabel)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .fixedSize(horizontal: !squeezeModel, vertical: false)
+                    if !thinking.isEmpty {
+                        Capsule().fill(Palette.moon.opacity(0.18)).frame(width: 1, height: 11)
+                        EffortBars(level: EffortBars.level(of: thinking, in: Self.effortLevels))
+                        if effortWord {
+                            Text(ModelInfo.effortName(thinking, among: Self.effortLevels))
+                                .lineLimit(1)
+                                .fixedSize()
+                                .foregroundStyle(Palette.moon.opacity(0.75))
+                        }
+                    }
+                    if !compact {
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary)
+                    }
+                }
+                .chipStyle(compact: compact)
+            }
+            .buttonStyle(PressStyle())
         }
     }
 
@@ -140,19 +209,6 @@ struct HomeComposer: View {
         // "Default" alone on the phone: the cube icon already says it is the model, and the row has to fit.
         guard !model.isEmpty else { return compact ? "Default" : "Agent default" }
         return String(model.split(separator: "/").last ?? Substring(model))
-    }
-
-    private func chip(_ text: String, icon: String, menu: Bool = false) -> some View {
-        Button(action: openSheet) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11.5, weight: .medium)).foregroundStyle(.secondary)
-                Text(text).lineLimit(1).truncationMode(.middle)
-                // No chevron on the phone: every chip opens the same sheet anyway, and the row has to fit.
-                if menu, !compact { Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundStyle(.tertiary) }
-            }
-            .chipStyle(compact: compact)
-        }
-        .buttonStyle(PressStyle())
     }
 
     private func attach(_ files: @escaping @MainActor () async -> [(name: String, data: Data)]) {
