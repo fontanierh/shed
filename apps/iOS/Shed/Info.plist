@@ -40,8 +40,12 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Shed uses the camera to attach photos and videos to a message.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Shed connects to the bridge on your Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Shed uses the microphone when recording a video to attach.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIAppFonts</key>
